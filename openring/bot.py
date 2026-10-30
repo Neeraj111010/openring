@@ -100,8 +100,7 @@ async def run_call(
             if any(p in text for p in phrases):
                 await task.queue_frames([EndFrame()])
 
-    started = time.monotonic()
-    store.update("calls", call_id, {"status": "in-progress", "startedAt": now_iso()})
+    started = time.monotonic()  # the caller already marked the call in-progress
     ended_reason = "customer-ended-call"
     try:
         await PipelineRunner(handle_sigint=False).run(task)

@@ -27,12 +27,14 @@ ASSISTANT = {
 
 def make_client(**overrides) -> TestClient:
     settings = Settings(
-        api_key="test-key",
-        public_url="https://ring.example.com",
-        db_path=":memory:",
-        twilio_auth_token="tok",
-        validate_twilio_signature=True,
-        **overrides,
+        **{
+            "api_key": "test-key",
+            "public_url": "https://ring.example.com",
+            "db_path": ":memory:",
+            "twilio_auth_token": "tok",
+            "validate_twilio_signature": True,
+            **overrides,
+        }
     )
     return TestClient(create_app(settings, Store(":memory:")))
 
@@ -91,6 +93,15 @@ def test_bad_twilio_signature_rejected():
     client = make_client()
     r = client.post("/twilio/voice", data={"To": "+1"}, headers={"X-Twilio-Signature": "forged"})
     assert r.status_code == 403
+
+
+def test_twilio_webhook_refused_without_auth_token():
+    form = {"To": "+15551234567", "From": "+1", "CallSid": "CA1"}
+    r = make_client(twilio_auth_token="").post("/twilio/voice", data=form)
+    assert r.status_code == 403 and "TWILIO_AUTH_TOKEN" in r.json()["detail"]
+    # Only an explicit opt-out (local tests) lets unsigned requests through.
+    unchecked = make_client(twilio_auth_token="", validate_twilio_signature=False)
+    assert unchecked.post("/twilio/voice", data=form).status_code == 200
 
 
 def test_number_without_assistant_says_message():

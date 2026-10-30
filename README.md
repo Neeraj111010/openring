@@ -88,8 +88,10 @@ python -m openring
 
 ## Security
 
-Set `OPENRING_API_KEY` before exposing the server. With `TWILIO_AUTH_TOKEN` set, every Twilio
-webhook is checked against its `X-Twilio-Signature`.
+Set `OPENRING_API_KEY` before exposing the server. Incoming calls need `TWILIO_AUTH_TOKEN`: every
+Twilio webhook is checked against its `X-Twilio-Signature`, and calls are refused while the token is
+missing (`VALIDATE_TWILIO_SIGNATURE=false` turns the check off, for local tests only). Each call
+accepts a single media stream, so a replayed or second connection is dropped.
 
 ## License
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,7 @@ from loguru import logger
 from . import __version__
 from .config import Settings, get_settings
 from .providers import ProviderError, resolve_plan
-from .store import Store
+from .store import Store, now_iso
 from .twilio import is_valid_signature, say_twiml, stream_twiml
 
 
@@ -22,6 +23,8 @@ LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 # Tunnels (ngrok, cloudflared) and reverse proxies connect from 127.0.0.1 too,
 # so the peer address alone does not prove the request came from this computer.
 PROXY_HEADERS = ("forwarded", "x-forwarded-for", "x-forwarded-host", "x-real-ip", "cf-connecting-ip")
+# Twilio sends its "connected" and "start" messages right after the media websocket opens.
+HANDSHAKE_TIMEOUT = 10
 
 
 def _is_direct_local_request(request: Request) -> bool:
@@ -43,6 +46,8 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
 
     if not settings.api_key:
         logger.warning("OPENRING_API_KEY is empty: the REST API is open. Set it before exposing this server.")
+    if not settings.validate_twilio_signature:
+        logger.warning("VALIDATE_TWILIO_SIGNATURE=false: /twilio/voice accepts requests from anyone. Local tests only.")
 
     def require_key(authorization: str = Header(default="")) -> None:
         if not settings.api_key:
@@ -152,7 +157,13 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     @app.post("/twilio/voice")
     async def twilio_voice(request: Request) -> Response:
         form = {k: str(v) for k, v in (await request.form()).items()}
-        if settings.validate_twilio_signature and settings.twilio_auth_token:
+        if settings.validate_twilio_signature:
+            # Without the token there is no way to tell Twilio from anyone else, so refuse.
+            if not settings.twilio_auth_token:
+                logger.error("refused a call: set TWILIO_AUTH_TOKEN so OpenRing can check it comes from Twilio")
+                raise HTTPException(
+                    status_code=403, detail="TWILIO_AUTH_TOKEN is not set, so the Twilio signature cannot be checked"
+                )
             url = settings.public_url + "/twilio/voice" if settings.public_url else str(request.url)
             if not is_valid_signature(
                 settings.twilio_auth_token, url, form, request.headers.get("X-Twilio-Signature", "")
@@ -192,13 +203,27 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         from .bot import run_call
 
         await websocket.accept()
-        _, call_data = await parse_telephony_websocket(websocket)
-        custom = (call_data.get("body") or {})
-        call_id = custom.get("callId")
-        call = store.get("calls", call_id) if call_id else None
-        assistant = store.get("assistants", custom.get("assistantId", "")) if call else None
-        if not call or not assistant:
-            logger.warning("media stream for unknown call {}", call_id)
+        try:
+            transport, call_data = await asyncio.wait_for(parse_telephony_websocket(websocket), HANDSHAKE_TIMEOUT)
+        except TimeoutError:
+            await websocket.close(code=1008)
+            return
+        except ValueError:  # closed before the handshake
+            return
+        call_id = str((call_data.get("body") or {}).get("callId") or "")
+        # Claiming moves the call out of "queued" in one step, so each call gets exactly one
+        # media stream: a replayed or second connection for the same call is refused.
+        call = None
+        if transport == "twilio" and call_id:
+            call = store.claim("calls", call_id, "queued", {"status": "in-progress", "startedAt": now_iso()})
+        if call is None:
+            logger.warning("refused media stream for call {}: unknown or already connected", call_id or "?")
+            await websocket.close(code=1008)
+            return
+        # The assistant comes from the call record, never from the stream's parameters.
+        assistant = store.get("assistants", call.get("assistantId") or "")
+        if assistant is None:
+            store.update("calls", call_id, {"status": "ended", "endedReason": "assistant-not-found"})
             await websocket.close()
             return
         try:

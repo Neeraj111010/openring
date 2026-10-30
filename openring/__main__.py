@@ -12,6 +12,7 @@ OPENRING_API_KEY={key}
 # Public https URL Twilio can reach (e.g. from `ngrok http 8000`)
 PUBLIC_URL=
 TWILIO_ACCOUNT_SID=
+# Required to answer calls: it proves each webhook really comes from Twilio
 TWILIO_AUTH_TOKEN=
 # Speech-to-text: Deepgram gives US$200 free credit to new accounts
 DEEPGRAM_API_KEY=

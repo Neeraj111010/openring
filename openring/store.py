@@ -15,10 +15,17 @@ from pathlib import Path
 from typing import Any
 
 COLLECTIONS = ("assistants", "phone_numbers", "calls")
+PROTECTED = {"id", "createdAt"}
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _merge(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    doc = {**current, **{k: v for k, v in patch.items() if k not in PROTECTED}}
+    doc["updatedAt"] = now_iso()
+    return doc
 
 
 class Store:
@@ -72,10 +79,31 @@ class Store:
         current = self.get(collection, item_id)
         if current is None:
             return None
-        protected = {"id", "createdAt"}
-        doc = {**current, **{k: v for k, v in patch.items() if k not in protected}}
-        doc["updatedAt"] = now_iso()
+        doc = _merge(current, patch)
         with self._lock:
+            self._db.execute(
+                f"UPDATE {collection} SET doc = ? WHERE id = ?", (json.dumps(doc), item_id)
+            )
+            self._db.commit()
+        return doc
+
+    def claim(
+        self, collection: str, item_id: str, from_status: str, patch: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Apply `patch` only while the document's status is `from_status`.
+
+        The check and the write happen under one lock, so when several callers
+        race for the same document exactly one gets it back; the rest get None.
+        """
+        self._check(collection)
+        with self._lock:
+            row = self._db.execute(
+                f"SELECT doc FROM {collection} WHERE id = ?", (item_id,)
+            ).fetchone()
+            current = json.loads(row[0]) if row else None
+            if current is None or current.get("status") != from_status:
+                return None
+            doc = _merge(current, patch)
             self._db.execute(
                 f"UPDATE {collection} SET doc = ? WHERE id = ?", (json.dumps(doc), item_id)
             )
