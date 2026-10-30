@@ -1,48 +1,117 @@
+<div align="center">
+
+<img src="docs/assets/logo.svg" width="88" height="88" alt="Logo do OpenRing">
+
 # OpenRing
 
-**Agentes de voz com IA, open source e no seu servidor, com API compatível com o Vapi. Sem taxa de plataforma.**
+**Agentes de voz com IA no seu servidor, com API compatível com o Vapi. Sem taxa de plataforma.**
 
-As plataformas de voz cobram uma taxa por minuto em cima do que você já paga de transcrição, modelo,
-voz e telefonia. O OpenRing roda no seu servidor, com as suas chaves, e aceita o mesmo JSON dos
-assistentes do Vapi: migrar é praticamente trocar a URL.
+[![CI](https://github.com/elifalanrocha/openring/actions/workflows/ci.yml/badge.svg)](https://github.com/elifalanrocha/openring/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/openring?color=e8590c&label=npm)](https://www.npmjs.com/package/openring)
+[![PyPI](https://img.shields.io/pypi/v/openring?color=e8590c&label=pypi)](https://pypi.org/project/openring/)
+[![Licença: MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-1c1917)](LICENSE)
 
-[English](README.md)
+[![Rode com um comando](https://img.shields.io/badge/⚡_Rode-npx_openring-e8590c?style=for-the-badge)](#-começo-rápido)
+[![Migre do Vapi](https://img.shields.io/badge/🔁_Migre_do-Vapi-1c1917?style=for-the-badge)](#-migrar-do-vapi)
 
-## Situação: v0.1 (início)
+[Começo rápido](#-começo-rápido) · [Como funciona](#-como-funciona) · [Comparação](#-comparação) · [Provedores](#-provedores) · [Roadmap](ROADMAP.md) · [English](README.md)
 
-| Já funciona | Próximos passos |
-|---|---|
-| Ligações recebidas e feitas (`POST /call`) pelo Twilio | |
-| Teste no navegador pelo painel (WebRTC, sem precisar de número) | |
-| APIs `/assistant`, `/phone-number` e `/call` no formato do Vapi | Telnyx, Plivo, Vonage |
-| Nomes de provedores do Vapi: 16 modelos, 6 transcrições, 9 vozes (incl. Kokoro e Ollama, locais e grátis) | Fallback e roteamento por custo entre provedores |
-| `firstMessage`, `endCallPhrases` e webhook `end-of-call-report` | Modo agência (multi-cliente, white-label) |
-| Ferramentas no formato do Vapi: `function` (seu servidor recebe `tool-calls`), `endCall`, `transferCall`, API `/tool` | Mais tipos de ferramenta (DTMF, base de conhecimento) |
+</div>
 
-## Começo rápido
+As plataformas de voz cobram uma taxa por cada minuto de cada ligação, em cima do que você já paga de
+transcrição, modelo, voz e linha telefônica. O OpenRing faz o mesmo trabalho no seu computador ou servidor,
+com as suas chaves, e fala o mesmo JSON do Vapi.
 
-Um comando só. Ele instala tudo o que precisa (inclusive o Python), sobe o servidor e abre o painel:
+- 💸 **Sem taxa de plataforma, nunca.** Você paga Deepgram, OpenAI, Twilio ou quem escolher, direto, pelo preço deles.
+- 🔁 **Compatível com o Vapi.** Mesmo JSON de assistente, mesmos nomes de provedor, ferramentas e webhooks:
+  um cliente do Vapi migra trocando a URL base, e o **Import** copia uma conta com um clique.
+- 🖥️ **Seu.** Chaves, ligações e transcrições ficam na sua máquina. Sem telemetria.
+- 🆓 **Grátis para testar.** Vem com uma voz local grátis (Kokoro): a primeira ligação de teste não custa nada.
+
+## ⚡ Começo rápido
+
+Basta ter o [Node.js](https://nodejs.org) 18 ou mais novo. O resto, inclusive o Python, se instala sozinho:
 
 ```bash
 npx openring
 ```
 
-Basta ter o [Node.js](https://nodejs.org) 18+. As configurações ficam em `~/.openring/.env`, criado na primeira execução com uma chave gerada.
-No primeiro acesso, o painel pede para você criar a senha dele. A chave da API continua valendo para os apps
-que chamam a API (ela aparece em **Settings**). Esqueceu a senha? `openring --reset-password`.
+O painel abre em http://localhost:8000. A partir dele:
 
-Converse com um assistente antes de comprar um número: clique em **Test** ao lado dele no painel e
-fale no microfone. Antes, conecte na página **Providers** uma chave do Deepgram e uma de modelo (o plano
-grátis do Groq serve, por exemplo com `openai/gpt-oss-20b`); cada chave é conferida com o provedor antes
-de ser salva. A voz grátis Kokoro se baixa sozinha na primeira execução (cerca de 120 MB).
+1. **Crie uma senha.** O primeiro acesso pede uma (só deste computador).
+2. **Conecte os provedores** na página **Providers**: Deepgram para a fala (contas novas ganham US$ 200 de
+   crédito) e um modelo, por exemplo o plano grátis do Groq ou o login de um clique do OpenRouter. Cada chave
+   é conferida com o provedor antes de ser salva.
+3. **Crie um assistente** em **Assistants**: saudação, instruções, modelo e voz.
+4. **Converse com ele.** Clique em **Test** e fale no microfone. Não precisa de número.
+5. **Dê um número a ele** quando quiser: veja [Ligações por telefone](#ligações-por-telefone).
 
-### Com Docker
+As configurações ficam em `~/.openring/.env`, criado na primeira execução com uma chave de API gerada para os
+apps que chamam a API (ela aparece em **Settings**). A voz grátis Kokoro se baixa sozinha na primeira
+execução (cerca de 120 MB). Esqueceu a senha? `openring --reset-password`.
+
+## 🧭 Como funciona
+
+```mermaid
+flowchart LR
+  caller["Quem liga<br/>telefone ou navegador"] <-->|áudio| line["Twilio ou WebRTC"]
+  line <--> openring
+  subgraph openring["OpenRing, no seu servidor"]
+    direction LR
+    stt["Transcrição<br/>Deepgram, AssemblyAI, ..."] --> llm["Modelo<br/>OpenAI, Groq, Ollama, ..."] --> tts["Voz<br/>ElevenLabs, Kokoro, ..."]
+  end
+  llm <-->|"ferramentas e webhooks, no formato do Vapi"| app["Seu sistema"]
+```
+
+Cada ligação roda um pipeline do [Pipecat](https://github.com/pipecat-ai/pipecat): a fala vira texto, o
+modelo responde (e pode chamar suas ferramentas) e a voz fala a resposta. A latência de cada turno é medida,
+etapa por etapa, e aparece no painel.
+
+## 📊 Comparação
+
+|  | OpenRing | Vapi | Retell | Dograh |
+|---|---|---|---|---|
+| Código | ✅ Aberto (MIT) | ❌ Fechado | ❌ Fechado | ✅ Open core (BSD-2) |
+| Taxa de plataforma | ✅ Nenhuma | US$ 0,05/min | Preço por minuto | Nenhuma no self-hosted, US$ 0,01/min na nuvem dele |
+| API compatível com o Vapi | ✅ | (é o Vapi) | ❌ | ❌ |
+| Para começar | `npx openring` | Cadastro | Cadastro | Docker |
+
+Em todas você também paga transcrição, modelo, voz e linha telefônica. Preços das páginas públicas de cada
+empresa em outubro de 2026; confira antes de decidir. O OpenRing não tem vínculo com nenhuma delas.
+
+## ✨ O que já funciona
+
+| Já funciona | Próximos passos |
+|---|---|
+| Teste no navegador pelo painel (WebRTC) | Troca automática de provedor e roteamento por custo |
+| Ligações recebidas e feitas pelo Twilio (**beta**: conte como foi) | Telnyx e Plivo |
+| APIs `/assistant`, `/phone-number`, `/call` e `/tool` no formato do Vapi | Custo por ligação no painel |
+| Ferramentas do Vapi: `function`, `endCall`, `transferCall` | Campanhas de ligação a partir de uma lista |
+| Webhooks do Vapi: `status-update`, `conversation-update`, `end-of-call-report`, `assistant-request` | Ligações pelo WhatsApp |
+| Importação de assistentes, ferramentas e números de uma conta do Vapi | |
+| 16 modelos, 6 transcrições e 9 vozes, com os nomes do Vapi | |
+| Latência por turno, histórico com transcrição, tema claro e escuro | |
+
+## 🔁 Migrar do Vapi
+
+Copie todos os assistentes, ferramentas e números do Twilio de uma conta numa requisição só (ou clique em
+**Import** na página Assistants). A chave é usada uma vez e não fica salva; importar de novo atualiza o que
+veio antes.
 
 ```bash
-cp .env.example .env          # preencha suas chaves
-docker compose up --build     # API em http://localhost:8000; defina OPENRING_PASSWORD no .env para o painel
-ngrok http 8000               # coloque a URL https em PUBLIC_URL e reinicie
+curl -X POST http://localhost:8000/import \
+  -H "Authorization: Bearer $OPENRING_API_KEY" -H "Content-Type: application/json" \
+  -d '{"baseUrl": "https://api.vapi.ai", "apiKey": "SUA_CHAVE_PRIVADA_DO_VAPI"}'
 ```
+
+A resposta lista cada assistente com o que ainda o impede de atender aqui (por exemplo, um provedor que o
+OpenRing ainda não suporta). Depois, aponte a URL base do seu cliente para o seu servidor e o voice webhook
+de cada número do Twilio importado para `$PUBLIC_URL/twilio/voice`.
+
+## 📖 Guia da API
+
+Toda requisição leva `Authorization: Bearer $OPENRING_API_KEY`. Os exemplos completos (ferramentas, mensagens
+para o servidor, ligações feitas) estão no [guia em inglês](README.md#-api-guide).
 
 Crie um assistente em português:
 
@@ -59,8 +128,12 @@ curl -X POST http://localhost:8000/assistant \
   }'
 ```
 
-Cadastre o número do Twilio e aponte o **Voice webhook** (HTTP POST) dele para
-`$PUBLIC_URL/twilio/voice`:
+### Ligações por telefone
+
+O Twilio precisa alcançar o seu servidor por uma URL https pública. No seu computador, abra um túnel
+(`cloudflared tunnel --url http://localhost:8000`), coloque a URL dele em `PUBLIC_URL` no
+`~/.openring/.env` e reinicie. Depois cadastre o número do Twilio e aponte o **Voice webhook** (HTTP POST)
+dele para `$PUBLIC_URL/twilio/voice`:
 
 ```bash
 curl -X POST http://localhost:8000/phone-number \
@@ -68,54 +141,23 @@ curl -X POST http://localhost:8000/phone-number \
   -d '{"number": "+15551234567", "assistantId": "ID_DO_ASSISTENTE"}'
 ```
 
-Ligue para o número. As transcrições ficam em `GET /call`.
+Ligue para o número. As transcrições ficam em `GET /call` e na página **Calls**. Para o assistente ligar
+para alguém, use o mesmo corpo do `POST /call` do Vapi (ou **Call a phone** no painel). Ligue só para quem
+espera a ligação: ligações automáticas são reguladas (as regras da Anatel no Brasil, a TCPA nos EUA).
 
-### Migrar do Vapi
-
-Copie todos os assistentes, ferramentas e números do Twilio de uma conta numa requisição só (ou clique
-em **Import** na página Assistants). A chave é usada uma vez e não fica salva; importar de novo atualiza
-o que veio antes.
-
-```bash
-curl -X POST http://localhost:8000/import \
-  -H "Authorization: Bearer $OPENRING_API_KEY" -H "Content-Type: application/json" \
-  -d '{"baseUrl": "https://api.vapi.ai", "apiKey": "SUA_CHAVE_PRIVADA_DO_VAPI"}'
-```
-
-A resposta lista cada assistente com o que ainda o impede de atender aqui (por exemplo, um provedor que o
-OpenRing ainda não suporta). Depois, aponte o voice webhook de cada número do Twilio importado para
-`$PUBLIC_URL/twilio/voice`.
-
-### Ferramentas
-
-As ferramentas usam o formato do Vapi: um servidor feito para o Vapi funciona sem mudança. Coloque-as em
-`model.tools` (ou salve com `POST /tool` e liste os ids em `model.toolIds`). Quando o modelo chama uma
-ferramenta `function`, o OpenRing envia `{"message": {"type": "tool-calls", ...}}` para o `server.url` dela
-(ou do assistente) e lê de volta `{"results": [{"toolCallId": "...", "result": "..."}]}`. `endCall` desliga
-depois da despedida; `transferCall` transfere a ligação (Twilio) para o número escolhido quando o assistente
-termina de falar. Exemplo completo no [README em inglês](README.md#tools).
-
-## Stack grátis
+## 🆓 Stack grátis
 
 | Camada | Opção grátis |
 |---|---|
 | Transcrição | Deepgram: US$ 200 de crédito para contas novas |
-| Modelo | `"provider": "omniroute"` (gateway local grátis) ou `"provider": "groq"` |
-| Voz | `"provider": "kokoro"`, roda local na CPU, sem chave |
-| Telefonia | Conta de teste (trial) do Twilio |
+| Modelo | `"provider": "groq"` (plano grátis), `"provider": "omniroute"` (gateway local grátis) ou `"provider": "ollama"` (local) |
+| Voz | `"provider": "kokoro"`: roda na sua CPU, sem chave |
+| Linha telefônica | Conta de teste (trial) do Twilio |
 
-### Mensagens para o seu servidor
+## 🔌 Provedores
 
-O `server.url` do assistente recebe as mensagens do Vapi no formato do Vapi: `status-update` (início,
-transferência e fim da chamada), `conversation-update` a cada resposta e `end-of-call-report`. Escolha quais
-com `serverMessages`. Um número sem assistente, mas com `server.url`, pergunta ao servidor a cada ligação
-recebida (`assistant-request`) qual assistente atende, por id ou um assistente temporário. O `POST /call`
-também aceita um `assistant` temporário no lugar do `assistantId`.
-
-## Provedores
-
-Os nomes são os mesmos do Vapi: o JSON de um assistente passa de um para o outro sem mudança. Cada
-provedor precisa da chave dele no `~/.openring/.env` (ou conectada pela página Providers do painel).
+Os nomes são os mesmos do Vapi: o JSON de um assistente passa de um para o outro sem mudança. Conecte cada
+um pela página **Providers** do painel, ou coloque a chave no `~/.openring/.env`.
 
 - **Modelo:** `openai`, `anthropic`, `google` (Gemini), `groq`, `openrouter`, `deepseek`, `xai`, `cerebras`,
   `together-ai`, `deepinfra`, `perplexity-ai`, `mistral`, `fireworks`; locais e sem chave: `ollama`,
@@ -124,18 +166,39 @@ provedor precisa da chave dele no `~/.openring/.env` (ou conectada pela página 
 - **Voz:** `11labs`, `cartesia`, `deepgram` (Aura), `openai`, `rime-ai`, `neuphonic`, `smallest-ai`,
   `inworld`; local e grátis: `kokoro`.
 
-Quem já tem chave do Deepgram tem uma voz rápida na nuvem: `{"provider": "deepgram", "voiceId": "thalia"}`.
+Use `"language": "multi"` no Deepgram para ligações em vários idiomas. Quem já tem chave do Deepgram tem uma
+voz rápida na nuvem: `{"provider": "deepgram", "voiceId": "thalia"}`.
 
-## Desenvolvimento
+## 🐳 Docker
 
 ```bash
+cp .env.example .env          # preencha suas chaves e OPENRING_PASSWORD
+docker compose up --build     # painel e API em http://localhost:8000
+```
+
+Num servidor, coloque em `PUBLIC_URL` o endereço https dele para o Twilio alcançá-lo.
+
+## 🧱 Princípios
+
+O OpenRing nunca cobra por minuto, mantém suas chaves e dados na sua máquina, continua compatível com
+clientes do Vapi, roda com um comando e diz com clareza o que funciona e o que ainda não. A lista completa,
+e como decidimos o que construir, está no [PRINCIPLES.md](PRINCIPLES.md) (em inglês).
+
+## 🤝 Contribuir
+
+```bash
+git clone https://github.com/elifalanrocha/openring && cd openring
 pip install -e ".[dev,kokoro]"
-pytest
+pytest                 # uns 20 s, sem precisar de serviço pago
 python -m openring
 ```
 
-## Licença
+Pull requests pequenos entram mais rápido. Comece pelo [CONTRIBUTING.md](CONTRIBUTING.md) e pelas
+[good first issues](https://github.com/elifalanrocha/openring/labels/good%20first%20issue). Falhas de
+segurança, por favor, de forma privada: veja o [SECURITY.md](SECURITY.md).
 
-MIT. Sem vínculo com Vapi, Retell ou Twilio. O OpenRing usa o [Pipecat](https://github.com/pipecat-ai/pipecat)
-e outros projetos open source, creditados em [THIRD_PARTY.md](THIRD_PARTY.md). Para contribuir, veja o
-[CONTRIBUTING.md](CONTRIBUTING.md); falhas de segurança, pelo [SECURITY.md](SECURITY.md).
+## 📄 Licença
+
+MIT. Sem vínculo com Vapi, Retell, Dograh ou Twilio. O OpenRing usa o
+[Pipecat](https://github.com/pipecat-ai/pipecat) e outros projetos open source, creditados em
+[THIRD_PARTY.md](THIRD_PARTY.md).
