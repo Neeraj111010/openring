@@ -150,6 +150,16 @@ dialog::backdrop { background: rgba(28,36,48,.45); }
   <audio id="talkAudio" autoplay></audio>
 </dialog>
 
+<dialog id="callDialog" aria-labelledby="callTitle">
+  <form method="dialog" id="callForm">
+    <h2 id="callTitle">Call a phone</h2>
+    <p style="color:var(--muted)" id="callFrom"></p>
+    <div class="field"><label for="callTo">Phone to call</label><input id="callTo" type="tel" required autocomplete="tel" placeholder="+5511912345678"></div>
+    <div class="error" id="callErr" role="alert"></div>
+    <div class="actions"><span class="spacer"></span><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn" value="call">Call</button></div>
+  </form>
+</dialog>
+
 <script>
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -246,7 +256,7 @@ async function viewNumbers() {
     <button class="btn">Add number</button>
   </form>
   <div class="error" id="err" role="alert"></div>
-  <div class="list">${nums.length ? nums.map(n => `<div class="row" style="cursor:default"><div class="title">${esc(n.number)}</div><div class="sub">Answered by ${esc(name(n.assistantId))}</div><button class="btn danger" data-del="${n.id}">Remove</button></div>`).join("")
+  <div class="list">${nums.length ? nums.map(n => `<div class="row" style="cursor:default"><div class="title">${esc(n.number)}</div><div class="sub">Answered by ${esc(name(n.assistantId))}</div><span class="tools"><button class="btn ghost" data-call="${n.id}">Call a phone</button><button class="btn danger" data-del="${n.id}">Remove</button></span></div>`).join("")
     : `<div class="empty">No numbers yet. Add your Twilio number above.</div>`}</div>`;
   $("#add").onsubmit = async e => {
     e.preventDefault(); const f = new FormData(e.target);
@@ -254,6 +264,26 @@ async function viewNumbers() {
     catch (err) { $("#err").textContent = err.message; }
   };
   v.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => { await api("/phone-number/" + b.dataset.del, { method: "DELETE" }); viewNumbers(); });
+  v.querySelectorAll("[data-call]").forEach(b => b.onclick = () => { const n = nums.find(x => x.id === b.dataset.call); callPhone(n, name(n.assistantId)); });
+}
+
+// The number's assistant calls a phone: an outbound call, placed by Twilio.
+function callPhone(n, assistantName) {
+  $("#callFrom").textContent = `${assistantName} calls from ${n.number}. On a Twilio trial account, only verified numbers can be called.`;
+  try { $("#callTo").value = localStorage.getItem("openring-call-to") || ""; } catch {}
+  $("#callErr").textContent = "";
+  $("#callDialog").showModal();
+  $("#callForm").onsubmit = async e => {
+    if (e.submitter?.value !== "call") return;  // Cancel just closes
+    e.preventDefault();
+    const to = $("#callTo").value.trim();
+    try { localStorage.setItem("openring-call-to", to); } catch {}
+    try {
+      const call = await api("/call", { method: "POST", body: JSON.stringify({ phoneNumberId: n.id, customer: { number: to } }) });
+      $("#callDialog").close();
+      go("calls/" + call.id);
+    } catch (err) { $("#callErr").textContent = err.message; }
+  };
 }
 
 async function viewCalls() {
@@ -267,11 +297,14 @@ async function viewCalls() {
   v.querySelectorAll(".row").forEach(r => { r.onclick = () => go("calls/" + r.dataset.id); r.onkeydown = e => e.key === "Enter" && r.click(); });
 }
 
-const caller = c => c.type === "webCall" ? "Browser test" : c.customer?.number || "Unknown caller";
+const caller = c => c.type === "webCall" ? "Browser test"
+  : c.type === "outboundPhoneCall" ? `Call to ${c.customer?.number}` : c.customer?.number || "Unknown caller";
 
 async function viewCall(id) {
   const [c, assistants] = await Promise.all([api("/call/" + id), api("/assistant")]);
   showCall(c, aid => assistants.find(a => a.id === aid)?.name || "Deleted assistant");
+  // Follow a live call until it ends, as long as it is still on screen.
+  if (c.status !== "ended") setTimeout(() => location.hash === "#calls/" + id && viewCall(id).catch(() => {}), 2000);
 }
 
 // Time from the caller falling silent to the assistant starting to speak, averaged over the call.

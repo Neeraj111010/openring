@@ -8,17 +8,26 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, Response
 from loguru import logger
 
-from . import __version__
+from . import __version__, twilio
 from .config import Settings, get_settings
 from .providers import ProviderError, resolve_plan
 from .store import Store, now_iso
-from .twilio import is_valid_signature, say_twiml, stream_twiml
+from .twilio import TwilioError, is_valid_signature, say_twiml, stream_twiml
 
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+# How an outbound call that never reached the assistant ended, from Twilio's status to Vapi's endedReason.
+UNREACHED = {
+    "busy": "customer-busy",
+    "no-answer": "customer-did-not-answer",
+    "canceled": "customer-did-not-answer",
+    "failed": "twilio-failed-to-connect-call",
+    "completed": "twilio-failed-to-connect-call",  # answered, but the media stream never started
+}
 # Tunnels (ngrok, cloudflared) and reverse proxies connect from 127.0.0.1 too,
 # so the peer address alone does not prove the request came from this computer.
 PROXY_HEADERS = ("forwarded", "x-forwarded-for", "x-forwarded-host", "x-real-ip", "cf-connecting-ip")
@@ -34,6 +43,10 @@ def _is_direct_local_request(request: Request) -> bool:
         return False
     hostname = urlsplit("//" + request.headers.get("host", "")).hostname or ""
     return hostname in LOOPBACK
+
+
+def _e164(number: str) -> str:
+    return "+" + "".join(ch for ch in number if ch.isdigit())
 
 
 def create_app(settings: Settings | None = None, store: Store | None = None) -> FastAPI:
@@ -148,9 +161,46 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     def get_call(call_id: str) -> dict[str, Any]:
         return _get_or_404("calls", call_id)
 
-    @app.post("/call", dependencies=auth)
-    def create_call() -> None:
-        raise HTTPException(status_code=501, detail="outbound calls are on the roadmap; inbound calls work today")
+    @app.post("/call", status_code=201, dependencies=auth)
+    async def create_call(body: dict[str, Any]) -> dict[str, Any]:
+        """Outbound phone call, Vapi-style: the assistant calls `customer.number` from one of your numbers."""
+        number = _get_or_404("phone_numbers", str(body.get("phoneNumberId") or ""))
+        customer = str((body.get("customer") or {}).get("number") or "")
+        if not customer:
+            raise HTTPException(status_code=400, detail="customer.number is required (E.164, e.g. +5511999999999)")
+        assistant = _get_or_404("assistants", str(body.get("assistantId") or number.get("assistantId") or ""))
+        try:
+            resolve_plan(assistant)
+        except ProviderError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not (settings.twilio_account_sid and settings.twilio_auth_token):
+            raise HTTPException(status_code=400, detail="outbound calls need TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN")
+        if not settings.public_url:
+            raise HTTPException(status_code=400, detail="outbound calls need PUBLIC_URL (where Twilio reaches you)")
+
+        call = store.create(
+            "calls",
+            {
+                "type": "outboundPhoneCall",
+                "status": "queued",
+                "assistantId": assistant["id"],
+                "phoneNumberId": number["id"],
+                "customer": {"number": _e164(customer)},
+            },
+        )
+        try:
+            sid = await twilio.create_call(
+                settings.twilio_account_sid,
+                settings.twilio_auth_token,
+                to=_e164(customer),
+                from_=_e164(number["number"]),
+                url=f"{settings.public_url}/twilio/voice?callId={call['id']}",
+                status_callback=f"{settings.public_url}/twilio/status?callId={call['id']}",
+            )
+        except (TwilioError, httpx.HTTPError) as exc:
+            store.update("calls", call["id"], {"status": "ended", "endedReason": "twilio-failed-to-connect-call"})
+            raise HTTPException(status_code=400, detail=f"Twilio did not place the call: {exc}") from exc
+        return store.update("calls", call["id"], {"phoneCallProviderId": sid})
 
     # Browser calls outlive the request that starts them; holding the tasks keeps them from being collected.
     web_calls: set[asyncio.Task] = set()
@@ -185,25 +235,38 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         return {**call, "answer": {"sdp": answer["sdp"], "type": answer["type"]}}
 
     # ---- Twilio -------------------------------------------------------------------
+    async def twilio_form(request: Request) -> dict[str, str]:
+        """The webhook's form fields, once the request is proven to come from Twilio."""
+        form = {k: str(v) for k, v in (await request.form()).items()}
+        if not settings.validate_twilio_signature:
+            return form
+        # Without the token there is no way to tell Twilio from anyone else, so refuse.
+        if not settings.twilio_auth_token:
+            logger.error("refused a call: set TWILIO_AUTH_TOKEN so OpenRing can check it comes from Twilio")
+            raise HTTPException(
+                status_code=403, detail="TWILIO_AUTH_TOKEN is not set, so the Twilio signature cannot be checked"
+            )
+        # Twilio signs the exact URL it requested, query string included.
+        base = settings.public_url or f"{request.url.scheme}://{request.url.netloc}"
+        url = base + request.url.path + (f"?{request.url.query}" if request.url.query else "")
+        if not is_valid_signature(settings.twilio_auth_token, url, form, request.headers.get("X-Twilio-Signature", "")):
+            raise HTTPException(status_code=403, detail="invalid Twilio signature")
+        return form
+
     @app.post("/twilio/voice")
     async def twilio_voice(request: Request) -> Response:
-        form = {k: str(v) for k, v in (await request.form()).items()}
-        if settings.validate_twilio_signature:
-            # Without the token there is no way to tell Twilio from anyone else, so refuse.
-            if not settings.twilio_auth_token:
-                logger.error("refused a call: set TWILIO_AUTH_TOKEN so OpenRing can check it comes from Twilio")
-                raise HTTPException(
-                    status_code=403, detail="TWILIO_AUTH_TOKEN is not set, so the Twilio signature cannot be checked"
-                )
-            url = settings.public_url + "/twilio/voice" if settings.public_url else str(request.url)
-            if not is_valid_signature(
-                settings.twilio_auth_token, url, form, request.headers.get("X-Twilio-Signature", "")
-            ):
-                raise HTTPException(status_code=403, detail="invalid Twilio signature")
-
+        form = await twilio_form(request)
         if not settings.public_url:
             logger.error("PUBLIC_URL is not set; Twilio cannot reach the media websocket")
             return Response(say_twiml("This line is not configured yet."), media_type="application/xml")
+
+        # An outbound call we placed (POST /call): the callee answered and Twilio asks what to play.
+        if call_id := request.query_params.get("callId"):
+            call = store.get("calls", call_id)
+            if not call or call.get("phoneCallProviderId") not in (None, form.get("CallSid")):
+                return Response(say_twiml("Sorry, this call could not be connected."), media_type="application/xml")
+            params = {"assistantId": call["assistantId"], "callId": call_id}
+            return Response(stream_twiml(settings.public_ws_url + "/ws/twilio", params), media_type="application/xml")
 
         number = store.find_phone_number(form.get("To", ""))
         assistant_id = (number or {}).get("assistantId") or settings.default_assistant_id
@@ -226,6 +289,16 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             {"assistantId": assistant_id, "callId": call["id"]},
         )
         return Response(twiml, media_type="application/xml")
+
+    @app.post("/twilio/status", status_code=204)
+    async def twilio_status(request: Request) -> Response:
+        """Final status of an outbound call. Records the calls that never reached the assistant."""
+        form = await twilio_form(request)
+        if reason := UNREACHED.get(form.get("CallStatus", "")):
+            # Only a call still queued: one whose stream connected is closed by the bot itself.
+            patch = {"status": "ended", "endedReason": reason, "endedAt": now_iso()}
+            store.claim("calls", request.query_params.get("callId", ""), "queued", patch)
+        return Response(status_code=204)
 
     @app.websocket("/ws/twilio")
     async def twilio_media(websocket: WebSocket) -> None:

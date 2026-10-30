@@ -15,11 +15,11 @@ mostly a base-URL change.
 
 | Works today | On the roadmap |
 |---|---|
-| Inbound phone calls via Twilio | Outbound calls (`POST /call`) |
-| Browser test calls from the dashboard (WebRTC, no phone number needed) | |
-| Vapi-style `/assistant`, `/phone-number`, `/call` APIs | Telnyx, Plivo, Vonage |
-| Deepgram STT; any OpenAI-compatible LLM; ElevenLabs or Kokoro (free, local) TTS | Provider fallback and cost routing |
-| `firstMessage`, `endCallPhrases`, `end-of-call-report` webhook | Tool calls, dashboard, agency mode (multi-client, white-label) |
+| Inbound and outbound phone calls via Twilio | Telnyx, Plivo, Vonage |
+| Browser test calls from the dashboard (WebRTC, no phone number needed) | Provider fallback and cost routing |
+| Vapi-style `/assistant`, `/phone-number`, `/call` APIs | Tool calls |
+| Deepgram STT; any OpenAI-compatible LLM; ElevenLabs or Kokoro (free, local) TTS | Agency mode (multi-client, white-label) |
+| `firstMessage`, `endCallPhrases`, `end-of-call-report` webhook, per-turn latency | |
 
 ## Quick start
 
@@ -69,6 +69,16 @@ curl -X POST http://localhost:8000/phone-number \
 ```
 
 Call the number. Transcripts are at `GET /call`.
+
+To have the assistant call someone, send the same body as Vapi's `POST /call` (or use **Call a phone**
+in the dashboard). Only call people who expect it: automated calls are regulated (the TCPA in the US,
+Anatel's rules in Brazil). A Twilio trial account can only call numbers verified in its console.
+
+```bash
+curl -X POST http://localhost:8000/call \
+  -H "Authorization: Bearer $OPENRING_API_KEY" -H "Content-Type: application/json" \
+  -d '{"phoneNumberId": "PHONE_NUMBER_ID", "customer": {"number": "+5511912345678"}}'
+```
 
 ## The free stack
 

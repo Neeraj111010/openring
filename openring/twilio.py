@@ -1,4 +1,4 @@
-"""Twilio helpers: request signature validation and TwiML for media streams."""
+"""Twilio helpers: request signature validation, TwiML for media streams, placing calls."""
 
 from __future__ import annotations
 
@@ -6,6 +6,29 @@ import base64
 import hashlib
 import hmac
 from xml.sax.saxutils import escape, quoteattr
+
+import httpx
+
+
+class TwilioError(Exception):
+    """Twilio refused a request; the message is Twilio's own explanation."""
+
+
+async def create_call(
+    account_sid: str, auth_token: str, *, to: str, from_: str, url: str, status_callback: str
+) -> str:
+    """Start an outbound call. Twilio fetches `url` for instructions once it is answered. Returns the CallSid."""
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.post(
+            f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Calls.json",
+            auth=(account_sid, auth_token),
+            data={"To": to, "From": from_, "Url": url, "Method": "POST",
+                  "StatusCallback": status_callback, "StatusCallbackMethod": "POST"},
+        )
+    body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    if r.status_code >= 400:
+        raise TwilioError(f"{body.get('message') or r.text} (Twilio error {body.get('code', r.status_code)})")
+    return body["sid"]
 
 
 def compute_signature(auth_token: str, url: str, params: dict[str, str]) -> str:
