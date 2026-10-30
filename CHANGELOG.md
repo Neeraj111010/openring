@@ -4,6 +4,14 @@ All notable changes to OpenRing are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- A call whose caller hung up in its first seconds, while its speech, model and voice services were still
+  starting, stayed "in-progress" for good; so did a call whose provider failed to start. Both now end, with
+  `customer-ended-call` or `pipeline-error: ...`.
+
 ## [0.1.0] - 2026-10-30
 
 The first public release. Everything below is new.
