@@ -16,7 +16,6 @@ something, or pick an item and say you're on it. Shipped work moves to the [chan
   usually cheaper than Twilio.
 - **Outbound campaigns:** call a list of numbers, in Vapi's format.
 - **Calls over WhatsApp.**
-- **Multilingual preset:** speech recognition and a voice that follow the caller's language.
 - **Deploy in one click:** a published Docker image and templates for Railway and Render.
 
 ## Later

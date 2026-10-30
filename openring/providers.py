@@ -271,6 +271,12 @@ def _supported(table: dict[str, Any], extra: tuple[str, ...] = ()) -> list[str]:
     return sorted([*(k for k in table if k not in ALIASES), *extra])
 
 
+# With "language": "multi" the assistant follows the caller's language: the transcriber detects it, this line
+# tells the model to answer in it, and a multilingual voice reads whatever language it is given.
+FOLLOW_LANGUAGE = "Reply in the language the caller is speaking, and switch whenever they switch."
+MULTILINGUAL_VOICES = {"elevenlabs", "openai"}
+
+
 def fallback_layers(assistant: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     """The assistant's fallback providers in Vapi's shape: `transcriber.fallbackPlan.transcribers`,
     `voice.fallbackPlan.voices` and `model.fallbackModels`. A fallback model is a model name on the same
@@ -335,6 +341,9 @@ def resolve_plan(assistant: dict[str, Any], *, check_keys: bool = True, with_fal
     ]
     if model.get("systemPrompt"):
         messages.insert(0, {"role": "system", "content": model["systemPrompt"]})
+    multilingual = transcriber.get("language") == "multi"
+    if multilingual:
+        messages.append({"role": "system", "content": FOLLOW_LANGUAGE})
 
     server = assistant.get("server") or {}
     plan = StackPlan(
@@ -357,6 +366,9 @@ def resolve_plan(assistant: dict[str, Any], *, check_keys: bool = True, with_fal
         server_url=server.get("url") or assistant.get("serverUrl"),
         assistant=assistant,
     )
+    if multilingual and plan.tts_provider not in MULTILINGUAL_VOICES:
+        plan.warnings.append(f"the {plan.tts_provider} voice speaks one language; to follow callers in several "
+                             "languages, use an 11labs or openai voice")
     if with_fallbacks:
         for layer, alternatives in fallback_layers(assistant).items():
             for alt in alternatives:

@@ -8,6 +8,10 @@ All notable changes to OpenRing are listed here. The format follows
 
 ### Added
 
+- Callers in any language: with `"language": "multi"` the model is told to answer in the caller's language and
+  to switch when they do. The assistant editor offers it as **Follow the caller**, next to common languages,
+  and warns when the chosen voice speaks only one language (Kokoro, Deepgram); ElevenLabs and OpenAI voices
+  read any.
 - Provider fallback (beta), in Vapi's fields: `transcriber.fallbackPlan.transcribers`, `model.fallbackModels`
   and `voice.fallbackPlan.voices`. When a provider fails in a way a retry won't fix (a rejected key, no
   credit, an outage, a rate limit), the next one takes over for the rest of the call. A fallback model can be

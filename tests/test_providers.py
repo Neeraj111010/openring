@@ -177,3 +177,16 @@ def test_layers_with_fallbacks_become_switchers_in_order(keys):
     assert isinstance(llm, LLMSwitcher)
     assert [s.openring_label for s in llm.services] == ["groq openai/gpt-oss-20b", "openai x"]
     assert isinstance(tts, ServiceSwitcher) and tts.strategy.active_service is tts.services[0]
+
+
+def test_multi_language_follows_the_caller(keys):
+    from openring.providers import FOLLOW_LANGUAGE
+
+    plan = resolve_plan(assistant(transcriber={"provider": "deepgram", "language": "multi"},
+                                  voice={"provider": "11labs", "voiceId": "v1"}))
+    assert plan.messages[-1] == {"role": "system", "content": FOLLOW_LANGUAGE} and not plan.warnings
+    single = resolve_plan(assistant(transcriber={"provider": "deepgram", "language": "multi"},
+                                    voice={"provider": "deepgram", "voiceId": "thalia"}))
+    assert "one language" in single.warnings[0]
+    fixed = resolve_plan(assistant(transcriber={"provider": "deepgram", "language": "pt-BR"}))
+    assert all(m["content"] != FOLLOW_LANGUAGE for m in fixed.messages)

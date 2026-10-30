@@ -42,6 +42,8 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
   int8 model (~120 MB with voices) in `~/.cache/pipecat/kokoro-onnx`: `warm_up()` at startup
   downloads it if missing (atomic `.part` rename) and loads it once; Pipecat's per-service model
   load is patched to share that instance. Calls refuse Kokoro with a progress message until ready.
+- `"language": "multi"` appends `FOLLOW_LANGUAGE` (answer in the caller's language) to the system messages;
+  a voice outside `MULTILINGUAL_VOICES` (11labs, openai) adds a plan warning.
 - Fallbacks (`openring/fallback.py`): Vapi's `transcriber.fallbackPlan.transcribers`, `model.fallbackModels`
   (names, or `{provider, model}` for another provider) and `voice.fallbackPlan.voices` resolve into
   `StackPlan.fallbacks`; `build_services` wraps a layer in Pipecat's `ServiceSwitcher`/`LLMSwitcher` with

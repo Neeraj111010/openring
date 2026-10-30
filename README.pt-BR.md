@@ -85,6 +85,7 @@ empresa em outubro de 2026; confira antes de decidir. O OpenRing não tem víncu
 |---|---|
 | Teste no navegador pelo painel (WebRTC) | Troca quando um provedor fica lento; roteamento por custo |
 | Provedor reserva no formato do Vapi, inclusive de outro provedor (**beta**) | |
+| Quem liga em qualquer idioma: o assistente responde no idioma dele (`"language": "multi"`) | |
 | Ligações recebidas e feitas pelo Twilio (**beta**: conte como foi) | Ligações de saída pela Telnyx; Plivo |
 | Ligações recebidas pela Telnyx (**beta**) | |
 | APIs `/assistant`, `/phone-number`, `/call` e `/tool` no formato do Vapi | Custo por ligação em dólares |
@@ -184,8 +185,11 @@ um pela página **Providers** do painel, ou coloque a chave no `~/.openring/.env
 - **Voz:** `11labs`, `cartesia`, `deepgram` (Aura), `openai`, `rime-ai`, `neuphonic`, `smallest-ai`,
   `inworld`; local e grátis: `kokoro`.
 
-Use `"language": "multi"` no Deepgram para ligações em vários idiomas. Quem já tem chave do Deepgram tem uma
-voz rápida na nuvem: `{"provider": "deepgram", "voiceId": "thalia"}`.
+**Quem liga em qualquer idioma.** Com `"language": "multi"` (**Follow the caller** no painel), a transcrição
+detecta o idioma, o OpenRing pede ao modelo que responda nele e troque quando quem liga trocar, e uma voz da
+ElevenLabs ou da OpenAI lê o idioma que receber. As vozes do Kokoro e do Deepgram falam um idioma cada; o painel
+avisa quando você escolhe uma delas. Quem já tem chave do Deepgram tem uma voz rápida na nuvem:
+`{"provider": "deepgram", "voiceId": "thalia"}`.
 
 ## 🐳 Docker
 

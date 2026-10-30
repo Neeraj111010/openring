@@ -233,6 +233,7 @@ textarea.code { font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace;
 .stage.caller { border-style: dashed; background: transparent; display: flex; flex-direction: column; justify-content: center; }
 .stage h3 { font-size: 14px; margin-bottom: 4px; }
 .stage label { display: block; font-size: 12px; color: var(--muted); margin-top: 7px; }
+.stage .stage-hint { margin: 8px 0 0; font-size: 12px; color: var(--warn); }
 .stage input, .stage select { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
 .cable { align-self: center; height: 2px; background: linear-gradient(90deg, var(--accent) 50%, transparent 50%) 0 0 / 10px 2px repeat-x; }
 
@@ -635,6 +636,9 @@ const SUGGESTED_MODEL = { openai: "gpt-4.1-mini", anthropic: "claude-haiku-5-5",
 const TRANSCRIBERS = [["deepgram", "Deepgram"], ["assembly-ai", "AssemblyAI"], ["gladia", "Gladia"], ["soniox", "Soniox"], ["cartesia", "Cartesia"], ["11labs", "ElevenLabs"]];
 const VOICES = [["kokoro", "Kokoro (free, local)"], ["11labs", "ElevenLabs"], ["cartesia", "Cartesia"], ["deepgram", "Deepgram Aura"], ["openai", "OpenAI"], ["rime-ai", "Rime"], ["neuphonic", "Neuphonic"], ["smallest-ai", "Smallest AI"], ["inworld", "Inworld"]];
 // A voice each provider has, filled in when the provider changes; the others need a voice ID from their library.
+// Transcriber languages; "multi" follows the caller: speech in any language, answers in the same one.
+const LANGUAGES = [["multi", "Follow the caller"], ["en", "English"], ["pt-BR", "Portuguese (Brazil)"], ["es", "Spanish"], ["fr", "French"], ["de", "German"], ["it", "Italian"]];
+const MULTILINGUAL_VOICES = ["11labs", "openai"];
 const SUGGESTED_VOICE = { kokoro: "af_heart", deepgram: "thalia", openai: "alloy" };
 const option = (value, label, current) => `<option value="${esc(value)}" ${value === current ? "selected" : ""}>${esc(label)}</option>`;
 const NEW_ASSISTANT = { model: { provider: "openai", model: "gpt-4.1-mini" }, voice: { provider: "kokoro", voiceId: "af_heart" }, transcriber: { provider: "deepgram", model: "nova-3", language: "multi" } };
@@ -673,9 +677,9 @@ async function viewAssistant(id) {
     pane.innerHTML = `<form id="f">
     <div class="line-diagram">
       <div class="stage caller"><h3>Caller</h3><span class="muted" style="font-size:12.5px">Phone or browser</span></div><div class="cable"></div>
-      <div class="stage"><h3>Transcriber</h3><label>Provider</label><select name="tp">${TRANSCRIBERS.map(([k, l]) => option(k, l, t.provider === "assemblyai" ? "assembly-ai" : t.provider || "deepgram")).join("")}</select><label>Language</label><input name="tl" value="${esc(t.language || "multi")}" placeholder="pt-BR, en, multi"></div><div class="cable"></div>
+      <div class="stage"><h3>Transcriber</h3><label>Provider</label><select name="tp">${TRANSCRIBERS.map(([k, l]) => option(k, l, t.provider === "assemblyai" ? "assembly-ai" : t.provider || "deepgram")).join("")}</select><label>Language</label><select name="tl">${[...LANGUAGES, ...(LANGUAGES.some(([k]) => k === (t.language || "multi")) ? [] : [[t.language, t.language]])].map(([k, l]) => option(k, l, t.language || "multi")).join("")}</select></div><div class="cable"></div>
       <div class="stage"><h3>Model</h3><label>Provider</label><select name="mp">${LLM.map(p => option(p, p, m.provider === "deep-seek" ? "deepseek" : m.provider)).join("")}</select><label>Model</label><input name="mm" value="${esc(m.model || "")}"></div><div class="cable"></div>
-      <div class="stage"><h3>Voice</h3><label>Provider</label><select name="vp">${VOICES.map(([k, l]) => option(k, l, vo.provider === "elevenlabs" ? "11labs" : vo.provider || "kokoro")).join("")}</select><label>Voice ID</label><input name="vv" value="${esc(vo.voiceId || "")}"></div>
+      <div class="stage"><h3>Voice</h3><label>Provider</label><select name="vp">${VOICES.map(([k, l]) => option(k, l, vo.provider === "elevenlabs" ? "11labs" : vo.provider || "kokoro")).join("")}</select><label>Voice ID</label><input name="vv" value="${esc(vo.voiceId || "")}"><p class="hint stage-hint" id="vhint" hidden>This voice speaks one language. To follow callers in several, pick ElevenLabs or OpenAI.</p></div>
     </div>
     <div class="field" style="margin-top:22px"><label for="name">Name</label><input id="name" name="name" required value="${esc(a.name || "")}" placeholder="Front desk"></div>
     <div class="field"><label for="greet">Greeting</label><p class="hint">The first thing callers hear.</p><input id="greet" name="greet" value="${esc(a.firstMessage || "")}" placeholder="Hi! How can I help you today?"></div>
@@ -684,8 +688,12 @@ async function viewAssistant(id) {
     ${footer}</form>`;
     const mp = $("[name=mp]"), mm = $("[name=mm]");
     mp.onchange = () => { if (!mm.value || Object.values(SUGGESTED_MODEL).includes(mm.value)) mm.value = SUGGESTED_MODEL[mp.value] ?? ""; };
-    const vp = $("[name=vp]"), vv = $("[name=vv]");
-    vp.onchange = () => { if (!vv.value || Object.values(SUGGESTED_VOICE).includes(vv.value)) vv.value = SUGGESTED_VOICE[vp.value] ?? ""; };
+    const vp = $("[name=vp]"), vv = $("[name=vv]"), tl = $("[name=tl]");
+    // "Follow the caller" needs a voice that reads any language; the others speak one each.
+    const hint = () => { $("#vhint").hidden = !(tl.value === "multi" && !MULTILINGUAL_VOICES.includes(vp.value)); };
+    vp.onchange = () => { if (!vv.value || Object.values(SUGGESTED_VOICE).includes(vv.value)) vv.value = SUGGESTED_VOICE[vp.value] ?? ""; hint(); };
+    tl.onchange = hint;
+    hint();
     $("#f").onsubmit = e => {
       e.preventDefault();
       const f = new FormData(e.target);

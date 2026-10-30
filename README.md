@@ -86,6 +86,7 @@ affiliated with any of them.
 |---|---|
 | Browser test calls from the dashboard (WebRTC) | Switching when a provider gets slow; routing by cost |
 | Provider fallback in Vapi's format, across providers (**beta**) | |
+| Callers in any language: the assistant answers in theirs (`"language": "multi"`) | |
 | Phone calls in and out through Twilio (**beta**: tell us how it goes) | Outbound calls through Telnyx; Plivo |
 | Incoming calls through Telnyx (**beta**, see [Telnyx](#telnyx-beta)) | |
 | Vapi-style `/assistant`, `/phone-number`, `/call` and `/tool` APIs | Cost per call in dollars |
@@ -251,8 +252,11 @@ dashboard's **Providers** page, or put its key in `~/.openring/.env`.
 | Voice | `11labs` / `elevenlabs`, `cartesia`, `deepgram` (Aura), `openai`, `rime-ai`, `neuphonic`, `smallest-ai`, `inworld` | the provider's key (`RIME_API_KEY`, `NEUPHONIC_API_KEY`, `SMALLEST_API_KEY`, `INWORLD_API_KEY`, ...) |
 | Voice, local | `kokoro` (free, runs on CPU) | none |
 
-Use `"language": "multi"` on Deepgram for calls in several languages. With a Deepgram key you already have a
-fast cloud voice: `{"provider": "deepgram", "voiceId": "thalia"}`.
+**Callers in any language.** With `"language": "multi"` (**Follow the caller** in the dashboard) the
+transcriber detects the language, OpenRing tells the model to answer in it and to switch when the caller
+switches, and an ElevenLabs or OpenAI voice reads whatever language it gets. Kokoro and Deepgram voices speak
+one language each; the dashboard says so when you pick one. With a Deepgram key you already have a fast cloud
+voice: `{"provider": "deepgram", "voiceId": "thalia"}`.
 
 Requests to OpenRouter carry OpenRing's name, so OpenRouter can list it among the apps that use it;
 `OPENRING_ATTRIBUTION=false` leaves that out.
