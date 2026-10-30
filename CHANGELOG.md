@@ -4,7 +4,7 @@ All notable changes to OpenRing are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.1.2] - 2026-10-30
 
 ### Added
 
@@ -29,6 +29,7 @@ All notable changes to OpenRing are listed here. The format follows
   Numbers are colored only when they need attention, labels are no longer in spaced capitals, and the
   fee you didn't pay leads the overview.
 - Recent calls on the overview are links, so they work from the keyboard.
+- A rewritten README, and [PRINCIPLES.md](PRINCIPLES.md): what OpenRing promises and how it decides what to build.
 
 ## [0.1.1] - 2026-10-30
 
