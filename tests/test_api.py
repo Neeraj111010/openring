@@ -96,6 +96,17 @@ def test_bad_twilio_signature_rejected():
     assert r.status_code == 403
 
 
+def test_twilio_signature_accepted_with_or_without_the_default_port():
+    # Twilio signs some webhooks over "https://host:443/..." even when it was given "https://host/...".
+    client = make_client()
+    form = {"To": "+19999999999", "From": "+1", "CallSid": "CA1"}
+    for signed_url in ("https://ring.example.com/twilio/voice", "https://ring.example.com:443/twilio/voice"):
+        sig = compute_signature("tok", signed_url, form)
+        assert client.post("/twilio/voice", data=form, headers={"X-Twilio-Signature": sig}).status_code == 200
+    other_port = compute_signature("tok", "https://ring.example.com:8443/twilio/voice", form)
+    assert client.post("/twilio/voice", data=form, headers={"X-Twilio-Signature": other_port}).status_code == 403
+
+
 def test_twilio_webhook_refused_without_auth_token():
     form = {"To": "+15551234567", "From": "+1", "CallSid": "CA1"}
     r = make_client(twilio_auth_token="").post("/twilio/voice", data=form)

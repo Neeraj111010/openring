@@ -250,6 +250,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         base = settings.public_url or f"{request.url.scheme}://{request.url.netloc}"
         url = base + request.url.path + (f"?{request.url.query}" if request.url.query else "")
         if not is_valid_signature(settings.twilio_auth_token, url, form, request.headers.get("X-Twilio-Signature", "")):
+            logger.warning("refused a request to {}: invalid Twilio signature", url)
             raise HTTPException(status_code=403, detail="invalid Twilio signature")
         return form
 
@@ -264,7 +265,9 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         if call_id := request.query_params.get("callId"):
             call = store.get("calls", call_id)
             if not call or call.get("phoneCallProviderId") not in (None, form.get("CallSid")):
+                logger.warning("call {}: Twilio call {} is not this call; not connecting", call_id, form.get("CallSid"))
                 return Response(say_twiml("Sorry, this call could not be connected."), media_type="application/xml")
+            logger.info("call {} answered; streaming it to assistant {}", call_id, call["assistantId"])
             params = {"assistantId": call["assistantId"], "callId": call_id}
             return Response(stream_twiml(settings.public_ws_url + "/ws/twilio", params), media_type="application/xml")
 
@@ -284,6 +287,8 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
                 "phoneCallProviderId": form.get("CallSid"),
             },
         )
+        logger.info("call {} from {} to {}; streaming it to assistant {}", call["id"], form.get("From"), form.get("To"),
+                    assistant_id)
         twiml = stream_twiml(
             settings.public_ws_url + "/ws/twilio",
             {"assistantId": assistant_id, "callId": call["id"]},
@@ -294,6 +299,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     async def twilio_status(request: Request) -> Response:
         """Final status of an outbound call. Records the calls that never reached the assistant."""
         form = await twilio_form(request)
+        logger.info("call {}: Twilio status {}", request.query_params.get("callId"), form.get("CallStatus"))
         if reason := UNREACHED.get(form.get("CallStatus", "")):
             # Only a call still queued: one whose stream connected is closed by the bot itself.
             patch = {"status": "ended", "endedReason": reason, "endedAt": now_iso()}
@@ -324,6 +330,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             logger.warning("refused media stream for call {}: unknown or already connected", call_id or "?")
             await websocket.close(code=1008)
             return
+        logger.info("call {} media stream connected", call_id)
         # The assistant comes from the call record, never from the stream's parameters.
         assistant = store.get("assistants", call.get("assistantId") or "")
         if assistant is None:
