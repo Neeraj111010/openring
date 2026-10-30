@@ -234,10 +234,10 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     async def connect_provider(provider: str, body: dict[str, Any]) -> dict[str, Any]:
         try:
             values = keys.clean_values(provider, body.get("values") or {})
-            await keys.check(provider, values)
+            checked = await keys.check(provider, values)
         except keys.ConnectError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return _use(provider, values)
+        return {**_use(provider, values), "checked": checked}
 
     @app.post("/providers/{provider}/test", include_in_schema=False, dependencies=[Depends(require_session)])
     async def test_provider(provider: str) -> dict[str, Any]:
@@ -247,10 +247,10 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         if not all(values.values()):
             raise HTTPException(status_code=400, detail=f"{keys.NAMES[provider]} is not connected")
         try:
-            await keys.check(provider, values)
+            checked = await keys.check(provider, values)
         except keys.ConnectError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True}
+        return {"ok": True, "checked": checked}
 
     @app.delete("/providers/{provider}/connect", include_in_schema=False, dependencies=[Depends(require_session)])
     def disconnect_provider(provider: str) -> dict[str, Any]:

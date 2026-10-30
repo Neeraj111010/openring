@@ -76,6 +76,50 @@ def test_check_asks_each_provider_with_its_own_auth():
     assert seen[5][2].startswith("Basic ")
 
 
+def test_every_provider_with_a_key_can_be_connected():
+    from openring.providers import ALIASES, LLM_PROVIDERS, LOCAL_LLMS, STT_PROVIDERS, TTS_PROVIDERS
+
+    envs = {**STT_PROVIDERS, **TTS_PROVIDERS, **{p: e for p, (_, e) in LLM_PROVIDERS.items() if p not in LOCAL_LLMS}}
+    missing = {p for p, env in envs.items() if env and p not in ALIASES and p not in keys.CONNECTORS}
+    assert missing == set()
+    assert all(keys.CONNECTORS[p]["keysUrl"].startswith("https://") for p in keys.CONNECTORS)
+
+
+def test_newer_providers_are_checked_their_own_way():
+    seen = []
+
+    def record(request):
+        seen.append((request.url.host, request.url.path, dict(request.headers)))
+        return httpx.Response(200, json={})
+
+    run_check("anthropic", {"ANTHROPIC_API_KEY": "a1"}, record)
+    run_check("google", {"GOOGLE_API_KEY": "g1"}, record)
+    run_check("cartesia", {"CARTESIA_API_KEY": "c1"}, record)
+    run_check("assembly-ai", {"ASSEMBLYAI_API_KEY": "s1"}, record)
+    assert seen[0][:2] == ("api.anthropic.com", "/v1/models") and seen[0][2]["x-api-key"] == "a1"
+    assert seen[1][:2] == ("generativelanguage.googleapis.com", "/v1beta/openai/models")  # no double slash
+    assert seen[2][2]["x-api-key"] == "c1" and "cartesia-version" in seen[2][2]
+    assert seen[3][2]["authorization"] == "s1"
+
+    # Google and xAI answer a bad key with 400 instead of 401.
+    with pytest.raises(keys.ConnectError, match="rejected"):
+        run_check("google", {"GOOGLE_API_KEY": "bad"},
+                  lambda r: httpx.Response(400, json={"error": {"message": "Please pass a valid API key"}}))
+    # Rime's check can only spot a rejected key; anything else counts as working.
+    run_check("rime-ai", {"RIME_API_KEY": "r1"}, lambda r: httpx.Response(405))
+    with pytest.raises(keys.ConnectError, match="rejected"):
+        run_check("rime-ai", {"RIME_API_KEY": "bad"}, lambda r: httpx.Response(401))
+
+    def unreachable(request):
+        raise AssertionError("Smallest AI has no endpoint to check a key")
+    asyncio.run(_check_with("smallest-ai", {"SMALLEST_API_KEY": "s" * 10}, unreachable, expect=False))
+
+
+async def _check_with(provider, values, handler, expect):
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        assert await keys.check(provider, values, client) is expect
+
+
 def test_check_explains_rejections():
     with pytest.raises(keys.ConnectError, match="rejected"):
         run_check("groq", {"GROQ_API_KEY": "bad"}, lambda r: httpx.Response(401))
@@ -98,6 +142,7 @@ def test_connect_checks_then_saves_and_applies_at_once(env_file, monkeypatch):
         checked.append((provider, values))
         if values.get("GROQ_API_KEY") == "gsk_" + "b" * 40:
             raise keys.ConnectError("Groq rejected this key; copy it again from Groq")
+        return True
 
     monkeypatch.setattr(keys, "check", fake_check)
     client = signed_in()
@@ -117,7 +162,7 @@ def test_connect_checks_then_saves_and_applies_at_once(env_file, monkeypatch):
     assert GROQ_KEY not in str(info)  # never sent back to the page
     assert next(p for p in info["providers"] if p["id"] == "groq")["ready"] is True
 
-    assert client.post("/providers/groq/test", headers=DASH).json() == {"ok": True}
+    assert client.post("/providers/groq/test", headers=DASH).json() == {"ok": True, "checked": True}
     assert client.delete("/providers/groq/connect", headers=DASH).json()["connected"] is False
     assert "GROQ_API_KEY" not in os.environ
     assert "GROQ_API_KEY=\n" in env_file.read_text(encoding="utf-8")
@@ -125,7 +170,7 @@ def test_connect_checks_then_saves_and_applies_at_once(env_file, monkeypatch):
 
 def test_connecting_twilio_refreshes_the_live_settings(env_file, monkeypatch):
     async def fake_check(provider, values, client=None):
-        return None
+        return True
 
     monkeypatch.setattr(keys, "check", fake_check)
     client = signed_in(twilio_auth_token="")

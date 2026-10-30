@@ -186,6 +186,7 @@ code.nowrap { white-space: nowrap; overflow-wrap: normal; }
 .tile.provider .head .sub { margin-top: 1px; line-height: 1.4; }
 .tile.provider .note { color: var(--muted); font-size: 13px; margin-top: -4px; }
 .tile.provider .note:empty { display: none; }
+.show-more { margin-top: 12px; }
 .state { display: inline-flex; align-items: center; gap: 6px; flex: none; font-size: 12.5px; font-weight: 500; color: var(--muted); white-space: nowrap; margin-top: 2px; }
 .state::before { content: ""; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid currentColor; }
 .state.on { color: var(--ok); }
@@ -776,20 +777,52 @@ async function viewCall(id) {
 
 const KINDS = [["transcriber", "Speech to text"], ["model", "Language models"], ["voice", "Voices"], ["telephony", "Telephony"]];
 let oauthError = "";  // why the last OpenRouter sign-in failed, shown once on the Providers page
+let providerNotice = null;  // { key, text }: a message for one card that survives the page redrawing
+const expandedKinds = new Set();  // sections showing every provider, not just the first few
+const SECTION_SIZE = 6;
 // Several providers start with the same letter, so each gets its own two-letter mark.
-const MONOGRAM = { deepgram: "DG", openai: "AI", groq: "GQ", openrouter: "OR", deepseek: "DS", omniroute: "OM", "11labs": "11", kokoro: "KO", twilio: "TW" };
-// One line on what each provider is for; the setting names are an implementation detail.
-const ABOUT = {
-  deepgram: "Speech to text, US$200 free credit",
-  openai: "GPT models",
-  groq: "Very fast open models, with a free tier",
-  openrouter: "Hundreds of models with one key, some free",
-  deepseek: "DeepSeek models at a low price",
-  omniroute: "Free gateway to free models, on this computer",
-  "11labs": "Natural, expressive voices",
-  kokoro: "Free voice that runs on this computer",
-  twilio: "Phone numbers and calls",
+const MONOGRAM = {
+  deepgram: "DG", "assembly-ai": "AA", gladia: "GL", soniox: "SX", cartesia: "CA", "11labs": "11",
+  openai: "AI", anthropic: "AN", google: "GE", groq: "GQ", openrouter: "OR", deepseek: "DS", xai: "XA",
+  cerebras: "CB", "together-ai": "TG", deepinfra: "DI", "perplexity-ai": "PX", mistral: "MI", fireworks: "FW",
+  ollama: "OL", omniroute: "OM", "rime-ai": "RI", neuphonic: "NP", "smallest-ai": "SM", inworld: "IW",
+  kokoro: "KO", twilio: "TW",
 };
+// One line on what each provider is for, by "kind:id" because some providers do more than one job.
+const ABOUT = {
+  "transcriber:deepgram": "Speech to text, US$200 free credit",
+  "transcriber:assembly-ai": "Streaming speech to text",
+  "transcriber:gladia": "Multilingual speech to text",
+  "transcriber:soniox": "Multilingual speech to text",
+  "transcriber:cartesia": "Fast speech to text",
+  "transcriber:11labs": "Realtime speech to text",
+  "model:openai": "GPT models",
+  "model:anthropic": "Claude models",
+  "model:google": "Gemini models, with a free tier",
+  "model:groq": "Very fast open models, with a free tier",
+  "model:openrouter": "Hundreds of models with one key, some free",
+  "model:deepseek": "DeepSeek models at a low price",
+  "model:xai": "Grok models",
+  "model:cerebras": "Very fast open models",
+  "model:together-ai": "Open models in the cloud",
+  "model:deepinfra": "Open models at low prices",
+  "model:perplexity-ai": "Models with live web search",
+  "model:mistral": "Mistral models",
+  "model:fireworks": "Fast open models",
+  "model:ollama": "Free models on this computer",
+  "model:omniroute": "Free gateway to free models, on this computer",
+  "voice:11labs": "Natural, expressive voices",
+  "voice:cartesia": "Low-latency voices",
+  "voice:deepgram": "Aura voices, low latency",
+  "voice:openai": "OpenAI voices",
+  "voice:rime-ai": "Conversational voices",
+  "voice:neuphonic": "Low-latency voices",
+  "voice:smallest-ai": "Fast, low-cost voices",
+  "voice:inworld": "Expressive voices",
+  "voice:kokoro": "Free voice that runs on this computer",
+  "telephony:twilio": "Phone numbers and calls",
+};
+const cardKey = p => `${p.kind}:${p.id}`;
 async function viewProviders() {
   setPage("providers");
   const info = await api("/dashboard/info");
@@ -798,35 +831,51 @@ async function viewProviders() {
   const v = $("#view");
   const connected = p => p.connect ? p.connect.fields.every(f => f.set) : p.ready;
   const state = p => connected(p) ? '<span class="state on">Connected</span>' : p.ready === null ? '<span class="state">Local</span>' : '<span class="state">Not connected</span>';
+  // Connected first, then the free ones, then the rest in their usual order.
+  const rank = p => connected(p) ? 0 : p.free ? 1 : 2;
   const actions = p => {
     const list = !p.connect ? [] : connected(p) ? ["test", "change", "disconnect"] : ["connect"];
-    return list.length ? `<div class="actions">${list.map(a => `${a === "disconnect" ? '<span class="spacer"></span>' : ""}<button class="${PROVIDER_ACTIONS[a][1]}" data-action="${a}" data-id="${esc(p.id)}">${PROVIDER_ACTIONS[a][0]}</button>`).join("")}</div>` : "";
+    return list.length ? `<div class="actions">${list.map(a => `${a === "disconnect" ? '<span class="spacer"></span>' : ""}<button class="${PROVIDER_ACTIONS[a][1]}" data-action="${a}" data-card="${esc(cardKey(p))}">${PROVIDER_ACTIONS[a][0]}</button>`).join("")}</div>` : "";
+  };
+  const notice = p => providerNotice?.key === cardKey(p) ? esc(providerNotice.text) : "";
+  const tile = p => `<article class="tile provider"><div class="head"><span class="avatar">${esc(MONOGRAM[p.id] || initials(p.name))}</span><div class="grow"><div class="name">${esc(p.name)}</div><div class="sub">${esc(ABOUT[cardKey(p)] || "")}</div></div>${state(p)}</div>${p.note ? `<div class="note">${esc(p.note)}</div>` : ""}<div class="note" role="status" data-status="${esc(cardKey(p))}">${notice(p)}</div>${actions(p)}</article>`;
+  const section = ([kind, title]) => {
+    const list = rows.filter(p => p.kind === kind).map((p, i) => [p, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([p]) => p);
+    if (!list.length) return "";
+    const shown = expandedKinds.has(kind) ? list : list.slice(0, SECTION_SIZE);
+    const more = list.length - shown.length;
+    return `<h2 class="section-title">${title}<span class="badge">${list.filter(p => p.ready).length}/${list.length}</span></h2>
+    <div class="tiles">${shown.map(tile).join("")}</div>
+    ${more ? `<button class="btn ghost small show-more" data-more="${kind}">Show ${more} more</button>` : ""}`;
   };
   // The usual settings file reads better as ~/.openring/.env; hover shows the full path.
   const envFile = info.envFile.replace(/^.*?[\\/](\.openring[\\/].*)$/, "~/$1").replace(/\\/g, "/");
   v.innerHTML = `<div class="toolbar">${tabs([["all", "All", info.providers.length], ["ready", "Ready", info.providers.filter(p => p.ready).length]], filter, "pf")}</div>
   <p class="muted providers-intro">Each key is checked with its provider before it's saved ${info.envFile ? `to <code title="${esc(info.envFile)}" class="nowrap">${esc(envFile)}</code>` : "in memory until the server restarts"}, and it's never shown here again.</p>
   ${oauthError ? `<p class="error" role="alert">OpenRouter sign-in: ${esc(oauthError)}</p>` : ""}
-  ${KINDS.map(([kind, title]) => { const list = rows.filter(p => p.kind === kind); return list.length ? `<h2 class="section-title">${title}<span class="badge">${list.filter(p => p.ready).length}/${list.length}</span></h2>
-    <div class="tiles">${list.map(p => `<article class="tile provider"><div class="head"><span class="avatar">${esc(MONOGRAM[p.id] || initials(p.name))}</span><div class="grow"><div class="name">${esc(p.name)}</div><div class="sub">${esc(ABOUT[p.id] || "")}</div></div>${state(p)}</div>${p.note ? `<div class="note">${esc(p.note)}</div>` : ""}<div class="note" role="status" data-status="${esc(p.id)}"></div>${actions(p)}</article>`).join("")}</div>` : ""; }).join("")}`;
+  ${KINDS.map(section).join("")}`;
   oauthError = "";
+  providerNotice = null;
   v.querySelectorAll("[data-pf]").forEach(b => b.onclick = () => { store.set("openring-providers-filter", b.dataset.pf); viewProviders(); });
-  const byId = id => info.providers.find(p => p.id === id);
-  const status = (id, text, bad) => { const el = v.querySelector(`[data-status="${id}"]`); el.textContent = text; el.style.color = bad ? "var(--bad)" : ""; };
+  v.querySelectorAll("[data-more]").forEach(b => b.onclick = () => { expandedKinds.add(b.dataset.more); viewProviders(); });
+  const byCard = key => info.providers.find(p => cardKey(p) === key);
+  const status = (p, text, bad) => { const el = v.querySelector(`[data-status="${cardKey(p)}"]`); el.textContent = text; el.style.color = bad ? "var(--bad)" : ""; };
   const run = {
     connect: p => openConnect(p),
     change: p => openConnect(p),
     async test(p) {
-      status(p.id, `Checking with ${p.name}…`);
-      try { await api(`/providers/${p.id}/test`, { method: "POST" }); status(p.id, "Works."); }
-      catch (err) { status(p.id, sentence(err.message), true); }
+      status(p, `Checking with ${p.name}…`);
+      try {
+        const r = await api(`/providers/${p.id}/test`, { method: "POST" });
+        status(p, r.checked ? "Works." : `${p.name} can't be checked in advance; your first call will tell.`);
+      } catch (err) { status(p, sentence(err.message), true); }
     },
     async disconnect(p) {
       try { await api(`/providers/${p.id}/connect`, { method: "DELETE" }); viewProviders(); }
-      catch (err) { status(p.id, sentence(err.message), true); }
+      catch (err) { status(p, sentence(err.message), true); }
     },
   };
-  v.querySelectorAll("[data-action]").forEach(b => b.onclick = () => run[b.dataset.action](byId(b.dataset.id)));
+  v.querySelectorAll("[data-action]").forEach(b => b.onclick = () => run[b.dataset.action](byCard(b.dataset.card)));
 }
 
 // Every provider card offers the same actions in the same places: Connect while it isn't,
@@ -861,7 +910,12 @@ function openConnect(p) {
     save.disabled = true;
     save.textContent = `Checking with ${p.name}…`;
     $("#keyErr").textContent = "";
-    try { await api(`/providers/${p.id}/connect`, { method: "POST", body: JSON.stringify({ values }) }); d.close(); viewProviders(); }
+    try {
+      const r = await api(`/providers/${p.id}/connect`, { method: "POST", body: JSON.stringify({ values }) });
+      if (!r.checked) providerNotice = { key: cardKey(p), text: `Saved. ${p.name} can't be checked in advance; your first call will tell.` };
+      d.close();
+      viewProviders();
+    }
     catch (err) { $("#keyErr").textContent = sentence(err.message); save.disabled = false; save.textContent = "Check and save"; }
   };
   d.showModal();
