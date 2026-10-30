@@ -4,6 +4,15 @@ All notable changes to OpenRing are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- New look: a ring-and-wave logo, an orange palette in light and dark themes, and a quieter dashboard.
+  Numbers are colored only when they need attention, labels are no longer in spaced capitals, and the
+  fee you didn't pay leads the overview.
+- Recent calls on the overview are links, so they work from the keyboard.
+
 ## [0.1.1] - 2026-10-30
 
 ### Changed

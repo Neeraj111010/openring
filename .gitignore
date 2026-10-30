@@ -32,3 +32,7 @@ node_modules/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local design-tool output and hooks
+.impeccable/
+.codex/

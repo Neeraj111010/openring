@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpenRing</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 48 48%27%3E%3Crect width=%2748%27 height=%2748%27 rx=%2711%27 fill=%27%23e8590c%27/%3E%3Cpath d=%27M17 20v8M24 13v22M31 20v8%27 stroke=%27white%27 stroke-width=%276%27 stroke-linecap=%27round%27/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script>
@@ -12,9 +13,11 @@
 </script>
 <style>
 :root {
-  --bg: #f3f5f8; --panel: #ffffff; --panel-2: #f7f9fb; --line: #e1e6ed; --ink: #141a22; --muted: #5d6878;
-  --rail: #ffffff; --rail-ink: #3a4553; --rail-active: #e6f2f6;
-  --accent: #0f6e8c; --accent-ink: #ffffff; --accent-soft: #e2f0f5;
+  /* Brand: ring orange marks the logo; ember (darker, readable with white text) is the UI accent. */
+  --mark: #e8590c;
+  --bg: #f7f5f2; --panel: #ffffff; --panel-2: #faf8f5; --line: #e7e2da; --ink: #1c1917; --muted: #6b625a;
+  --rail: #ffffff; --rail-ink: #44403c; --rail-active: #fdeee4;
+  --accent: #c2410c; --accent-ink: #ffffff; --accent-soft: #fdeee4;
   --c1: #0e7490; --c2: #15803d; --c3: #b45309; --c4: #be123c; --c5: #6d28d9; --c6: #0369a1;
   --ok: #15803d; --ok-soft: #e3f4ea; --warn: #b45309; --warn-soft: #fbf0dc; --bad: #b42318; --bad-soft: #fde8e6;
   --shadow: 0 1px 2px rgba(20,26,34,.05);
@@ -23,9 +26,9 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0a0e13; --panel: #11171f; --panel-2: #161e28; --line: #222c39; --ink: #e7edf3; --muted: #8a97a8;
-    --rail: #0d1218; --rail-ink: #aab6c4; --rail-active: #17303a;
-    --accent: #2fb8cc; --accent-ink: #062027; --accent-soft: rgba(47,184,204,.13);
+    --bg: #0f0d0b; --panel: #171412; --panel-2: #1e1a17; --line: #2e2823; --ink: #f5f1ec; --muted: #a39a91;
+    --rail: #121010; --rail-ink: #c4bbb2; --rail-active: #2a1d14;
+    --accent: #fb923c; --accent-ink: #1c1917; --accent-soft: rgba(251,146,60,.13);
     --c1: #38bdf8; --c2: #34d399; --c3: #fbbf24; --c4: #fb7185; --c5: #a78bfa; --c6: #2fb8cc;
     --ok: #34d399; --ok-soft: rgba(52,211,153,.12); --warn: #fbbf24; --warn-soft: rgba(251,191,36,.12); --bad: #fb7185; --bad-soft: rgba(251,113,133,.12);
     --shadow: none;
@@ -33,9 +36,9 @@
   }
 }
 :root[data-theme="dark"] {
-  --bg: #0a0e13; --panel: #11171f; --panel-2: #161e28; --line: #222c39; --ink: #e7edf3; --muted: #8a97a8;
-  --rail: #0d1218; --rail-ink: #aab6c4; --rail-active: #17303a;
-  --accent: #2fb8cc; --accent-ink: #062027; --accent-soft: rgba(47,184,204,.13);
+  --bg: #0f0d0b; --panel: #171412; --panel-2: #1e1a17; --line: #2e2823; --ink: #f5f1ec; --muted: #a39a91;
+  --rail: #121010; --rail-ink: #c4bbb2; --rail-active: #2a1d14;
+  --accent: #fb923c; --accent-ink: #1c1917; --accent-soft: rgba(251,146,60,.13);
   --c1: #38bdf8; --c2: #34d399; --c3: #fbbf24; --c4: #fb7185; --c5: #a78bfa; --c6: #2fb8cc;
   --ok: #34d399; --ok-soft: rgba(52,211,153,.12); --warn: #fbbf24; --warn-soft: rgba(251,191,36,.12); --bad: #fb7185; --bad-soft: rgba(251,113,133,.12);
   --shadow: none;
@@ -43,7 +46,7 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 14.5px/1.5 "IBM Plex Sans", system-ui, sans-serif; }
-h1, h2, h3 { font-family: "IBM Plex Sans", system-ui, sans-serif; margin: 0; letter-spacing: -0.01em; font-weight: 700; }
+h1, h2, h3 { font-family: "IBM Plex Sans", system-ui, sans-serif; margin: 0; letter-spacing: -0.01em; font-weight: 600; }
 button, input, select, textarea { font: inherit; color: inherit; }
 a { color: var(--accent); }
 code { font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace; font-size: .92em; background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; overflow-wrap: anywhere; }
@@ -55,11 +58,11 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
 .app { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 100vh; }
 .rail { background: var(--rail); border-right: 1px solid var(--line); padding: 20px 14px; display: flex; flex-direction: column; gap: 18px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
 .brand { display: flex; align-items: center; gap: 11px; padding: 2px 8px; }
-.brand .logo { width: 36px; height: 36px; border-radius: 10px; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; }
+.brand .logo { width: 36px; height: 36px; border-radius: 10px; background: var(--mark); color: #ffffff; display: grid; place-items: center; }
 .brand strong { display: block; font-family: "IBM Plex Sans", system-ui, sans-serif; font-size: 18px; line-height: 1.1; }
 .brand small { color: var(--muted); font-size: 12px; }
 .rail nav { display: flex; flex-direction: column; gap: 2px; }
-.rail .group { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding: 14px 10px 6px; }
+.rail .group { font-size: 12.5px; font-weight: 500; color: var(--muted); padding: 14px 10px 6px; }
 .rail nav a { display: flex; align-items: center; gap: 11px; padding: 8px 10px; border-radius: var(--radius-sm); color: var(--rail-ink); text-decoration: none; font-weight: 500; }
 .rail nav a:hover { background: var(--panel-2); color: var(--ink); }
 .rail nav a[aria-current="page"] { background: var(--rail-active); color: var(--accent); }
@@ -89,7 +92,7 @@ main { padding: 28px 32px 48px; max-width: 1320px; width: 100%; margin: 0 auto; 
 .btn:disabled { opacity: .5; cursor: default; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
 .panel > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px 0; }
-.panel > header h2 { font-size: 13px; font-family: "IBM Plex Sans", system-ui, sans-serif; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.panel > header h2 { font-size: 15px; font-weight: 600; color: var(--ink); }
 .panel .body { padding: 16px 20px 20px; }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
 .toolbar .spacer { flex: 1; }
@@ -108,12 +111,15 @@ main { padding: 28px 32px 48px; max-width: 1320px; width: 100%; margin: 0 auto; 
 /* Big number cards */
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); gap: 14px; margin-bottom: 18px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 15px 17px 16px; box-shadow: var(--shadow); min-width: 0; }
-.card .label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.card .label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; font-weight: 500; }
 .card .label svg.i { width: 16px; height: 16px; }
-.card .value { font-family: "IBM Plex Sans", system-ui, sans-serif; font-size: 30px; font-weight: 700; line-height: 1.15; margin-top: 10px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.card .value { font-family: "IBM Plex Sans", system-ui, sans-serif; font-size: 30px; font-weight: 600; line-height: 1.15; margin-top: 10px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .card .value small { font-size: 15px; font-weight: 500; color: var(--muted); margin-left: 3px; }
 .card .sub { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
-.v1 { color: var(--c1); } .v2 { color: var(--c2); } .v3 { color: var(--c3); } .v4 { color: var(--c4); } .v5 { color: var(--c5); } .v6 { color: var(--c6); }
+.value.warn { color: var(--warn); } .value.bad { color: var(--bad); } .value.brand { color: var(--accent); }
+/* The headline card: what OpenRing saved, twice as wide and larger */
+.card.hero { grid-column: span 2; background: var(--accent-soft); border-color: transparent; }
+.card.hero .value { font-size: 40px; }
 
 .grid2 { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 14px; margin-bottom: 14px; }
 .grid2.even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
@@ -121,7 +127,7 @@ main { padding: 28px 32px 48px; max-width: 1320px; width: 100%; margin: 0 auto; 
 /* Calls per day */
 .bars { display: flex; align-items: flex-end; gap: 3px; height: 170px; padding-top: 8px; }
 .bars .day { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; }
-.bars .bar { background: var(--accent); border-radius: 3px 3px 0 0; min-height: 2px; opacity: .85; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; }
+.bars .bar { background: var(--c1); border-radius: 3px 3px 0 0; min-height: 2px; opacity: .85; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; }
 .bars .bar .fail { background: var(--bad); }
 .bars .day:hover .bar { opacity: 1; }
 .bars .day.zero .bar { background: var(--line); opacity: 1; }
@@ -140,7 +146,7 @@ main { padding: 28px 32px 48px; max-width: 1320px; width: 100%; margin: 0 auto; 
 
 /* Lists and tables */
 .table { width: 100%; border-collapse: collapse; }
-.table th { text-align: left; font-size: 11.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); padding: 12px 16px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.table th { text-align: left; font-size: 12.5px; font-weight: 600; color: var(--muted); padding: 12px 16px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .table td { padding: 12px 16px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 .table tr:last-child td { border-bottom: 0; }
 .table tbody tr.link { cursor: pointer; }
@@ -149,6 +155,8 @@ main { padding: 28px 32px 48px; max-width: 1320px; width: 100%; margin: 0 auto; 
 .scroll { overflow-x: auto; }
 .minirow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); }
 .minirow:last-child { border-bottom: 0; }
+a.rowlink { color: inherit; text-decoration: none; border-radius: 6px; }
+a.rowlink:hover { background: var(--panel-2); }
 .minirow .meter { flex: 1; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; max-width: 140px; }
 .minirow .meter span { display: block; height: 100%; background: var(--accent); }
 
@@ -228,7 +236,7 @@ textarea.code { font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace;
 .bubble.assistant { background: var(--accent-soft); align-self: flex-start; border-bottom-left-radius: 4px; }
 .bubble.user { background: var(--panel-2); border: 1px solid var(--line); align-self: flex-end; border-bottom-right-radius: 4px; }
 /* A tool the assistant used, between the lines of the conversation */
-.toolrow { align-self: flex-start; max-width: min(88%, 720px); font: 12.5px/1.45 ui-monospace, "Cascadia Code", Consolas, monospace; color: var(--muted); border-left: 2px solid var(--c5); padding: 3px 10px; overflow-wrap: anywhere; }
+.toolrow { align-self: flex-start; max-width: min(88%, 720px); font: 12.5px/1.45 ui-monospace, "Cascadia Code", Consolas, monospace; color: var(--muted); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 4px 10px; overflow-wrap: anywhere; }
 .toolrow b { color: var(--c5); font-weight: 600; }
 .turns { display: grid; gap: 10px; }
 .turn { display: grid; grid-template-columns: 64px minmax(0, 1fr) 70px; align-items: center; gap: 12px; font-size: 13px; }
@@ -244,7 +252,7 @@ pre.json { margin: 0; padding: 16px; overflow: auto; max-height: 560px; font-siz
 .step p { margin: 2px 0 8px; color: var(--muted); font-size: 13px; }
 
 /* Sign-in screen */
-.gate { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; background: radial-gradient(1200px 500px at 50% -10%, var(--accent-soft), transparent 70%), var(--bg); }
+.gate { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; background: var(--bg); }
 .gate .panel { width: min(400px, 100%); padding: 30px 28px; }
 .gate .brand { justify-content: center; margin-bottom: 18px; padding: 0; }
 .gate h1 { font-size: 22px; text-align: center; }
@@ -294,7 +302,7 @@ dialog::backdrop { background: rgba(5,8,12,.6); }
 <div class="app" id="app" hidden>
   <aside class="rail" id="rail">
     <div class="brand">
-      <span class="logo"><svg class="i" viewBox="0 0 24 24" style="width:22px;height:22px"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5" opacity=".6"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg></span>
+      <span class="logo"><svg viewBox="0 0 48 48" width="36" height="36" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"><circle cx="24" cy="24" r="14"/><path d="M18.5 21v6M24 16.5v15M29.5 21v6"/></svg></span>
       <div><strong>OpenRing</strong><small id="version"></small></div>
     </div>
     <nav aria-label="Sections">
@@ -424,7 +432,7 @@ const ICON = {
   plus: '<svg class="i" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
   refresh: '<svg class="i" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>',
 };
-const card = (label, icon, value, cls, sub = "") => `<div class="card"><div class="label">${ICON[icon]}${label}</div><div class="value ${cls}">${value}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+const card = (label, icon, value, cls, sub = "", kind = "") => `<div class="card ${kind}"><div class="label">${ICON[icon]}${label}</div><div class="value ${cls}">${value}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
 const tabs = (items, current, attr = "tab") => `<div class="tabs" role="tablist">${items.map(([k, label, count]) => `<button role="tab" data-${attr}="${k}" aria-selected="${k === current}">${label}${count != null ? `<span class="count">${count}</span>` : ""}</button>`).join("")}</div>`;
 function copyButtons(root) {
   root.querySelectorAll("[data-copy]").forEach(b => b.onclick = async () => {
@@ -433,7 +441,7 @@ function copyButtons(root) {
 }
 
 // ---- Sign in ----------------------------------------------------------------------------
-const BRAND = `<div class="brand"><span class="logo"><svg class="i" viewBox="0 0 24 24" style="width:22px;height:22px"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5" opacity=".6"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg></span><div><strong>OpenRing</strong></div></div>`;
+const BRAND = `<div class="brand"><span class="logo"><svg viewBox="0 0 48 48" width="36" height="36" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"><circle cx="24" cy="24" r="14"/><path d="M18.5 21v6M24 16.5v15M29.5 21v6"/></svg></span><div><strong>OpenRing</strong></div></div>`;
 
 async function showGate() {
   const state = await api("/auth/state").catch(() => ({ passwordSet: true }));
@@ -512,15 +520,15 @@ async function viewHome() {
   ${steps.every(x => x[0]) ? "" : `<section class="panel" style="margin-bottom:18px"><header><h2>Get started</h2><span class="muted" style="font-size:13px">${steps.filter(x => x[0]).length} of ${steps.length} done</span></header><div class="body"><div class="steps">${steps.map(([done, t, p, act], i) => `<div class="step ${done ? "done" : ""}"><span class="n">${done ? "✓" : i + 1}</span><div><b>${t}</b><p>${p}</p>${done ? "" : act}</div></div>`).join("")}</div></div></section>`}
   <div class="toolbar"><h2 style="font-size:18px">Overview</h2>${tabs(PERIODS, days, "period")}</div>
   <div class="cards">
-    ${card("Calls", "phone", num(s.calls), "v1", s.inProgress ? `${s.inProgress} live now` : `${num(s.byType.inboundPhoneCall || 0)} in · ${num(s.byType.outboundPhoneCall || 0)} out · ${num(s.byType.webCall || 0)} browser`)}
-    ${card("Minutes", "clock", num(s.minutes), "v2", s.averageDurationSeconds ? `${dur(s.averageDurationSeconds)} per call` : "")}
-    ${card("Success rate", "check", s.successRate == null ? "—" : s.successRate + '<small>%</small>', s.successRate != null && s.successRate < 90 ? "v4" : "v2", s.failed ? `${s.failed} failed` : "No failures")}
-    ${card("Response time", "bolt", ms(s.latencyMedianMs), s.latencyMedianMs > 1200 ? "v3" : "v6", s.turns ? `median of ${num(s.turns)} turns` : "No turns yet")}
-    ${card("Fees avoided", "coin", "$" + s.platformFeeSaved.toFixed(2), "v3", '<span title="Hosted voice platforms charge about US$0.05 per minute for orchestration alone.">vs $0.05/min platforms</span>')}
-    ${card("Assistants", "bot", num(assistants.length), "v5", `${num(numbers.length)} phone number${numbers.length === 1 ? "" : "s"}`)}
+    ${card("Fees avoided", "coin", "$" + s.platformFeeSaved.toFixed(2), "brand", '<span title="Hosted voice platforms charge about US$0.05 per minute for orchestration alone.">vs $0.05/min platforms</span>', "hero")}
+    ${card("Calls", "phone", num(s.calls), "", s.inProgress ? `${s.inProgress} live now` : `${num(s.byType.inboundPhoneCall || 0)} in · ${num(s.byType.outboundPhoneCall || 0)} out · ${num(s.byType.webCall || 0)} browser`)}
+    ${card("Minutes", "clock", num(s.minutes), "", s.averageDurationSeconds ? `${dur(s.averageDurationSeconds)} per call` : "")}
+    ${card("Success rate", "check", s.successRate == null ? "—" : s.successRate + '<small>%</small>', s.successRate != null && s.successRate < 90 ? "bad" : "", s.failed ? `${s.failed} failed` : "No failures")}
+    ${card("Response time", "bolt", ms(s.latencyMedianMs), s.latencyMedianMs > 1200 ? "warn" : "", s.turns ? `median of ${num(s.turns)} turns` : "No turns yet")}
+    ${card("Assistants", "bot", num(assistants.length), "", `${num(numbers.length)} phone number${numbers.length === 1 ? "" : "s"}`)}
   </div>
   <div class="grid2">
-    <section class="panel"><header><h2>Calls per day</h2><div class="legend"><span style="--dot:var(--accent)">Calls</span><span style="--dot:var(--bad)">Failed</span></div></header>
+    <section class="panel"><header><h2>Calls per day</h2><div class="legend"><span style="--dot:var(--c1)">Calls</span><span style="--dot:var(--bad)">Failed</span></div></header>
       <div class="body"><div class="bars">${pd.map(d => `<div class="day ${d.calls ? "" : "zero"}" title="${esc(label(d.date))}: ${d.calls} call${d.calls === 1 ? "" : "s"}, ${d.minutes} min${d.failed ? `, ${d.failed} failed` : ""}"><div class="bar" style="height:${d.calls ? Math.max(4, d.calls / max * 100) : 1.5}%">${d.failed ? `<div class="fail" style="height:${d.failed / d.calls * 100}%"></div>` : ""}</div></div>`).join("")}</div>
       <div class="axis"><span>${esc(label(pd[0].date))}</span>${pd.length > 2 ? `<span>${esc(label(pd[Math.floor(pd.length / 2)].date))}</span>` : ""}<span>${esc(label(pd[pd.length - 1].date))}</span></div></div></section>
     <section class="panel"><header><h2>Where the time goes</h2></header>
@@ -532,16 +540,15 @@ async function viewHome() {
   </div>
   <div class="grid2 even">
     <section class="panel"><header><h2>Recent calls</h2><a href="#calls" style="font-size:13px">See all</a></header>
-      <div class="body" style="padding-top:8px">${recent.length ? recent.map(c => `<div class="minirow" style="cursor:pointer" data-call="${esc(c.id)}"><div style="min-width:0"><b>${esc(caller(c))}</b><div class="muted" style="font-size:12.5px">${esc(assistantOf(c, assistants))} · ${when(c.createdAt)}</div></div><span class="muted">${dur(c.durationSeconds)}</span>${statusBadge(c)}</div>`).join("") : `<p class="muted">No calls yet.</p>`}</div></section>
+      <div class="body" style="padding-top:8px">${recent.length ? recent.map(c => `<a class="minirow rowlink" href="#calls/${encodeURIComponent(c.id)}"><div style="min-width:0"><b>${esc(caller(c))}</b><div class="muted" style="font-size:12.5px">${esc(assistantOf(c, assistants))} · ${when(c.createdAt)}</div></div><span class="muted">${dur(c.durationSeconds)}</span>${statusBadge(c)}</a>`).join("") : `<p class="muted">No calls yet.</p>`}</div></section>
     <div style="display:grid;gap:14px;align-content:start">
       <section class="panel"><header><h2>Busiest assistants</h2></header>
         <div class="body" style="padding-top:8px">${s.byAssistant.length ? s.byAssistant.map(b => `<div class="minirow"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(name(b.assistantId))}</span><span class="meter"><span style="width:${b.calls / s.byAssistant[0].calls * 100}%"></span></span><span class="muted" style="white-space:nowrap">${num(b.calls)} calls · ${num(b.minutes)} min</span></div>`).join("") : `<p class="muted">No calls in this period.</p>`}</div></section>
       <section class="panel"><header><h2>How calls ended</h2></header>
-        <div class="body" style="padding-top:8px">${Object.keys(s.endedReasons).length ? Object.entries(s.endedReasons).map(([r, n]) => `<div class="minirow"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r)}">${esc(endedLabel(r))}</span><span class="meter"><span style="width:${n / Math.max(...Object.values(s.endedReasons)) * 100}%;background:${failed({ endedReason: r }) ? "var(--bad)" : "var(--accent)"}"></span></span><span class="muted">${num(n)}</span></div>`).join("") : `<p class="muted">No finished calls in this period.</p>`}</div></section>
+        <div class="body" style="padding-top:8px">${Object.keys(s.endedReasons).length ? Object.entries(s.endedReasons).map(([r, n]) => `<div class="minirow"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r)}">${esc(endedLabel(r))}</span><span class="meter"><span style="width:${n / Math.max(...Object.values(s.endedReasons)) * 100}%;background:${failed({ endedReason: r }) ? "var(--bad)" : "var(--c1)"}"></span></span><span class="muted">${num(n)}</span></div>`).join("") : `<p class="muted">No finished calls in this period.</p>`}</div></section>
     </div>
   </div>`;
   v.querySelectorAll("[data-period]").forEach(b => b.onclick = () => { store.set("openring-period", b.dataset.period); viewHome(); });
-  v.querySelectorAll("[data-call]").forEach(r => r.onclick = () => go("calls/" + r.dataset.call));
   if ($("#firstTest")) $("#firstTest").onclick = () => startTalk(assistants[0]);
 }
 
@@ -763,10 +770,10 @@ async function viewCall(id) {
   const v = $("#view");
   v.innerHTML = `<div class="toolbar"><a class="btn ghost" href="#calls">← All calls</a><span class="spacer"></span>${statusBadge(c)}</div>
   <div class="cards">
-    ${card("Duration", "clock", dur(c.durationSeconds), "v2")}
-    ${card("Response time", "bolt", ms(pm.turnLatencyAverage), pm.turnLatencyAverage > 1200 ? "v3" : "v6", turns.length ? `average of ${turns.length} turns` : "")}
-    ${card("Messages", "hash", num(msgs.filter(m => m.role === "user" || m.role === "assistant").length), "v5", msgs.some(m => m.role === "tool_calls") ? `${msgs.filter(m => m.role === "tool_calls").length} tool calls` : "")}
-    ${card("Type", "phone", esc(TYPE[c.type] || c.type), "v1", c.endedReason ? esc(c.endedReason) : "")}
+    ${card("Duration", "clock", dur(c.durationSeconds), "")}
+    ${card("Response time", "bolt", ms(pm.turnLatencyAverage), pm.turnLatencyAverage > 1200 ? "warn" : "", turns.length ? `average of ${turns.length} turns` : "")}
+    ${card("Messages", "hash", num(msgs.filter(m => m.role === "user" || m.role === "assistant").length), "", msgs.some(m => m.role === "tool_calls") ? `${msgs.filter(m => m.role === "tool_calls").length} tool calls` : "")}
+    ${card("Type", "phone", esc(TYPE[c.type] || c.type), "", c.endedReason ? esc(c.endedReason) : "")}
   </div>
   <div class="toolbar">${tabs([["transcript", "Transcript"], ["latency", "Response time"], ["json", "JSON"]], callTab)}</div>
   <section class="panel"><div class="body">${panes[callTab]()}</div></section>`;
