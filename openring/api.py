@@ -14,7 +14,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, Response
 from loguru import logger
 
-from . import __version__, auth, providers, stats, twilio
+from . import __version__, auth, keys, providers, stats, twilio
 from .config import Settings, get_settings
 from .importer import SourceError, import_account
 from .providers import ProviderError, resolve_plan
@@ -207,8 +207,68 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             "baseUrl": base,
             "twilioVoiceUrl": base + "/twilio/voice",
             "envFile": os.environ.get("OPENRING_ENV_FILE", ""),
-            "providers": providers.provider_status(settings),
+            "providers": [_with_connect(p) for p in providers.provider_status(settings)],
         }
+
+    def _with_connect(row: dict[str, Any]) -> dict[str, Any]:
+        """Tell the Providers page what to ask for. Says which fields are set, never their values."""
+        spec = keys.CONNECTORS.get(row["id"])
+        if spec:
+            set_now = keys.current_values(row["id"])
+            row["connect"] = {
+                "fields": [{"env": env, "label": label, "set": bool(set_now[env])} for env, label in spec["fields"]],
+                "keysUrl": spec["keysUrl"],
+                "oauth": bool(spec.get("oauth")),
+            }
+        return row
+
+    def _use(provider: str, values: dict[str, str]) -> dict[str, Any]:
+        saved = keys.apply(values)
+        if provider == "twilio":  # read once at startup, so refresh the live settings too
+            settings.twilio_account_sid = values["TWILIO_ACCOUNT_SID"]
+            settings.twilio_auth_token = values["TWILIO_AUTH_TOKEN"]
+        where = str(keys.env_file()) if saved else None
+        return {"connected": bool(all(values.values())), "saved": saved, "envFile": where}
+
+    @app.post("/providers/{provider}/connect", include_in_schema=False, dependencies=[Depends(require_session)])
+    async def connect_provider(provider: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            values = keys.clean_values(provider, body.get("values") or {})
+            await keys.check(provider, values)
+        except keys.ConnectError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _use(provider, values)
+
+    @app.post("/providers/{provider}/test", include_in_schema=False, dependencies=[Depends(require_session)])
+    async def test_provider(provider: str) -> dict[str, Any]:
+        if provider not in keys.CONNECTORS:
+            raise HTTPException(status_code=404, detail="unknown provider")
+        values = keys.current_values(provider)
+        if not all(values.values()):
+            raise HTTPException(status_code=400, detail=f"{keys.NAMES[provider]} is not connected")
+        try:
+            await keys.check(provider, values)
+        except keys.ConnectError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True}
+
+    @app.delete("/providers/{provider}/connect", include_in_schema=False, dependencies=[Depends(require_session)])
+    def disconnect_provider(provider: str) -> dict[str, Any]:
+        if provider not in keys.CONNECTORS:
+            raise HTTPException(status_code=404, detail="unknown provider")
+        return _use(provider, {env: "" for env, _ in keys.CONNECTORS[provider]["fields"]})
+
+    @app.post("/providers/openrouter/oauth", include_in_schema=False, dependencies=[Depends(require_session)])
+    async def openrouter_oauth(body: dict[str, Any]) -> dict[str, Any]:
+        code, verifier = str(body.get("code") or ""), str(body.get("codeVerifier") or "")
+        if not code or not verifier:
+            raise HTTPException(status_code=400, detail="the OpenRouter sign-in did not finish; try again")
+        try:
+            key = await keys.exchange_openrouter_code(code, verifier)
+            values = keys.clean_values("openrouter", {"OPENROUTER_API_KEY": key})
+        except keys.ConnectError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _use("openrouter", values)
 
     @app.get("/stats", dependencies=auth_deps)
     def call_stats(days: int | None = 30) -> dict[str, Any]:
