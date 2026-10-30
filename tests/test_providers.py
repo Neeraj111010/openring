@@ -123,3 +123,17 @@ def test_provider_status_lists_each_provider_once(keys):
     by_id = {r["id"]: r for r in rows}
     assert by_id["ollama"]["ready"] is None and by_id["anthropic"]["ready"] is True
     assert {r["kind"] for r in rows} == {"transcriber", "model", "voice", "telephony"}
+
+
+def test_openrouter_requests_credit_openring(keys):
+    _, llm, _ = build_services(resolve_plan(assistant(model={"provider": "openrouter", "model": "m"})))
+    headers = llm._client.default_headers
+    assert headers["X-Title"] == "OpenRing" and "github.com/elifalanrocha/openring" in headers["HTTP-Referer"]
+    _, other, _ = build_services(resolve_plan(assistant()))  # other providers get no extra headers
+    assert "X-Title" not in other._client.default_headers
+
+
+def test_openrouter_attribution_can_be_turned_off(keys, monkeypatch):
+    monkeypatch.setenv("OPENRING_ATTRIBUTION", "false")
+    _, llm, _ = build_services(resolve_plan(assistant(model={"provider": "openrouter", "model": "m"})))
+    assert "X-Title" not in llm._client.default_headers

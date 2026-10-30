@@ -43,6 +43,10 @@ LLM_PROVIDERS: dict[str, tuple[str | None, str | None]] = {
     "omniroute": (os.environ.get("OMNIROUTE_BASE_URL", "http://localhost:20128/v1"), "OMNIROUTE_API_KEY"),
 }
 LOCAL_LLMS = {"ollama", "omniroute"}  # they run without a key
+# Extra headers per LLM provider. OpenRouter credits the app named here on its public app rankings.
+LLM_HEADERS = {
+    "openrouter": {"HTTP-Referer": "https://github.com/elifalanrocha/openring", "X-Title": "OpenRing"},
+}
 STT_PROVIDERS = {
     "deepgram": "DEEPGRAM_API_KEY",
     "assembly-ai": "ASSEMBLYAI_API_KEY",
@@ -445,6 +449,13 @@ def _build_tts(plan: StackPlan):
                    settings=service.Settings(**settings))
 
 
+def _llm_headers(provider: str) -> dict[str, str] | None:
+    """OpenRing's name on requests to providers that credit apps; OPENRING_ATTRIBUTION=false leaves it out."""
+    if os.environ.get("OPENRING_ATTRIBUTION", "").lower() == "false":
+        return None
+    return LLM_HEADERS.get(provider)
+
+
 def build_services(plan: StackPlan):
     """Instantiate Pipecat STT, LLM and TTS services for a call."""
     from pipecat.services.openai.llm import OpenAILLMService
@@ -456,6 +467,7 @@ def build_services(plan: StackPlan):
     llm = OpenAILLMService(
         api_key=api_key,
         base_url=plan.llm_base_url,
+        default_headers=_llm_headers(plan.llm_provider),
         settings=OpenAILLMService.Settings(**llm_settings),
     )
     return _build_stt(plan), llm, _build_tts(plan)

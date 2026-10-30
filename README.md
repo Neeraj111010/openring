@@ -234,6 +234,9 @@ dashboard's **Providers** page, or put its key in `~/.openring/.env`.
 Use `"language": "multi"` on Deepgram for calls in several languages. With a Deepgram key you already have a
 fast cloud voice: `{"provider": "deepgram", "voiceId": "thalia"}`.
 
+Requests to OpenRouter carry OpenRing's name, so OpenRouter can list it among the apps that use it;
+`OPENRING_ATTRIBUTION=false` leaves that out.
+
 ## 🐳 Docker
 
 ```bash

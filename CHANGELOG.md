@@ -8,6 +8,8 @@ All notable changes to OpenRing are listed here. The format follows
 
 ### Added
 
+- Requests to OpenRouter carry OpenRing's name (`HTTP-Referer` and `X-Title`), so OpenRouter can list
+  OpenRing among the apps that use it. Nothing else is sent; `OPENRING_ATTRIBUTION=false` turns it off.
 - Incoming calls through Telnyx (beta): point a TeXML Application's voice URL at `/telnyx/voice`. Webhooks are
   checked against the account's Ed25519 public key (`TELNYX_PUBLIC_KEY`); `TELNYX_API_KEY` lets OpenRing
   hang up. Telnyx can be connected from the Providers page. Outbound calls and transfers still go through Twilio.
