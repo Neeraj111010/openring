@@ -1,0 +1,142 @@
+"""Vapi's server messages: what OpenRing tells your server about a call, and asks it.
+
+They go to the assistant's `server.url` (or the phone number's, for `assistant-request`) in Vapi's
+shape, `{"message": {"type": ..., "call": {...}, ...}}`, so a server written for Vapi works unchanged.
+An assistant picks which ones it gets with `serverMessages`, as on Vapi.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from typing import Any
+
+import httpx
+from loguru import logger
+
+# What Vapi sends when the assistant doesn't list `serverMessages`. OpenRing sends these three of them;
+# tool-calls go to each tool's server (see tools.py).
+DEFAULT_MESSAGES = (
+    "conversation-update", "end-of-call-report", "function-call", "hang", "speech-update", "status-update",
+    "tool-calls", "transfer-destination-request", "user-interrupted",
+)
+ASSISTANT_REQUEST_TIMEOUT = 7.5  # seconds; Vapi's limit for answering assistant-request
+
+
+def server_of(doc: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The `server` an assistant or phone number points to (Vapi's older `serverUrl` too), or None."""
+    doc = doc or {}
+    server = dict(doc.get("server") or {})
+    server["url"] = server.get("url") or doc.get("serverUrl")
+    if not server["url"]:
+        return None
+    if not server.get("secret") and doc.get("serverUrlSecret"):
+        server["secret"] = doc["serverUrlSecret"]
+    return server
+
+
+def wants(assistant: dict[str, Any], kind: str) -> bool:
+    chosen = assistant.get("serverMessages")
+    return kind in (DEFAULT_MESSAGES if chosen is None else chosen)
+
+
+def _headers(server: dict[str, Any]) -> dict[str, str]:
+    headers = {str(k): str(v) for k, v in (server.get("headers") or {}).items()}
+    if server.get("secret"):
+        headers.setdefault("X-Vapi-Secret", str(server["secret"]))  # the header Vapi servers check
+    return headers
+
+
+def message(kind: str, call: dict[str, Any] | None, **fields: Any) -> dict[str, Any]:
+    return {"message": {"type": kind, "timestamp": int(time.time() * 1000), "call": call, **fields}}
+
+
+async def post(server: dict[str, Any], payload: dict[str, Any], *, timeout: float | None = None,
+               client: httpx.AsyncClient | None = None) -> httpx.Response:
+    owned = client is None
+    client = client or httpx.AsyncClient()
+    try:
+        return await client.post(server["url"], json=payload, headers=_headers(server),
+                                 timeout=timeout or float(server.get("timeoutSeconds") or 20))
+    finally:
+        if owned:
+            await client.aclose()
+
+
+async def send(assistant: dict[str, Any], kind: str, call: dict[str, Any] | None, **fields: Any) -> None:
+    """Tell the assistant's server about the call, if it wants this kind of message. Never raises."""
+    server = server_of(assistant)
+    if server is None or not wants(assistant, kind):
+        return
+    try:
+        r = await post(server, message(kind, call, **fields))
+        if r.status_code >= 400:
+            logger.warning("{} to {} answered HTTP {}", kind, server["url"], r.status_code)
+    except httpx.HTTPError as exc:
+        logger.warning("{} to {} failed: {}", kind, server["url"], exc.__class__.__name__)
+
+
+class Outbox:
+    """Messages sent during a call without holding it up, delivered in order before the final report."""
+
+    def __init__(self, assistant: dict[str, Any], current_call):
+        self.assistant = assistant
+        self.current_call = current_call
+        self._chain: asyncio.Future | None = None
+
+    def send(self, kind: str, **fields: Any) -> None:
+        if server_of(self.assistant) is None or not wants(self.assistant, kind):
+            return
+        previous, call = self._chain, self.current_call()
+
+        async def deliver():
+            if previous is not None:
+                await asyncio.shield(previous)
+            await send(self.assistant, kind, call, **fields)
+
+        self._chain = asyncio.ensure_future(deliver())
+
+    async def flush(self, timeout: float = 10) -> None:
+        if self._chain is not None:
+            try:
+                await asyncio.wait_for(asyncio.shield(self._chain), timeout)
+            except TimeoutError:
+                logger.warning("server messages still pending after {} s; sending the report anyway", timeout)
+
+
+class AssistantRequestError(Exception):
+    """The server did not name an assistant; the message is what to tell the caller's call record."""
+
+    def __init__(self, ended_reason: str, detail: str):
+        super().__init__(detail)
+        self.ended_reason = ended_reason
+
+
+async def request_assistant(
+    server: dict[str, Any], call: dict[str, Any], phone_number: dict[str, Any], *,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """Ask the phone number's server which assistant answers this call.
+
+    Returns {"assistantId": ...} or {"assistant": {...}} (a transient assistant), as Vapi's servers answer.
+    """
+    payload = message("assistant-request", call, phoneNumber=phone_number, customer=call.get("customer"))
+    try:
+        r = await post(server, payload, timeout=ASSISTANT_REQUEST_TIMEOUT, client=client)
+    except httpx.HTTPError as exc:
+        raise AssistantRequestError("assistant-request-failed", f"{server['url']}: {exc.__class__.__name__}") from exc
+    if r.status_code >= 400:
+        raise AssistantRequestError("assistant-request-failed", f"{server['url']} answered HTTP {r.status_code}")
+    try:
+        body = r.json()
+    except ValueError as exc:
+        raise AssistantRequestError("assistant-request-returned-invalid-json", "the answer is not JSON") from exc
+    if not isinstance(body, dict):
+        raise AssistantRequestError("assistant-request-returned-invalid-json", "the answer is not a JSON object")
+    if body.get("error"):
+        raise AssistantRequestError("assistant-request-returned-error", str(body["error"]))
+    if body.get("assistantId"):
+        return {"assistantId": str(body["assistantId"])}
+    if isinstance(body.get("assistant"), dict):
+        return {"assistant": body["assistant"]}
+    raise AssistantRequestError("assistant-request-returned-no-assistant", "the answer has no assistantId or assistant")

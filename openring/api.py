@@ -18,6 +18,7 @@ from . import __version__, auth, providers, stats, twilio
 from .config import Settings, get_settings
 from .importer import SourceError, import_account
 from .providers import ProviderError, resolve_plan
+from .server_messages import AssistantRequestError, request_assistant, server_of
 from .store import Store, now_iso
 from .tools import ToolError, check_tool
 from .twilio import TwilioError, is_valid_signature, say_twiml, stream_twiml
@@ -320,7 +321,12 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         customer = str((body.get("customer") or {}).get("number") or "")
         if not customer:
             raise HTTPException(status_code=400, detail="customer.number is required (E.164, e.g. +5511999999999)")
-        assistant = _get_or_404("assistants", str(body.get("assistantId") or number.get("assistantId") or ""))
+        transient = body.get("assistant") if isinstance(body.get("assistant"), dict) else None
+        if transient is not None:
+            _validate_assistant(transient)
+            assistant = transient
+        else:
+            assistant = _get_or_404("assistants", str(body.get("assistantId") or number.get("assistantId") or ""))
         try:
             resolve_plan(assistant)
         except ProviderError as exc:
@@ -335,7 +341,8 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             {
                 "type": "outboundPhoneCall",
                 "status": "queued",
-                "assistantId": assistant["id"],
+                # A transient assistant lives in the call record, as on Vapi.
+                **({"assistant": transient} if transient is not None else {"assistantId": assistant["id"]}),
                 "phoneNumberId": number["id"],
                 "customer": {"number": _e164(customer)},
             },
@@ -419,13 +426,15 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             if not call or call.get("phoneCallProviderId") not in (None, form.get("CallSid")):
                 logger.warning("call {}: Twilio call {} is not this call; not connecting", call_id, form.get("CallSid"))
                 return Response(say_twiml("Sorry, this call could not be connected."), media_type="application/xml")
-            logger.info("call {} answered; streaming it to assistant {}", call_id, call["assistantId"])
-            params = {"assistantId": call["assistantId"], "callId": call_id}
+            logger.info("call {} answered; streaming it to its assistant", call_id)
+            params = {"callId": call_id, **({"assistantId": call["assistantId"]} if call.get("assistantId") else {})}
             return Response(stream_twiml(settings.public_ws_url + "/ws/twilio", params), media_type="application/xml")
 
         number = store.find_phone_number(form.get("To", ""))
-        assistant_id = (number or {}).get("assistantId") or settings.default_assistant_id
-        if not assistant_id or store.get("assistants", assistant_id) is None:
+        assistant_id = (number or {}).get("assistantId")
+        ask = server_of(number) if number and not assistant_id else None
+        assistant_id = assistant_id or (None if ask else settings.default_assistant_id)
+        if not ask and (not assistant_id or store.get("assistants", assistant_id) is None):
             return Response(say_twiml("No assistant is attached to this number."), media_type="application/xml")
 
         call = store.create(
@@ -439,13 +448,26 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
                 "phoneCallProviderId": form.get("CallSid"),
             },
         )
-        logger.info("call {} from {} to {}; streaming it to assistant {}", call["id"], form.get("From"), form.get("To"),
-                    assistant_id)
-        twiml = stream_twiml(
-            settings.public_ws_url + "/ws/twilio",
-            {"assistantId": assistant_id, "callId": call["id"]},
-        )
-        return Response(twiml, media_type="application/xml")
+        if ask:
+            try:
+                answer = await request_assistant(ask, call, number)
+                if "assistantId" in answer and store.get("assistants", answer["assistantId"]) is None:
+                    raise AssistantRequestError("assistant-request-returned-unknown-assistant",
+                                                f"assistant {answer['assistantId']} not found")
+                if "assistant" in answer:
+                    _validate_assistant(answer["assistant"])
+            except (AssistantRequestError, HTTPException) as exc:
+                reason = getattr(exc, "ended_reason", "assistant-request-returned-invalid-assistant")
+                logger.warning("call {}: assistant-request to {} failed: {}", call["id"], ask["url"],
+                               getattr(exc, "detail", exc))
+                store.update("calls", call["id"], {"status": "ended", "endedReason": reason, "endedAt": now_iso()})
+                return Response(say_twiml("Sorry, this line cannot take calls right now."),
+                                media_type="application/xml")
+            call = store.update("calls", call["id"], answer)
+        logger.info("call {} from {} to {}; streaming it to {}", call["id"], form.get("From"), form.get("To"),
+                    call.get("assistantId") or "a transient assistant")
+        params = {"callId": call["id"], **({"assistantId": call["assistantId"]} if call.get("assistantId") else {})}
+        return Response(stream_twiml(settings.public_ws_url + "/ws/twilio", params), media_type="application/xml")
 
     @app.post("/twilio/status", status_code=204)
     async def twilio_status(request: Request) -> Response:
@@ -484,7 +506,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             return
         logger.info("call {} media stream connected", call_id)
         # The assistant comes from the call record, never from the stream's parameters.
-        assistant = store.get("assistants", call.get("assistantId") or "")
+        assistant = call.get("assistant") or store.get("assistants", call.get("assistantId") or "")
         if assistant is None:
             store.update("calls", call_id, {"status": "ended", "endedReason": "assistant-not-found"})
             await websocket.close()

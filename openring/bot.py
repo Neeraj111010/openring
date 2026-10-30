@@ -8,10 +8,10 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-import httpx
 from fastapi import WebSocket
 from loguru import logger
 
+from . import server_messages
 from .config import Settings
 from .providers import StackPlan, build_services
 from .store import Store, now_iso
@@ -186,7 +186,10 @@ async def run_call(
         keep_phone_line_open(transport)
         ended_reason = "assistant-forwarded-call"
         logger.info("call {} transferred to {}", call_id, number)
+        outbox.send("status-update", status="forwarding", destination={"type": "number", "number": number})
         await transfer(number)
+
+    outbox = server_messages.Outbox(plan.assistant, lambda: store.get("calls", call_id))
 
     controls = CallControls(
         speak=speak,
@@ -237,6 +240,7 @@ async def run_call(
 
     @transport.event_handler("on_client_connected")
     async def _on_connected(_transport, _client):
+        outbox.send("status-update", status="in-progress")
         if plan.first_message:
             # In the context (and transcript) right away, even if the voice fails to say it.
             context.add_message({"role": "assistant", "content": plan.first_message})
@@ -247,6 +251,11 @@ async def run_call(
     @transport.event_handler("on_client_disconnected")
     async def _on_disconnected(_transport, _client):
         await task.cancel()
+
+    @aggregators.assistant().event_handler("on_assistant_turn_stopped")
+    async def _conversation_update(_aggregator, _message):
+        messages = [m for m in context.get_messages() if isinstance(m, dict)]
+        outbox.send("conversation-update", messages=transcript_messages(messages), messagesOpenAIFormatted=messages)
 
     if plan.end_call_phrases:
         phrases = [p.lower() for p in plan.end_call_phrases]
@@ -280,22 +289,22 @@ async def run_call(
                 "artifact": {"messages": transcript, "performanceMetrics": performance_metrics(turns)},
             },
         )
-        if plan.server_url and call:
-            await _post_end_of_call_report(plan.server_url, call)
+        if call:
+            outbox.send("status-update", status="ended", endedReason=ended_reason)
+
+            async def report() -> None:
+                await outbox.flush()
+                await server_messages.send(
+                    plan.assistant, "end-of-call-report", call, endedReason=ended_reason,
+                    artifact=call.get("artifact") or {"messages": transcript},
+                )
+
+            # When the caller hangs up, the server cancels this call's task; the report still goes out.
+            reporting = asyncio.ensure_future(report())
+            _reports.add(reporting)
+            reporting.add_done_callback(_reports.discard)
+            await asyncio.shield(reporting)
 
 
-async def _post_end_of_call_report(url: str, call: dict[str, Any]) -> None:
-    """Vapi-style 'end-of-call-report' webhook so existing integrations keep working."""
-    payload = {
-        "message": {
-            "type": "end-of-call-report",
-            "endedReason": call.get("endedReason"),
-            "call": call,
-            "artifact": call.get("artifact") or {"messages": call.get("messages", [])},
-        }
-    }
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(url, json=payload)
-    except httpx.HTTPError as exc:
-        logger.warning("end-of-call-report to {} failed: {}", url, exc)
+# End-of-call reports still on their way, kept so they are not collected before they finish.
+_reports: set[asyncio.Future] = set()

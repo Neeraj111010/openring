@@ -102,6 +102,14 @@ termina de falar. Exemplo completo no [README em inglês](README.md#tools).
 | Voz | `"provider": "kokoro"`, roda local na CPU, sem chave |
 | Telefonia | Crédito de teste do Twilio |
 
+### Mensagens para o seu servidor
+
+O `server.url` do assistente recebe as mensagens do Vapi no formato do Vapi: `status-update` (início,
+transferência e fim da chamada), `conversation-update` a cada resposta e `end-of-call-report`. Escolha quais
+com `serverMessages`. Um número sem assistente, mas com `server.url`, pergunta ao servidor a cada ligação
+recebida (`assistant-request`) qual assistente atende, por id ou um assistente temporário. O `POST /call`
+também aceita um `assistant` temporário no lugar do `assistantId`.
+
 ## Provedores
 
 Os nomes são os mesmos do Vapi: o JSON de um assistente passa de um para o outro sem mudança. Cada

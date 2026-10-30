@@ -125,6 +125,20 @@ messages work as on Vapi. `endCall` hangs up after the goodbye; `transferCall` m
 chosen number (Twilio) once the assistant stops talking. Tool calls and results show up in the call's
 transcript.
 
+### Server messages
+
+Your assistant's `server.url` gets Vapi's messages in Vapi's shape (`{"message": {"type": ..., "call": {...}}}`),
+with `server.headers` and `server.secret` (as `X-Vapi-Secret`):
+
+- `status-update` when the call starts (`in-progress`), is transferred (`forwarding`) and ends (`ended`, with
+  `endedReason`);
+- `conversation-update` after each answer, with the transcript so far;
+- `end-of-call-report` with the transcript and per-turn latency.
+
+Pick which ones with `serverMessages`, as on Vapi. A phone number without an assistant but with its own
+`server.url` asks it on each incoming call (`assistant-request`) and uses the `assistantId` or the transient
+`assistant` it answers. `POST /call` also takes a transient `assistant` instead of an `assistantId`.
+
 ## The free stack
 
 | Layer | Free option |
