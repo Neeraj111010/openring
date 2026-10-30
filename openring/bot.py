@@ -153,130 +153,133 @@ async def run_call(
         LLMUserAggregatorParams,
     )
 
-    # Loading a local voice model takes a moment; doing it off the event loop keeps other calls flowing.
-    stt, llm, tts = await asyncio.to_thread(build_services, plan)
-    speech = {"speaking": False, "last_stop": 0.0}
-
-    async def speak(text: str) -> None:
-        await task.queue_frames([TTSSpeakFrame(text, append_to_context=False)])
-
-    async def end_call() -> None:
-        nonlocal ended_reason
-        ended_reason = "assistant-ended-call"
-        await task.queue_frames([EndFrame()])  # after whatever is still being said
-
-    async def wait_until_quiet(expect_speech: bool) -> None:
-        """Until the assistant finishes talking, so a transfer never cuts a sentence."""
-        asked = time.monotonic()
-        while time.monotonic() - asked < 30:
-            await asyncio.sleep(0.2)
-            if speech["speaking"]:
-                continue
-            if expect_speech and speech["last_stop"] < asked and time.monotonic() - asked < 15:
-                continue  # a local voice takes a moment to synthesize before it starts
-            if time.monotonic() - max(speech["last_stop"], asked) >= 0.8:
-                break
-        await asyncio.sleep(0.3)
-
-    async def transfer_to(number: str, message: str | None) -> None:
-        nonlocal ended_reason
-        if message:
-            await speak(message)
-        await wait_until_quiet(expect_speech=bool(message))
-        keep_phone_line_open(transport)
-        ended_reason = "assistant-forwarded-call"
-        logger.info("call {} transferred to {}", call_id, number)
-        outbox.send("status-update", status="forwarding", destination={"type": "number", "number": number})
-        await transfer(number)
-
-    outbox = server_messages.Outbox(plan.assistant, lambda: store.get("calls", call_id))
-
-    controls = CallControls(
-        speak=speak,
-        end_call=end_call,
-        transfer=transfer_to if transfer else None,
-        current_call=lambda: store.get("calls", call_id),
-        assistant=plan.assistant,
-        default_url=plan.server_url,
-    )
-    tools = register_tools(llm, assistant_tools(plan.assistant, store), controls)
-    context = LLMContext(messages=list(plan.messages), **({"tools": tools} if tools else {}))
-    aggregators = LLMContextAggregatorPair(
-        context, user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer())
-    )
-    pipeline = Pipeline(
-        [
-            transport.input(),
-            stt,
-            aggregators.user(),
-            llm,
-            tts,
-            transport.output(),
-            aggregators.assistant(),
-        ]
-    )
-    latency = UserBotLatencyObserver()
-
-    class SpeechObserver(BaseObserver):
-        async def on_push_frame(self, data):
-            if isinstance(data.frame, BotStartedSpeakingFrame):
-                speech["speaking"] = True
-            elif isinstance(data.frame, BotStoppedSpeakingFrame):
-                speech.update(speaking=False, last_stop=time.monotonic())
-    turns: list[dict[str, int]] = []
-
-    @latency.event_handler("on_latency_breakdown")
-    async def _on_latency(_observer, breakdown):
-        if breakdown.measured_from == MeasuredFrom.USER_SILENCE:  # the greeting is not a turn
-            turns.append(turn_latency(breakdown))
-            logger.info("call {} turn latency {} ms", call_id, turns[-1]["turnLatency"])
-
-    rates = {"audio_in_sample_rate": sample_rate, "audio_out_sample_rate": sample_rate} if sample_rate else {}
-    task = PipelineTask(
-        pipeline,
-        params=PipelineParams(enable_metrics=True, **rates),
-        observers=[latency, SpeechObserver(observe_every_push=False)],
-    )
-
-    @transport.event_handler("on_client_connected")
-    async def _on_connected(_transport, _client):
-        outbox.send("status-update", status="in-progress")
-        if plan.first_message:
-            # In the context (and transcript) right away, even if the voice fails to say it.
-            context.add_message({"role": "assistant", "content": plan.first_message})
-            await task.queue_frames([TTSSpeakFrame(plan.first_message, append_to_context=False)])
-        else:
-            await task.queue_frames([LLMRunFrame()])
-
-    @transport.event_handler("on_client_disconnected")
-    async def _on_disconnected(_transport, _client):
-        await task.cancel()
-
-    @aggregators.assistant().event_handler("on_assistant_turn_stopped")
-    async def _conversation_update(_aggregator, _message):
-        messages = [m for m in context.get_messages() if isinstance(m, dict)]
-        outbox.send("conversation-update", messages=transcript_messages(messages), messagesOpenAIFormatted=messages)
-
-    if plan.end_call_phrases:
-        phrases = [p.lower() for p in plan.end_call_phrases]
-
-        @aggregators.assistant().event_handler("on_assistant_turn_stopped")
-        async def _maybe_hang_up(_aggregator, message):
-            nonlocal ended_reason
-            text = str(getattr(message, "content", message) or "").lower()
-            if any(p in text for p in phrases):
-                ended_reason = "assistant-said-end-call-phrase"
-                await task.queue_frames([EndFrame()])
-
     started = time.monotonic()  # the caller already marked the call in-progress
     ended_reason = "customer-ended-call"
+    context = None
+    turns: list[dict[str, int]] = []
+    outbox = server_messages.Outbox(plan.assistant, lambda: store.get("calls", call_id))
+    # The setup runs inside the try as well, so the call record ends however the call does: a caller
+    # who hangs up while the services are still being built, or a provider that fails to start.
     try:
+        # Loading a local voice model takes a moment; doing it off the event loop keeps other calls flowing.
+        stt, llm, tts = await asyncio.to_thread(build_services, plan)
+        speech = {"speaking": False, "last_stop": 0.0}
+
+        async def speak(text: str) -> None:
+            await task.queue_frames([TTSSpeakFrame(text, append_to_context=False)])
+
+        async def end_call() -> None:
+            nonlocal ended_reason
+            ended_reason = "assistant-ended-call"
+            await task.queue_frames([EndFrame()])  # after whatever is still being said
+
+        async def wait_until_quiet(expect_speech: bool) -> None:
+            """Until the assistant finishes talking, so a transfer never cuts a sentence."""
+            asked = time.monotonic()
+            while time.monotonic() - asked < 30:
+                await asyncio.sleep(0.2)
+                if speech["speaking"]:
+                    continue
+                if expect_speech and speech["last_stop"] < asked and time.monotonic() - asked < 15:
+                    continue  # a local voice takes a moment to synthesize before it starts
+                if time.monotonic() - max(speech["last_stop"], asked) >= 0.8:
+                    break
+            await asyncio.sleep(0.3)
+
+        async def transfer_to(number: str, message: str | None) -> None:
+            nonlocal ended_reason
+            if message:
+                await speak(message)
+            await wait_until_quiet(expect_speech=bool(message))
+            keep_phone_line_open(transport)
+            ended_reason = "assistant-forwarded-call"
+            logger.info("call {} transferred to {}", call_id, number)
+            outbox.send("status-update", status="forwarding", destination={"type": "number", "number": number})
+            await transfer(number)
+
+
+        controls = CallControls(
+            speak=speak,
+            end_call=end_call,
+            transfer=transfer_to if transfer else None,
+            current_call=lambda: store.get("calls", call_id),
+            assistant=plan.assistant,
+            default_url=plan.server_url,
+        )
+        tools = register_tools(llm, assistant_tools(plan.assistant, store), controls)
+        context = LLMContext(messages=list(plan.messages), **({"tools": tools} if tools else {}))
+        aggregators = LLMContextAggregatorPair(
+            context, user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer())
+        )
+        pipeline = Pipeline(
+            [
+                transport.input(),
+                stt,
+                aggregators.user(),
+                llm,
+                tts,
+                transport.output(),
+                aggregators.assistant(),
+            ]
+        )
+        latency = UserBotLatencyObserver()
+
+        class SpeechObserver(BaseObserver):
+            async def on_push_frame(self, data):
+                if isinstance(data.frame, BotStartedSpeakingFrame):
+                    speech["speaking"] = True
+                elif isinstance(data.frame, BotStoppedSpeakingFrame):
+                    speech.update(speaking=False, last_stop=time.monotonic())
+
+        @latency.event_handler("on_latency_breakdown")
+        async def _on_latency(_observer, breakdown):
+            if breakdown.measured_from == MeasuredFrom.USER_SILENCE:  # the greeting is not a turn
+                turns.append(turn_latency(breakdown))
+                logger.info("call {} turn latency {} ms", call_id, turns[-1]["turnLatency"])
+
+        rates = {"audio_in_sample_rate": sample_rate, "audio_out_sample_rate": sample_rate} if sample_rate else {}
+        task = PipelineTask(
+            pipeline,
+            params=PipelineParams(enable_metrics=True, **rates),
+            observers=[latency, SpeechObserver(observe_every_push=False)],
+        )
+
+        @transport.event_handler("on_client_connected")
+        async def _on_connected(_transport, _client):
+            outbox.send("status-update", status="in-progress")
+            if plan.first_message:
+                # In the context (and transcript) right away, even if the voice fails to say it.
+                context.add_message({"role": "assistant", "content": plan.first_message})
+                await task.queue_frames([TTSSpeakFrame(plan.first_message, append_to_context=False)])
+            else:
+                await task.queue_frames([LLMRunFrame()])
+
+        @transport.event_handler("on_client_disconnected")
+        async def _on_disconnected(_transport, _client):
+            await task.cancel()
+
+        @aggregators.assistant().event_handler("on_assistant_turn_stopped")
+        async def _conversation_update(_aggregator, _message):
+            messages = [m for m in context.get_messages() if isinstance(m, dict)]
+            outbox.send("conversation-update", messages=transcript_messages(messages), messagesOpenAIFormatted=messages)
+
+        if plan.end_call_phrases:
+            phrases = [p.lower() for p in plan.end_call_phrases]
+
+            @aggregators.assistant().event_handler("on_assistant_turn_stopped")
+            async def _maybe_hang_up(_aggregator, message):
+                nonlocal ended_reason
+                text = str(getattr(message, "content", message) or "").lower()
+                if any(p in text for p in phrases):
+                    ended_reason = "assistant-said-end-call-phrase"
+                    await task.queue_frames([EndFrame()])
+
         await PipelineRunner(handle_sigint=False).run(task)
     except Exception as exc:  # keep the call record honest
         logger.exception("call {} failed", call_id)
         ended_reason = f"pipeline-error: {exc}"
     finally:
-        transcript = transcript_messages(context.get_messages())
+        transcript = transcript_messages(context.get_messages()) if context is not None else []
         call = store.update(
             "calls",
             call_id,

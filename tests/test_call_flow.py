@@ -66,20 +66,36 @@ def fake_bot(monkeypatch):
     return runs
 
 
+def _pipeline_started(monkeypatch):
+    """Records the server messages a call sends; the first one means its pipeline is running."""
+    import httpx
+
+    from openring import server_messages
+
+    sent = []
+
+    async def record(server, payload, **_kw):
+        sent.append(payload["message"])
+        return httpx.Response(200)
+
+    monkeypatch.setattr(server_messages, "post", record)  # also keeps the tests off the network
+    return sent
+
+
 def test_call_lifecycle(monkeypatch):
+    sent = _pipeline_started(monkeypatch)
     client, store, params = _answered_call(monkeypatch)
 
     with client.websocket_connect("/ws/twilio") as ws:
         _handshake(ws, params)
-        time.sleep(2)
+        for _ in range(150):  # the first Pipecat import in a process takes a few seconds
+            if sent:
+                break
+            time.sleep(0.1)
         assert store.get("calls", params["callId"])["status"] == "in-progress"
         ws.send_text(json.dumps({"event": "stop", "streamSid": "MZ1"}))
 
-    for _ in range(50):
-        call = store.get("calls", params["callId"])
-        if call["status"] == "ended":
-            break
-        time.sleep(0.1)
+    call = _wait_until_ended(store, params["callId"])
     assert call["status"] == "ended"
     assert call["messages"][0] == {"role": "assistant", "message": ASSISTANT["firstMessage"]}
     assert call["artifact"]["messages"] == call["messages"]
@@ -110,3 +126,43 @@ def test_media_stream_refuses_unknown_call_and_silence(monkeypatch, fake_bot):
             ws.receive_text()  # never sends the handshake
     assert closed.value.code == 1008
     assert fake_bot == []
+
+
+def _wait_until_ended(store, call_id, seconds=20):
+    for _ in range(seconds * 10):
+        call = store.get("calls", call_id)
+        if call["status"] == "ended":
+            return call
+        time.sleep(0.1)
+    return call
+
+
+def test_caller_who_hangs_up_at_once_ends_the_call(monkeypatch):
+    """Hanging up while the services are still being built used to leave the call 'in-progress' for good."""
+    _pipeline_started(monkeypatch)
+    client, store, params = _answered_call(monkeypatch)
+    with client.websocket_connect("/ws/twilio") as ws:
+        _handshake(ws, params)
+        ws.send_text(json.dumps({"event": "stop", "streamSid": "MZ1"}))
+    call = _wait_until_ended(store, params["callId"])
+    assert (call["status"], call["endedReason"]) == ("ended", "customer-ended-call")
+
+
+def test_a_provider_that_fails_to_start_ends_the_call(monkeypatch):
+    import asyncio
+
+    from openring import bot
+    from openring.providers import ProviderError, resolve_plan
+
+    def broken(_plan):
+        raise ProviderError("provider 'cartesia' needs an extra package")
+
+    monkeypatch.setattr(bot, "build_services", broken)
+    for k in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "ELEVENLABS_API_KEY"):
+        monkeypatch.setenv(k, "fake")
+    store = Store(":memory:")
+    call = store.create("calls", {"type": "webCall", "status": "in-progress"})
+    asyncio.run(bot.run_call(object(), plan=resolve_plan(ASSISTANT), call_id=call["id"], store=store))
+    call = store.get("calls", call["id"])
+    assert call["status"] == "ended" and call["endedReason"].startswith("pipeline-error: provider 'cartesia'")
+    assert call["messages"] == []
