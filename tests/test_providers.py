@@ -92,7 +92,8 @@ def test_defaults_belong_to_the_default_provider(keys):
     plan = resolve_plan(assistant(transcriber={"provider": "assembly-ai"}, voice={"provider": "cartesia"}))
     assert plan.stt_model is None  # not Deepgram's nova-3
     assert plan.tts_voice is None  # not Kokoro's af_heart
-    plan = resolve_plan({"model": {"provider": "groq", "model": "m"}})
+    # Kokoro may not be downloaded on this machine (CI): the defaults are the point here, not readiness.
+    plan = resolve_plan({"model": {"provider": "groq", "model": "m"}}, check_keys=False)
     assert (plan.stt_provider, plan.stt_model, plan.tts_provider, plan.tts_voice) == (
         "deepgram", "nova-3", "kokoro", "af_heart")
 
