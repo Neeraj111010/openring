@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -13,6 +15,7 @@ from loguru import logger
 from .config import Settings
 from .providers import StackPlan, build_services
 from .store import Store, now_iso
+from .tools import CallControls, assistant_tools, register_tools
 
 # Pipecat's named parts of a user-to-bot turn, mapped to Vapi's performanceMetrics fields.
 LATENCY_PARTS = {
@@ -44,6 +47,42 @@ def performance_metrics(turns: list[dict[str, int]]) -> dict[str, Any]:
         for name in LATENCY_FIELDS:
             metrics[name + "Average"] = round(sum(t[name] for t in turns) / len(turns))
     return metrics
+
+
+def transcript_messages(messages: list[Any]) -> list[dict[str, Any]]:
+    """The call's transcript: what each side said, plus the tools the assistant used and their results."""
+    transcript: list[dict[str, Any]] = []
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        role, content = m.get("role"), m.get("content")
+        if role in ("user", "assistant") and isinstance(content, str) and content.strip():
+            transcript.append({"role": role, "message": content})
+        if role == "assistant" and m.get("tool_calls"):
+            transcript.append({"role": "tool_calls", "toolCalls": m["tool_calls"]})
+        elif role == "tool":
+            result = _plain(content)
+            transcript.append({"role": "tool_call_result", "toolCallId": m.get("tool_call_id"), "result": result})
+    return transcript
+
+
+def _plain(content: Any) -> Any:
+    """Pipecat stores a text result JSON-encoded ('"Booked"'); keep the text itself."""
+    if isinstance(content, str):
+        try:
+            decoded = json.loads(content)
+        except ValueError:
+            return content
+        if isinstance(decoded, str):
+            return decoded
+    return content
+
+
+def keep_phone_line_open(transport: Any) -> None:
+    """Pipecat's Twilio serializer hangs up when the pipeline stops; a transferred call must stay up."""
+    serializer = getattr(getattr(transport, "_params", None), "serializer", None)
+    if serializer is not None and hasattr(serializer, "_hangup_attempted"):
+        serializer._hangup_attempted = True
 
 
 def twilio_transport(websocket: WebSocket, call_data: dict[str, Any], settings: Settings) -> Any:
@@ -92,9 +131,18 @@ async def run_call(
     call_id: str,
     store: Store,
     sample_rate: int | None = None,
+    transfer: Callable[[str], Awaitable[None]] | None = None,
 ) -> None:
+    """Run a call until it ends. `transfer(number)` moves a phone call to another line (transferCall tool)."""
     from pipecat.audio.vad.silero import SileroVADAnalyzer
-    from pipecat.frames.frames import EndFrame, LLMRunFrame, TTSSpeakFrame
+    from pipecat.frames.frames import (
+        BotStartedSpeakingFrame,
+        BotStoppedSpeakingFrame,
+        EndFrame,
+        LLMRunFrame,
+        TTSSpeakFrame,
+    )
+    from pipecat.observers.base_observer import BaseObserver
     from pipecat.observers.user_bot_latency_observer import MeasuredFrom, UserBotLatencyObserver
     from pipecat.pipeline.pipeline import Pipeline
     from pipecat.pipeline.runner import PipelineRunner
@@ -107,7 +155,49 @@ async def run_call(
 
     # Loading a local voice model takes a moment; doing it off the event loop keeps other calls flowing.
     stt, llm, tts = await asyncio.to_thread(build_services, plan)
-    context = LLMContext(messages=list(plan.messages))
+    speech = {"speaking": False, "last_stop": 0.0}
+
+    async def speak(text: str) -> None:
+        await task.queue_frames([TTSSpeakFrame(text, append_to_context=False)])
+
+    async def end_call() -> None:
+        nonlocal ended_reason
+        ended_reason = "assistant-ended-call"
+        await task.queue_frames([EndFrame()])  # after whatever is still being said
+
+    async def wait_until_quiet(expect_speech: bool) -> None:
+        """Until the assistant finishes talking, so a transfer never cuts a sentence."""
+        asked = time.monotonic()
+        while time.monotonic() - asked < 30:
+            await asyncio.sleep(0.2)
+            if speech["speaking"]:
+                continue
+            if expect_speech and speech["last_stop"] < asked and time.monotonic() - asked < 15:
+                continue  # a local voice takes a moment to synthesize before it starts
+            if time.monotonic() - max(speech["last_stop"], asked) >= 0.8:
+                break
+        await asyncio.sleep(0.3)
+
+    async def transfer_to(number: str, message: str | None) -> None:
+        nonlocal ended_reason
+        if message:
+            await speak(message)
+        await wait_until_quiet(expect_speech=bool(message))
+        keep_phone_line_open(transport)
+        ended_reason = "assistant-forwarded-call"
+        logger.info("call {} transferred to {}", call_id, number)
+        await transfer(number)
+
+    controls = CallControls(
+        speak=speak,
+        end_call=end_call,
+        transfer=transfer_to if transfer else None,
+        current_call=lambda: store.get("calls", call_id),
+        assistant=plan.assistant,
+        default_url=plan.server_url,
+    )
+    tools = register_tools(llm, assistant_tools(plan.assistant, store), controls)
+    context = LLMContext(messages=list(plan.messages), **({"tools": tools} if tools else {}))
     aggregators = LLMContextAggregatorPair(
         context, user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer())
     )
@@ -123,6 +213,13 @@ async def run_call(
         ]
     )
     latency = UserBotLatencyObserver()
+
+    class SpeechObserver(BaseObserver):
+        async def on_push_frame(self, data):
+            if isinstance(data.frame, BotStartedSpeakingFrame):
+                speech["speaking"] = True
+            elif isinstance(data.frame, BotStoppedSpeakingFrame):
+                speech.update(speaking=False, last_stop=time.monotonic())
     turns: list[dict[str, int]] = []
 
     @latency.event_handler("on_latency_breakdown")
@@ -135,7 +232,7 @@ async def run_call(
     task = PipelineTask(
         pipeline,
         params=PipelineParams(enable_metrics=True, **rates),
-        observers=[latency],
+        observers=[latency, SpeechObserver(observe_every_push=False)],
     )
 
     @transport.event_handler("on_client_connected")
@@ -170,11 +267,7 @@ async def run_call(
         logger.exception("call {} failed", call_id)
         ended_reason = f"pipeline-error: {exc}"
     finally:
-        transcript = [
-            {"role": m.get("role"), "message": m.get("content")}
-            for m in context.get_messages()
-            if isinstance(m, dict) and m.get("role") in ("user", "assistant")
-        ]
+        transcript = transcript_messages(context.get_messages())
         call = store.update(
             "calls",
             call_id,

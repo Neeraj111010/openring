@@ -206,6 +206,9 @@ textarea.code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
 .bubble { max-width: min(72%, 640px); padding: 9px 13px; border-radius: 14px; overflow-wrap: anywhere; }
 .bubble.assistant { background: var(--accent-soft); align-self: flex-start; border-bottom-left-radius: 4px; }
 .bubble.user { background: var(--panel-2); border: 1px solid var(--line); align-self: flex-end; border-bottom-right-radius: 4px; }
+/* A tool the assistant used, between the lines of the conversation */
+.toolrow { align-self: flex-start; max-width: min(88%, 720px); font: 12.5px/1.45 ui-monospace, "Cascadia Code", Consolas, monospace; color: var(--muted); border-left: 2px solid var(--c5); padding: 3px 10px; overflow-wrap: anywhere; }
+.toolrow b { color: var(--c5); font-weight: 600; }
 .turns { display: grid; gap: 10px; }
 .turn { display: grid; grid-template-columns: 64px minmax(0, 1fr) 70px; align-items: center; gap: 12px; font-size: 13px; }
 .turn .stack { margin: 0; height: 12px; }
@@ -653,6 +656,13 @@ async function viewCalls() {
   v.querySelectorAll("tr.link").forEach(r => { r.onclick = () => go("calls/" + r.dataset.id); r.onkeydown = e => e.key === "Enter" && r.click(); });
 }
 
+// One line of a call's transcript: a bubble per side, a quiet row for each tool call and its result.
+function transcriptRow(m) {
+  if (m.role === "tool_calls") return (m.toolCalls || []).map(t => `<div class="toolrow"><b>→ ${esc(t.function?.name)}</b>(${esc(typeof t.function?.arguments === "string" ? t.function.arguments : JSON.stringify(t.function?.arguments ?? {}))})</div>`).join("");
+  if (m.role === "tool_call_result") return `<div class="toolrow"><b>←</b> ${esc(typeof m.result === "string" ? m.result : JSON.stringify(m.result))}</div>`;
+  return `<div class="bubble ${m.role === "user" ? "user" : "assistant"}">${esc(m.message)}</div>`;
+}
+
 let callTab = "transcript";
 async function viewCall(id) {
   const [c, assistants] = await Promise.all([api("/call/" + id), api("/assistant")]);
@@ -662,7 +672,7 @@ async function viewCall(id) {
   const pm = c.artifact?.performanceMetrics || {}, msgs = c.messages || [], turns = pm.turnLatencies || [];
   const maxTurn = Math.max(1, ...turns.map(t => t.turnLatency));
   const panes = {
-    transcript: () => msgs.length ? `<div class="transcript">${msgs.map(m => `<div class="bubble ${m.role === "user" ? "user" : "assistant"}">${esc(m.message)}</div>`).join("")}</div>` : `<p class="muted">${c.status === "ended" ? "No transcript for this call." : "The transcript appears when the call ends."}</p>`,
+    transcript: () => msgs.length ? `<div class="transcript">${msgs.map(transcriptRow).join("")}</div>` : `<p class="muted">${c.status === "ended" ? "No transcript for this call." : "The transcript appears when the call ends."}</p>`,
     latency: () => turns.length ? `<div class="legend" style="margin-bottom:14px">${PARTS.map(([, l, col]) => `<span style="--dot:${col}">${l}</span>`).join("")}</div><div class="turns">${turns.map((t, i) => `<div class="turn"><span class="muted">Turn ${i + 1}</span><div class="stack" style="width:${t.turnLatency / maxTurn * 100}%">${PARTS.map(([k, l, col]) => `<span style="width:${(t[k] || 0) / Math.max(1, PARTS.reduce((s, [p]) => s + (t[p] || 0), 0)) * 100}%;background:${col}" title="${l}: ${t[k] || 0} ms"></span>`).join("")}</div><b class="num">${ms(t.turnLatency)}</b></div>`).join("")}</div>` : `<p class="muted">No response times recorded for this call.</p>`,
     json: () => `<pre class="json">${esc(JSON.stringify(c, null, 2))}</pre>`,
   };
@@ -671,7 +681,7 @@ async function viewCall(id) {
   <div class="cards">
     ${card("Duration", "clock", dur(c.durationSeconds), "v2")}
     ${card("Response time", "bolt", ms(pm.turnLatencyAverage), pm.turnLatencyAverage > 1200 ? "v3" : "v6", turns.length ? `average of ${turns.length} turns` : "")}
-    ${card("Messages", "hash", num(msgs.length), "v5")}
+    ${card("Messages", "hash", num(msgs.filter(m => m.role === "user" || m.role === "assistant").length), "v5", msgs.some(m => m.role === "tool_calls") ? `${msgs.filter(m => m.role === "tool_calls").length} tool calls` : "")}
     ${card("Type", "phone", esc(TYPE[c.type] || c.type), "v1", c.endedReason ? esc(c.endedReason) : "")}
   </div>
   <div class="toolbar">${tabs([["transcript", "Transcript"], ["latency", "Response time"], ["json", "JSON"]], callTab)}</div>

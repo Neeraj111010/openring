@@ -17,7 +17,8 @@ mostly a base-URL change.
 |---|---|
 | Inbound and outbound phone calls via Twilio | Telnyx, Plivo, Vonage |
 | Browser test calls from the dashboard (WebRTC, no phone number needed) | Provider fallback and cost routing |
-| Vapi-style `/assistant`, `/phone-number`, `/call` APIs | Tool calls |
+| Vapi-style `/assistant`, `/phone-number`, `/call`, `/tool` APIs | More tool types (DTMF, knowledge base) |
+| Vapi tools: `function` (your server gets `tool-calls`), `endCall`, `transferCall` | |
 | Deepgram STT; any OpenAI-compatible LLM; ElevenLabs or Kokoro (free, local) TTS | Agency mode (multi-client, white-label) |
 | `firstMessage`, `endCallPhrases`, `end-of-call-report` webhook, per-turn latency | |
 
@@ -81,6 +82,35 @@ curl -X POST http://localhost:8000/call \
   -H "Authorization: Bearer $OPENRING_API_KEY" -H "Content-Type: application/json" \
   -d '{"phoneNumberId": "PHONE_NUMBER_ID", "customer": {"number": "+5511912345678"}}'
 ```
+
+### Tools
+
+Tools use Vapi's format, so a server written for Vapi works unchanged. Put them in `model.tools`, or
+save them once with `POST /tool` and list their ids in `model.toolIds`:
+
+```json
+"model": {
+  "provider": "groq", "model": "openai/gpt-oss-20b",
+  "tools": [
+    {"type": "function",
+     "function": {"name": "book_appointment", "description": "Book a cleaning",
+                  "parameters": {"type": "object", "properties": {"day": {"type": "string"}}, "required": ["day"]}},
+     "server": {"url": "https://your-app.com/tools"},
+     "messages": [{"type": "request-start", "content": "One moment, let me check."}]},
+    {"type": "endCall"},
+    {"type": "transferCall", "destinations": [{"type": "number", "number": "+15551230000",
+      "description": "front desk", "message": "Transferring you now."}]}
+  ]
+}
+```
+
+When the model calls `book_appointment`, OpenRing POSTs `{"message": {"type": "tool-calls", "toolCallList":
+[...], "call": {...}}}` to the tool's `server.url` (or the assistant's) and reads back
+`{"results": [{"toolCallId": "...", "result": "..."}]}`. `server.headers`, `server.secret`
+(sent as `X-Vapi-Secret`), `server.timeoutSeconds`, `async` and the `request-start` / `request-failed`
+messages work as on Vapi. `endCall` hangs up after the goodbye; `transferCall` moves a phone call to the
+chosen number (Twilio) once the assistant stops talking. Tool calls and results show up in the call's
+transcript.
 
 ## The free stack
 

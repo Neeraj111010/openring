@@ -187,6 +187,7 @@ class StackPlan:
     first_message: str | None = None
     end_call_phrases: list[str] = field(default_factory=list)
     server_url: str | None = None
+    assistant: dict[str, Any] = field(default_factory=dict)  # the saved document, for tools and webhooks
 
 
 def _require_key(env_name: str | None, what: str) -> None:
@@ -259,6 +260,7 @@ def resolve_plan(assistant: dict[str, Any], *, check_keys: bool = True) -> Stack
         first_message=assistant.get("firstMessage"),
         end_call_phrases=list(assistant.get("endCallPhrases") or []),
         server_url=server.get("url") or assistant.get("serverUrl"),
+        assistant=assistant,
     )
 
 

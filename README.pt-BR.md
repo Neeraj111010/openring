@@ -12,11 +12,12 @@ assistentes do Vapi: migrar é praticamente trocar a URL.
 
 | Já funciona | Próximos passos |
 |---|---|
-| Ligações recebidas pelo Twilio | Ligações de saída (`POST /call`) |
+| Ligações recebidas e feitas (`POST /call`) pelo Twilio | |
 | Teste no navegador pelo painel (WebRTC, sem precisar de número) | |
 | APIs `/assistant`, `/phone-number` e `/call` no formato do Vapi | Telnyx, Plivo, Vonage |
 | Transcrição Deepgram; qualquer modelo compatível com OpenAI; voz ElevenLabs ou Kokoro (grátis, local) | Fallback e roteamento por custo entre provedores |
-| `firstMessage`, `endCallPhrases` e webhook `end-of-call-report` | Ferramentas, painel, modo agência (multi-cliente, white-label) |
+| `firstMessage`, `endCallPhrases` e webhook `end-of-call-report` | Modo agência (multi-cliente, white-label) |
+| Ferramentas no formato do Vapi: `function` (seu servidor recebe `tool-calls`), `endCall`, `transferCall`, API `/tool` | Mais tipos de ferramenta (DTMF, base de conhecimento) |
 
 ## Começo rápido
 
@@ -68,6 +69,15 @@ curl -X POST http://localhost:8000/phone-number \
 ```
 
 Ligue para o número. As transcrições ficam em `GET /call`.
+
+### Ferramentas
+
+As ferramentas usam o formato do Vapi: um servidor feito para o Vapi funciona sem mudança. Coloque-as em
+`model.tools` (ou salve com `POST /tool` e liste os ids em `model.toolIds`). Quando o modelo chama uma
+ferramenta `function`, o OpenRing envia `{"message": {"type": "tool-calls", ...}}` para o `server.url` dela
+(ou do assistente) e lê de volta `{"results": [{"toolCallId": "...", "result": "..."}]}`. `endCall` desliga
+depois da despedida; `transferCall` transfere a ligação (Twilio) para o número escolhido quando o assistente
+termina de falar. Exemplo completo no [README em inglês](README.md#tools).
 
 ## Stack grátis
 

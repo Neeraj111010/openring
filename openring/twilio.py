@@ -32,6 +32,19 @@ async def create_call(
     return body["sid"]
 
 
+async def redirect_call(account_sid: str, auth_token: str, call_sid: str, twiml: str) -> None:
+    """Give a live call new instructions; its media stream ends and Twilio follows `twiml`."""
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.post(
+            f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Calls/{call_sid}.json",
+            auth=(account_sid, auth_token),
+            data={"Twiml": twiml},
+        )
+    if r.status_code >= 400:
+        body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+        raise TwilioError(f"{body.get('message') or r.text} (Twilio error {body.get('code', r.status_code)})")
+
+
 def compute_signature(auth_token: str, url: str, params: dict[str, str]) -> str:
     """Twilio's X-Twilio-Signature: base64(HMAC-SHA1(token, url + sorted key/value pairs))."""
     data = url + "".join(k + params[k] for k in sorted(params))
@@ -57,6 +70,10 @@ def stream_twiml(ws_url: str, parameters: dict[str, str]) -> str:
         '<?xml version="1.0" encoding="UTF-8"?>'
         f"<Response><Connect><Stream url={quoteattr(ws_url)}>{params}</Stream></Connect></Response>"
     )
+
+
+def dial_twiml(number: str) -> str:
+    return f'<?xml version="1.0" encoding="UTF-8"?><Response><Dial>{escape(number)}</Dial></Response>'
 
 
 def say_twiml(text: str) -> str:

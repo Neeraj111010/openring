@@ -18,6 +18,7 @@ from . import __version__, auth, providers, stats, twilio
 from .config import Settings, get_settings
 from .providers import ProviderError, resolve_plan
 from .store import Store, now_iso
+from .tools import ToolError, check_tool
 from .twilio import TwilioError, is_valid_signature, say_twiml, stream_twiml
 
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
@@ -113,7 +114,19 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     def _validate_assistant(doc: dict[str, Any]) -> None:
         try:
             resolve_plan(doc, check_keys=False)
-        except ProviderError as exc:
+            model = doc.get("model") or {}
+            for tool in model.get("tools") or []:
+                check_tool(tool)
+        except (ProviderError, ToolError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        for tool_id in (doc.get("model") or {}).get("toolIds") or []:
+            if store.get("tools", str(tool_id)) is None:
+                raise HTTPException(status_code=400, detail=f"model.toolIds: tool {tool_id} not found")
+
+    def _validate_tool(doc: dict[str, Any]) -> None:
+        try:
+            check_tool(doc)
+        except ToolError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/", include_in_schema=False)
@@ -224,6 +237,31 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     def delete_assistant(assistant_id: str) -> dict[str, Any]:
         _get_or_404("assistants", assistant_id)
         return store.delete("assistants", assistant_id)
+
+    # ---- Tools (Vapi's /tool: saved once, used by assistants through model.toolIds) ----
+    @app.post("/tool", status_code=201, dependencies=auth_deps)
+    def create_tool(body: dict[str, Any]) -> dict[str, Any]:
+        _validate_tool(body)
+        return store.create("tools", body)
+
+    @app.get("/tool", dependencies=auth_deps)
+    def list_tools(limit: int = 100) -> list[dict[str, Any]]:
+        return store.list("tools", limit)
+
+    @app.get("/tool/{tool_id}", dependencies=auth_deps)
+    def get_tool(tool_id: str) -> dict[str, Any]:
+        return _get_or_404("tools", tool_id)
+
+    @app.patch("/tool/{tool_id}", dependencies=auth_deps)
+    def update_tool(tool_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        current = _get_or_404("tools", tool_id)
+        _validate_tool({**current, **body})
+        return store.update("tools", tool_id, body)
+
+    @app.delete("/tool/{tool_id}", dependencies=auth_deps)
+    def delete_tool(tool_id: str) -> dict[str, Any]:
+        _get_or_404("tools", tool_id)
+        return store.delete("tools", tool_id)
 
     # ---- Phone numbers --------------------------------------------------------
     @app.post("/phone-number", status_code=201, dependencies=auth_deps)
@@ -447,12 +485,21 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             store.update("calls", call_id, {"status": "ended", "endedReason": f"provider-error: {exc}"})
             await websocket.close()
             return
+        transfer = None
+        call_sid = call.get("phoneCallProviderId") or call_data.get("call_id")
+        if settings.twilio_account_sid and settings.twilio_auth_token and call_sid:
+
+            async def transfer(number: str) -> None:
+                twiml = twilio.dial_twiml(_e164(number))
+                await twilio.redirect_call(settings.twilio_account_sid, settings.twilio_auth_token, call_sid, twiml)
+
         await run_call(
             twilio_transport(websocket, dict(call_data), settings),
             plan=plan,
             call_id=call_id,
             store=store,
             sample_rate=PHONE_SAMPLE_RATE,
+            transfer=transfer,
         )
 
     return app
