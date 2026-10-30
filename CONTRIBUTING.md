@@ -44,6 +44,8 @@ or are added from the dashboard's Providers page; see [.env.example](.env.exampl
 - **Every change comes with a test**, and `pytest` and `ruff check .` must pass. CI runs both on
   Linux, Windows and macOS.
 - **Never commit keys, tokens or `.env` files**, not even in tests: use obviously fake values.
+  Run `git config core.hooksPath .githooks` once, and a pre-commit check stops you if you try; CI runs
+  the same check.
 - **No paid service is required to run the tests.** Mock provider HTTP calls (see `tests/test_keys.py`).
 - **Say "Vapi-compatible"**, and don't use Vapi's name or logo in any other way.
 - Lines are up to 120 characters; `ruff check . --fix` sorts imports.

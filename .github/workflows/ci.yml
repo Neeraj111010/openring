@@ -23,6 +23,8 @@ jobs:
       - run: ruff check .
       - name: Check the npm launcher parses
         run: node --check bin/openring.js
+      - name: No secrets or private notes in the repository
+        run: sh .githooks/check-leaks --all
 
   test:
     strategy:

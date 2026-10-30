@@ -1,0 +1,33 @@
+#!/bin/sh
+# Refuses to publish secrets or private notes. Plain sh and grep, so it runs in Git Bash, macOS and Linux.
+#   .githooks/check-leaks          checks the files staged for the next commit (the pre-commit hook)
+#   .githooks/check-leaks --all    checks every tracked file (CI)
+
+KEYS='gsk_[A-Za-z0-9]{20,}|sk-(proj-|ant-|or-v1-)?[A-Za-z0-9_-]{30,}|AC[0-9a-f]{32}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+fail=0
+
+if [ "$1" = "--all" ]; then
+  files=$(git ls-files)
+  content() { cat -- "$1" 2>/dev/null; }
+else
+  files=$(git diff --cached --name-only --diff-filter=ACMR)
+  content() { git show ":$1" 2>/dev/null; }
+fi
+
+for f in $files; do
+  case "$f" in
+    private/*|.env|*/.env|.env.*|*.db|*.sqlite)
+      [ "$f" = ".env.example" ] && continue
+      echo "check-leaks: $f must stay on your computer (it is private or holds secrets)"
+      fail=1
+      continue ;;
+  esac
+  if content "$f" | grep -Eq "$KEYS"; then
+    echo "check-leaks: $f contains something that looks like an API key or token"
+    content "$f" | grep -En "$KEYS" | cut -c1-60 | sed 's/^/    /'
+    fail=1
+  fi
+done
+
+[ $fail -eq 0 ] || echo "check-leaks: nothing was committed. Remove the secret, or keep the file out of git."
+exit $fail

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Turn on once per clone with: git config core.hooksPath .githooks
+exec "$(dirname "$0")/check-leaks"

@@ -1,6 +1,34 @@
+# Secrets and local data: never commit these
 .env
+.env.*
+!.env.example
 data/
+*.db
+*.db-journal
+*.sqlite
+
+# Maintainers' private notes (plans, strategy); see CLAUDE.md
+private/
+
+# Local Claude Code settings
+.claude/settings.local.json
+CLAUDE.local.md
+
+# Python and tools
+.venv/
+venv/
 __pycache__/
 *.egg-info/
+build/
+dist/
 .pytest_cache/
-private/
+.ruff_cache/
+
+# Node
+node_modules/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
