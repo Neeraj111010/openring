@@ -1,0 +1,21 @@
+name: Feature request
+description: Suggest an idea, a provider to support or a Vapi feature to match
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want to do?
+      description: The problem or use case, not only the solution. Who is it for (agency, developer, ...)?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: How could OpenRing help?
+      description: If Vapi already has this, link its docs; OpenRing keeps Vapi's JSON shape.
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you like to build it?
+      options: ["Yes, with some guidance", "Maybe", "No"]
