@@ -118,3 +118,9 @@ def test_services_instantiate(monkeypatch):
     assert type(stt).__name__ == "DeepgramSTTService"
     assert type(llm).__name__ == "OpenAILLMService"
     assert type(tts).__name__ == "ElevenLabsTTSService"
+
+
+def test_dashboard_served_without_key():
+    client = make_client()
+    r = client.get("/")
+    assert r.status_code == 200 and "<title>OpenRing</title>" in r.text

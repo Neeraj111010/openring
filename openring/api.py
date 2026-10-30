@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from loguru import logger
 
 from . import __version__
@@ -45,6 +46,10 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             resolve_plan(doc, check_keys=False)
         except ProviderError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/", include_in_schema=False)
+    def dashboard() -> FileResponse:
+        return FileResponse(Path(__file__).parent / "static" / "index.html")
 
     @app.get("/health")
     def health() -> dict[str, str]:

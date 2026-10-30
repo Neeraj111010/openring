@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenRing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Public+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #eef1f4; --panel: #ffffff; --ink: #1c2430; --muted: #5b6676; --line: #d6dce4;
+  --signal: #0f6e8c; --signal-soft: #e1eef3; --live: #b77d00; --error: #b42318; --ok: #1f7a4d;
+  --radius-lg: 14px; --radius-sm: 6px;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 "Public Sans", system-ui, sans-serif; }
+h1, h2, h3 { font-family: "Bricolage Grotesque", system-ui, sans-serif; margin: 0; letter-spacing: -0.01em; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+.app { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+.rail { background: var(--ink); color: #dfe6ee; padding: 24px 16px; display: flex; flex-direction: column; gap: 28px; }
+.mark { display: flex; align-items: center; gap: 10px; font-family: "Bricolage Grotesque", system-ui, sans-serif; font-size: 22px; font-weight: 700; color: #fff; }
+.mark svg { flex: none; }
+.rail nav { display: flex; flex-direction: column; gap: 4px; }
+.rail nav button { all: unset; cursor: pointer; padding: 9px 12px; border-radius: var(--radius-sm); color: #b9c4d1; }
+.rail nav button[aria-current="page"] { background: #2b3747; color: #fff; }
+.rail nav button:hover { color: #fff; }
+.rail .key { margin-top: auto; font-size: 13px; color: #8f9cad; }
+.rail .key button { all: unset; cursor: pointer; color: #cfe6ee; text-decoration: underline; }
+
+main { padding: 32px 40px; max-width: 1100px; width: 100%; }
+.head { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.head h1 { font-size: 30px; }
+.head p { margin: 4px 0 0; color: var(--muted); max-width: 60ch; }
+.btn { border: 0; border-radius: var(--radius-sm); padding: 9px 16px; background: var(--signal); color: #fff; font-weight: 600; cursor: pointer; }
+.btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+.btn.danger { background: transparent; color: var(--error); border: 1px solid #f0c7c3; }
+
+.list { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; }
+.row { display: grid; grid-template-columns: 1.3fr 2fr auto; gap: 16px; align-items: center; padding: 14px 18px; border-top: 1px solid var(--line); cursor: pointer; }
+.row:first-child { border-top: 0; }
+.row:hover { background: #f7f9fb; }
+.row .title { font-weight: 600; }
+.row .sub { color: var(--muted); font-size: 13px; }
+.empty { padding: 40px 24px; text-align: center; color: var(--muted); }
+.empty .btn { margin-top: 12px; }
+
+/* The call path: caller -> transcriber -> model -> voice */
+.path { display: flex; align-items: center; flex-wrap: wrap; row-gap: 4px; font-size: 13px; }
+.path .node { padding: 3px 9px; border-radius: 999px; background: var(--signal-soft); color: var(--signal); white-space: nowrap; }
+.path .wire { width: 14px; height: 2px; background: var(--signal); opacity: .45; }
+
+.status { font-size: 13px; padding: 2px 9px; border-radius: 999px; background: #edf0f3; color: var(--muted); }
+.status.in-progress { background: #fbf1d9; color: var(--live); }
+.status.ended { background: #e3f1e9; color: var(--ok); }
+
+/* Editor */
+.editor { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 24px; }
+.line-diagram { display: grid; grid-template-columns: auto 28px 1fr 28px 1fr 28px 1fr; align-items: center; margin: 8px 0 24px; }
+.stage { border: 1.5px solid var(--signal); border-radius: var(--radius-lg); padding: 12px 14px; min-width: 150px; background: #fbfdfe; }
+.stage.caller { border-style: dashed; background: transparent; min-width: 0; }
+.stage h3 { font-size: 15px; margin-bottom: 8px; }
+.stage label { display: block; font-size: 12px; color: var(--muted); margin-top: 6px; }
+.stage input, .stage select { width: 100%; padding: 5px 7px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: #fff; }
+.cable { height: 2px; background: linear-gradient(90deg, var(--signal) 50%, transparent 50%) 0 0 / 10px 2px repeat-x; }
+.field { margin-top: 14px; }
+.field label { display: block; font-weight: 600; margin-bottom: 4px; }
+.field .hint { color: var(--muted); font-size: 13px; margin: -2px 0 6px; }
+.field input, .field textarea { width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: #fff; }
+.field textarea { min-height: 120px; resize: vertical; }
+.actions { display: flex; gap: 10px; margin-top: 20px; }
+.actions .spacer { flex: 1; }
+.error { color: var(--error); margin-top: 12px; }
+
+/* Transcript */
+.transcript { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.bubble { max-width: 70%; padding: 9px 13px; border-radius: 14px; }
+.bubble.assistant { background: var(--signal-soft); align-self: flex-start; border-bottom-left-radius: 4px; }
+.bubble.user { background: #fff; border: 1px solid var(--line); align-self: flex-end; border-bottom-right-radius: 4px; }
+.meta { display: flex; gap: 18px; flex-wrap: wrap; color: var(--muted); font-size: 14px; }
+
+dialog { border: 0; border-radius: var(--radius-lg); padding: 24px; width: min(420px, 92vw); }
+dialog::backdrop { background: rgba(28,36,48,.45); }
+
+@media (max-width: 800px) {
+  .app { grid-template-columns: 1fr; }
+  .rail { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 12px 16px; }
+  .rail nav { flex-direction: row; flex-wrap: wrap; width: 100%; }
+  .rail .key { position: absolute; top: 14px; right: 16px; margin: 0; text-align: right; }
+  .rail .key br { display: none; }
+  .rail .key #keyState { margin-right: 6px; }
+  .rail { position: relative; }
+  main { padding: 20px 16px; }
+  .row { grid-template-columns: 1fr; gap: 6px; }
+  .line-diagram { grid-template-columns: 1fr; gap: 0; }
+  .cable { width: 2px; height: 16px; margin-left: 24px; background: var(--signal); opacity: .5; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail">
+    <div class="mark">
+      <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><circle cx="13" cy="13" r="11" fill="none" stroke="#5fb4cf" stroke-width="2"/><circle cx="13" cy="13" r="5.5" fill="none" stroke="#5fb4cf" stroke-width="2" opacity=".6"/><circle cx="13" cy="13" r="2" fill="#fff"/></svg>
+      OpenRing
+    </div>
+    <nav aria-label="Sections">
+      <button data-view="assistants">Assistants</button>
+      <button data-view="numbers">Phone numbers</button>
+      <button data-view="calls">Calls</button>
+    </nav>
+    <div class="key">API key: <span id="keyState">not set</span><br><button id="setKey">Change</button></div>
+  </aside>
+  <main id="view" aria-live="polite"></main>
+</div>
+
+<dialog id="keyDialog">
+  <form method="dialog">
+    <h2>Connect to this server</h2>
+    <p style="color:var(--muted)">Paste the value of <code>OPENRING_API_KEY</code> from your <code>.env</code>. It stays in this browser.</p>
+    <div class="field"><label for="keyInput">API key</label><input id="keyInput" type="password" autocomplete="off"></div>
+    <div class="actions"><span class="spacer"></span><button class="btn" value="save">Save key</button></div>
+  </form>
+</dialog>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let apiKey = "";
+try { apiKey = localStorage.getItem("openring-key") || ""; } catch {}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", Authorization: "Bearer " + apiKey, ...(opts.headers || {}) } });
+  if (res.status === 401) { askKey(); throw new Error("The API key is missing or wrong. Paste the key from your .env."); }
+  const body = res.status === 204 ? null : await res.json().catch(() => null);
+  if (!res.ok) throw new Error(body?.detail || `Request failed (${res.status})`);
+  return body;
+}
+function askKey() { $("#keyInput").value = apiKey; $("#keyDialog").showModal(); }
+$("#keyDialog").addEventListener("close", () => {
+  if ($("#keyDialog").returnValue !== "save") return;
+  apiKey = $("#keyInput").value.trim();
+  try { localStorage.setItem("openring-key", apiKey); } catch {}
+  renderKey(); route();
+});
+$("#setKey").onclick = askKey;
+function renderKey() { $("#keyState").textContent = apiKey ? "saved" : "not set"; }
+
+const LLM = ["openai", "groq", "openrouter", "deepseek", "omniroute", "custom-llm"];
+const VOICES = [["kokoro", "Kokoro (free, local)"], ["11labs", "ElevenLabs"]];
+const ago = iso => iso ? new Date(iso).toLocaleString() : "";
+
+function pathChips(a) {
+  const t = a.transcriber || {}, m = a.model || {}, v = a.voice || {};
+  return `<div class="path"><span class="node">${esc(t.provider || "deepgram")} ${esc(t.language || "")}</span><span class="wire"></span><span class="node">${esc(m.model || "default model")}</span><span class="wire"></span><span class="node">${esc(v.provider || "kokoro")}</span></div>`;
+}
+
+async function viewAssistants() {
+  const items = await api("/assistant");
+  const v = $("#view");
+  v.innerHTML = `<div class="head"><div><h1>Assistants</h1><p>Each assistant answers calls with its own instructions, model and voice.</p></div><button class="btn" id="new">New assistant</button></div>
+    <div class="list">${items.length ? items.map(a => `<div class="row" tabindex="0" data-id="${a.id}"><div><div class="title">${esc(a.name || "Untitled")}</div><div class="sub">${esc(a.firstMessage || "No greeting")}</div></div>${pathChips(a)}<span class="sub">Edit</span></div>`).join("")
+      : `<div class="empty">No assistants yet. Create one to answer your first call.<br><button class="btn" id="new2">New assistant</button></div>`}</div>`;
+  v.querySelectorAll("#new, #new2").forEach(b => b.onclick = () => editAssistant(null));
+  v.querySelectorAll(".row").forEach(r => { r.onclick = () => editAssistant(items.find(a => a.id === r.dataset.id)); r.onkeydown = e => e.key === "Enter" && r.click(); });
+}
+
+function editAssistant(a) {
+  a = a || { model: { provider: "openai", model: "gpt-4.1-mini" }, voice: { provider: "kokoro", voiceId: "af_heart" }, transcriber: { provider: "deepgram", model: "nova-3", language: "multi" } };
+  const m = a.model || {}, vo = a.voice || {}, t = a.transcriber || {};
+  const system = (m.messages || []).find(x => x.role === "system")?.content || "";
+  const v = $("#view");
+  v.innerHTML = `<div class="head"><div><h1>${a.id ? esc(a.name || "Assistant") : "New assistant"}</h1><p>Follow the call from left to right: what the caller says is transcribed, answered by the model and spoken back.</p></div></div>
+  <form class="editor" id="f">
+    <div class="line-diagram">
+      <div class="stage caller"><h3>Caller</h3><span class="sub" style="color:var(--muted)">Phone line</span></div><div class="cable"></div>
+      <div class="stage"><h3>Transcriber</h3><label>Provider</label><select name="tp"><option>deepgram</option></select><label>Language</label><input name="tl" value="${esc(t.language || "multi")}" placeholder="pt-BR, en, multi"></div><div class="cable"></div>
+      <div class="stage"><h3>Model</h3><label>Provider</label><select name="mp">${LLM.map(p => `<option ${p === m.provider ? "selected" : ""}>${p}</option>`).join("")}</select><label>Model</label><input name="mm" value="${esc(m.model || "")}"></div><div class="cable"></div>
+      <div class="stage"><h3>Voice</h3><label>Provider</label><select name="vp">${VOICES.map(([k, l]) => `<option value="${k}" ${k === vo.provider || (k === "11labs" && vo.provider === "elevenlabs") ? "selected" : ""}>${l}</option>`).join("")}</select><label>Voice ID</label><input name="vv" value="${esc(vo.voiceId || "")}"></div>
+    </div>
+    <div class="field"><label for="name">Name</label><input id="name" name="name" required value="${esc(a.name || "")}" placeholder="Front desk"></div>
+    <div class="field"><label for="greet">Greeting</label><p class="hint">The first thing callers hear.</p><input id="greet" name="greet" value="${esc(a.firstMessage || "")}" placeholder="Hi! How can I help you today?"></div>
+    <div class="field"><label for="sys">Instructions</label><p class="hint">How the assistant should behave on the call.</p><textarea id="sys" name="sys" placeholder="You are a friendly receptionist...">${esc(system)}</textarea></div>
+    <div class="field"><label for="hook">Call report URL</label><p class="hint">Optional. We send the transcript here when a call ends.</p><input id="hook" name="hook" value="${esc((a.server || {}).url || "")}" placeholder="https://your-app.com/webhook"></div>
+    <div class="error" id="err" role="alert"></div>
+    <div class="actions">${a.id ? `<button type="button" class="btn danger" id="del">Delete assistant</button>` : ""}<span class="spacer"></span><button type="button" class="btn ghost" id="cancel">Cancel</button><button class="btn">${a.id ? "Save changes" : "Create assistant"}</button></div>
+  </form>`;
+  $("#cancel").onclick = () => go("assistants");
+  if (a.id) $("#del").onclick = async () => { if (confirm("Delete this assistant? Numbers using it will stop answering.")) { await api("/assistant/" + a.id, { method: "DELETE" }); go("assistants"); } };
+  $("#f").onsubmit = async e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const body = {
+      name: f.get("name"), firstMessage: f.get("greet") || undefined,
+      transcriber: { provider: f.get("tp"), model: "nova-3", language: f.get("tl") || "multi" },
+      model: { ...m, provider: f.get("mp"), model: f.get("mm"), messages: f.get("sys") ? [{ role: "system", content: f.get("sys") }] : [] },
+      voice: { provider: f.get("vp"), voiceId: f.get("vv") || undefined },
+      server: f.get("hook") ? { url: f.get("hook") } : undefined,
+    };
+    try { await api(a.id ? "/assistant/" + a.id : "/assistant", { method: a.id ? "PATCH" : "POST", body: JSON.stringify(body) }); go("assistants"); }
+    catch (err) { $("#err").textContent = err.message; }
+  };
+}
+
+async function viewNumbers() {
+  const [nums, assistants] = await Promise.all([api("/phone-number"), api("/assistant")]);
+  const name = id => assistants.find(a => a.id === id)?.name || "No assistant";
+  const v = $("#view");
+  v.innerHTML = `<div class="head"><div><h1>Phone numbers</h1><p>Point each Twilio number's voice webhook to <code>${esc(location.origin)}/twilio/voice</code>, then choose who answers it.</p></div></div>
+  <form class="editor" id="add" style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:16px">
+    <div class="field" style="margin:0;flex:1;min-width:180px"><label for="num">Number</label><input id="num" name="num" required placeholder="+15551234567"></div>
+    <div class="field" style="margin:0;flex:1;min-width:180px"><label for="as">Answered by</label><select id="as" name="as" style="width:100%;padding:9px;border:1px solid var(--line);border-radius:6px">${assistants.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join("")}</select></div>
+    <button class="btn">Add number</button>
+  </form>
+  <div class="error" id="err" role="alert"></div>
+  <div class="list">${nums.length ? nums.map(n => `<div class="row" style="cursor:default"><div class="title">${esc(n.number)}</div><div class="sub">Answered by ${esc(name(n.assistantId))}</div><button class="btn danger" data-del="${n.id}">Remove</button></div>`).join("")
+    : `<div class="empty">No numbers yet. Add your Twilio number above.</div>`}</div>`;
+  $("#add").onsubmit = async e => {
+    e.preventDefault(); const f = new FormData(e.target);
+    try { await api("/phone-number", { method: "POST", body: JSON.stringify({ number: f.get("num"), assistantId: f.get("as") }) }); viewNumbers(); }
+    catch (err) { $("#err").textContent = err.message; }
+  };
+  v.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => { await api("/phone-number/" + b.dataset.del, { method: "DELETE" }); viewNumbers(); });
+}
+
+async function viewCalls() {
+  const [calls, assistants] = await Promise.all([api("/call"), api("/assistant")]);
+  const name = id => assistants.find(a => a.id === id)?.name || "Deleted assistant";
+  const v = $("#view");
+  v.innerHTML = `<div class="head"><div><h1>Calls</h1><p>Every call with its transcript. Refresh to see new ones.</p></div><button class="btn ghost" id="refresh">Refresh</button></div>
+  <div class="list">${calls.length ? calls.map(c => `<div class="row" tabindex="0" data-id="${c.id}"><div><div class="title">${esc(c.customer?.number || "Unknown caller")}</div><div class="sub">${ago(c.createdAt)}</div></div><div class="sub">${esc(name(c.assistantId))}${c.durationSeconds ? ` · ${Math.round(c.durationSeconds)}s` : ""}</div><span class="status ${esc(c.status)}">${esc(c.status)}</span></div>`).join("")
+    : `<div class="empty">No calls yet. Call one of your numbers and it shows up here.</div>`}</div>`;
+  $("#refresh").onclick = viewCalls;
+  v.querySelectorAll(".row").forEach(r => { r.onclick = () => showCall(calls.find(c => c.id === r.dataset.id), name); r.onkeydown = e => e.key === "Enter" && r.click(); });
+}
+
+function showCall(c, name) {
+  const msgs = c.messages || [];
+  $("#view").innerHTML = `<div class="head"><div><h1>${esc(c.customer?.number || "Unknown caller")}</h1></div><button class="btn ghost" id="back">Back to calls</button></div>
+  <div class="editor"><div class="meta"><span>Assistant: ${esc(name(c.assistantId))}</span><span>Started: ${ago(c.startedAt || c.createdAt)}</span><span>Duration: ${c.durationSeconds ? Math.round(c.durationSeconds) + "s" : "—"}</span><span class="status ${esc(c.status)}">${esc(c.status)}</span></div>
+  ${c.endedReason ? `<p class="sub" style="color:var(--muted)">Ended: ${esc(c.endedReason)}</p>` : ""}
+  <div class="transcript">${msgs.length ? msgs.map(m => `<div class="bubble ${m.role === "user" ? "user" : "assistant"}">${esc(m.message)}</div>`).join("") : `<p style="color:var(--muted)">No transcript for this call.</p>`}</div></div>`;
+  $("#back").onclick = () => go("calls");
+}
+
+const views = { assistants: viewAssistants, numbers: viewNumbers, calls: viewCalls };
+function go(name) { location.hash = name; }
+async function route() {
+  const name = (location.hash.slice(1) || "assistants");
+  document.querySelectorAll(".rail nav button").forEach(b => b.dataset.view === name ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current"));
+  try { await (views[name] || viewAssistants)(); }
+  catch (err) { $("#view").innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
+}
+document.querySelectorAll(".rail nav button").forEach(b => b.onclick = () => go(b.dataset.view));
+window.addEventListener("hashchange", route);
+renderKey();
+if (!apiKey) askKey();
+route();
+</script>
+</body>
+</html>
