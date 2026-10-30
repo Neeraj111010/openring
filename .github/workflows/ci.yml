@@ -32,10 +32,9 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         python: ["3.11", "3.12", "3.13"]
-        # While the repository is private, Windows minutes count double and macOS ten times, so a plain
-        # push to main tests Linux only; pull requests, release tags and manual runs add Windows and macOS.
-        # Once the repository is public, Actions minutes are free: drop this condition.
-        include: ${{ fromJSON((github.event_name == 'push' && github.ref_type == 'branch') && '[]' || '[{"os":"windows-latest","python":"3.12"},{"os":"macos-latest","python":"3.12"}]') }}
+        # Every run tests Windows. macOS runners are often short and can queue for a long time, so a plain
+        # push to main skips macOS; pull requests, release tags and manual runs test it too.
+        include: ${{ fromJSON((github.event_name == 'push' && github.ref_type == 'branch') && '[{"os":"windows-latest","python":"3.12"}]' || '[{"os":"windows-latest","python":"3.12"},{"os":"macos-latest","python":"3.12"}]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
