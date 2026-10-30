@@ -210,6 +210,7 @@ async def run_call(
     from pipecat.observers.user_bot_latency_observer import MeasuredFrom, UserBotLatencyObserver
     from pipecat.pipeline.pipeline import Pipeline
     from pipecat.pipeline.runner import PipelineRunner
+    from pipecat.pipeline.service_switcher import ServiceSwitcher
     from pipecat.pipeline.task import PipelineParams, PipelineTask
     from pipecat.processors.aggregators.llm_context import LLMContext
     from pipecat.processors.aggregators.llm_response_universal import (
@@ -222,6 +223,7 @@ async def run_call(
     context = None
     turns: list[dict[str, int]] = []
     usage = Usage()
+    switches: list[dict[str, str]] = []  # providers that took over from one that failed
     first_word: dict[str, float | None] = {"connected": None, "spoke": None}
     outbox = server_messages.Outbox(plan.assistant, lambda: store.get("calls", call_id))
     # The setup runs inside the try as well, so the call record ends however the call does: a caller
@@ -229,7 +231,25 @@ async def run_call(
     try:
         # Loading a local voice model takes a moment; doing it off the event loop keeps other calls flowing.
         stt, llm, tts = await asyncio.to_thread(build_services, plan)
+        for warning in plan.warnings:
+            logger.warning("call {}: {}", call_id, warning)
         speech = {"speaking": False, "last_stop": 0.0}
+
+        def watch_fallback(layer: str, service: Any) -> None:
+            """Record each provider that takes over; a new model answers the turn the failed one dropped."""
+            if not isinstance(service, ServiceSwitcher):
+                return
+
+            @service.strategy.event_handler("on_service_switched")
+            async def _switched(_strategy, active):
+                to = getattr(active, "openring_label", active.name)
+                switches.append({"layer": layer, "to": to, "at": now_iso()})
+                logger.warning("call {}: {} failed over to {}", call_id, layer, to)
+                if layer == "model":
+                    await task.queue_frames([LLMRunFrame()])
+
+        for layer, service in (("transcriber", stt), ("model", llm), ("voice", tts)):
+            watch_fallback(layer, service)
 
         async def speak(text: str) -> None:
             await task.queue_frames([TTSSpeakFrame(text, append_to_context=False)])
@@ -364,6 +384,7 @@ async def run_call(
                 "messages": transcript,
                 "artifact": {"messages": transcript, "performanceMetrics": performance_metrics(turns, first_word_ms)},
                 "costBreakdown": usage.cost_breakdown(),
+                **({"providerFallbacks": switches} if switches else {}),
             },
         )
         if call:

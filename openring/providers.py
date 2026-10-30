@@ -243,6 +243,11 @@ class StackPlan:
     end_call_phrases: list[str] = field(default_factory=list)
     server_url: str | None = None
     assistant: dict[str, Any] = field(default_factory=dict)  # the saved document, for tools and webhooks
+    # Stacks to fall back to, per layer ("transcriber", "model", "voice"); each differs from this plan in
+    # that layer only. Fallbacks that can't be used (unknown provider, missing key) are left out, with
+    # the reason in `warnings`.
+    fallbacks: dict[str, list[StackPlan]] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
 
 
 def _require_key(env_name: str | None, what: str) -> None:
@@ -266,7 +271,28 @@ def _supported(table: dict[str, Any], extra: tuple[str, ...] = ()) -> list[str]:
     return sorted([*(k for k in table if k not in ALIASES), *extra])
 
 
-def resolve_plan(assistant: dict[str, Any], *, check_keys: bool = True) -> StackPlan:
+def fallback_layers(assistant: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """The assistant's fallback providers in Vapi's shape: `transcriber.fallbackPlan.transcribers`,
+    `voice.fallbackPlan.voices` and `model.fallbackModels`. A fallback model is a model name on the same
+    provider (as on Vapi) or, OpenRing's addition, a `{"provider", "model"}` object for another provider.
+    """
+    transcriber = assistant.get("transcriber") or {}
+    voice = assistant.get("voice") or {}
+    model = assistant.get("model") or {}
+    shared = {k: v for k, v in model.items() if k not in ("provider", "model", "url", "apiKey", "fallbackModels")}
+    models = []
+    for alt in model.get("fallbackModels") or []:
+        if isinstance(alt, str) and alt:
+            models.append({**model, "model": alt})
+        elif isinstance(alt, dict) and alt.get("model"):
+            models.append({**shared, **alt})
+    def listed(layer: dict[str, Any], key: str) -> list[dict[str, Any]]:
+        return [x for x in (layer.get("fallbackPlan") or {}).get(key) or [] if isinstance(x, dict)]
+
+    return {"transcriber": listed(transcriber, "transcribers"), "model": models, "voice": listed(voice, "voices")}
+
+
+def resolve_plan(assistant: dict[str, Any], *, check_keys: bool = True, with_fallbacks: bool = True) -> StackPlan:
     transcriber = _with_defaults(assistant.get("transcriber") or {}, DEFAULT_TRANSCRIBER, "deepgram")
     model = {**default_model(), **(assistant.get("model") or {})}
     voice = _with_defaults(assistant.get("voice") or {}, DEFAULT_VOICE, "kokoro")
@@ -311,7 +337,7 @@ def resolve_plan(assistant: dict[str, Any], *, check_keys: bool = True) -> Stack
         messages.insert(0, {"role": "system", "content": model["systemPrompt"]})
 
     server = assistant.get("server") or {}
-    return StackPlan(
+    plan = StackPlan(
         stt_provider=stt_provider,
         stt_model=transcriber.get("model"),
         stt_language=transcriber.get("language"),
@@ -331,6 +357,16 @@ def resolve_plan(assistant: dict[str, Any], *, check_keys: bool = True) -> Stack
         server_url=server.get("url") or assistant.get("serverUrl"),
         assistant=assistant,
     )
+    if with_fallbacks:
+        for layer, alternatives in fallback_layers(assistant).items():
+            for alt in alternatives:
+                try:
+                    fallback = resolve_plan({**assistant, layer: alt}, check_keys=check_keys, with_fallbacks=False)
+                except ProviderError as exc:
+                    plan.warnings.append(f"{layer} fallback '{alt.get('provider')}' skipped: {exc}")
+                    continue
+                plan.fallbacks.setdefault(layer, []).append(fallback)
+    return plan
 
 
 def _language(code: str | None):
@@ -457,17 +493,48 @@ def _llm_headers(provider: str) -> dict[str, str] | None:
 
 
 def build_services(plan: StackPlan):
-    """Instantiate Pipecat STT, LLM and TTS services for a call."""
+    """Instantiate Pipecat STT, LLM and TTS services for a call. A layer with fallbacks becomes one switcher
+    that runs the first provider and moves to the next when it fails (see `fallback.py`)."""
+    stt = _labeled(_build_stt(plan), "transcriber", plan)
+    llm = _labeled(_build_llm(plan), "model", plan)
+    tts = _labeled(_build_tts(plan), "voice", plan)
+    if not plan.fallbacks:
+        return stt, llm, tts
+    from . import fallback
+
+    layers = {"transcriber": (stt, _build_stt), "model": (llm, _build_llm), "voice": (tts, _build_tts)}
+    built = {}
+    for layer, (service, build) in layers.items():
+        alternatives = plan.fallbacks.get(layer) or []
+        services = [service, *(_labeled(build(alt), layer, alt) for alt in alternatives)]
+        built[layer] = fallback.switcher(services, llm=layer == "model") if alternatives else service
+    return built["transcriber"], built["model"], built["voice"]
+
+
+def label(layer: str, plan: StackPlan) -> str:
+    """How a provider shows up in the call record: 'deepgram nova-3', 'groq openai/gpt-oss-20b'."""
+    if layer == "transcriber":
+        return " ".join(x for x in (plan.stt_provider, plan.stt_model) if x)
+    if layer == "model":
+        return f"{plan.llm_provider} {plan.llm_model}"
+    return " ".join(x for x in (plan.tts_provider, plan.tts_voice) if x)
+
+
+def _labeled(service: Any, layer: str, plan: StackPlan) -> Any:
+    service.openring_label = label(layer, plan)
+    return service
+
+
+def _build_llm(plan: StackPlan):
     from pipecat.services.openai.llm import OpenAILLMService
 
     llm_settings: dict[str, Any] = {"model": plan.llm_model}
     if plan.temperature is not None:
         llm_settings["temperature"] = plan.temperature
     api_key = plan.llm_api_key or os.environ.get(plan.llm_api_key_env or "", "") or "not-needed"
-    llm = OpenAILLMService(
+    return OpenAILLMService(
         api_key=api_key,
         base_url=plan.llm_base_url,
         default_headers=_llm_headers(plan.llm_provider),
         settings=OpenAILLMService.Settings(**llm_settings),
     )
-    return _build_stt(plan), llm, _build_tts(plan)

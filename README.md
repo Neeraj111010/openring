@@ -84,7 +84,8 @@ affiliated with any of them.
 
 | Works today | Next |
 |---|---|
-| Browser test calls from the dashboard (WebRTC) | Automatic provider fallback and cost routing |
+| Browser test calls from the dashboard (WebRTC) | Switching when a provider gets slow; routing by cost |
+| Provider fallback in Vapi's format, across providers (**beta**) | |
 | Phone calls in and out through Twilio (**beta**: tell us how it goes) | Outbound calls through Telnyx; Plivo |
 | Incoming calls through Telnyx (**beta**, see [Telnyx](#telnyx-beta)) | |
 | Vapi-style `/assistant`, `/phone-number`, `/call` and `/tool` APIs | Cost per call in dollars |
@@ -202,6 +203,23 @@ with `server.headers` and `server.secret` (as `X-Vapi-Secret`):
 Pick which ones with `serverMessages`, as on Vapi. A phone number without an assistant but with its own
 `server.url` asks it on each incoming call (`assistant-request`) and uses the `assistantId` or the transient
 `assistant` it answers. `POST /call` also takes a transient `assistant` instead of an `assistantId`.
+
+### Provider fallback (beta)
+
+Same fields as Vapi. When a provider fails during a call in a way a retry won't fix (a rejected key, no
+credit left, the provider down), the next one in the list takes over for the rest of the call. Unlike Vapi,
+a fallback model can come from another provider:
+
+```json
+"transcriber": {"provider": "deepgram", "fallbackPlan": {"transcribers": [{"provider": "assembly-ai"}]}},
+"model": {"provider": "groq", "model": "openai/gpt-oss-20b",
+          "fallbackModels": ["openai/gpt-oss-120b", {"provider": "openai", "model": "gpt-4.1-mini"}]},
+"voice": {"provider": "cartesia", "voiceId": "YOUR_VOICE_ID",
+          "fallbackPlan": {"voices": [{"provider": "kokoro", "voiceId": "af_heart"}]}}
+```
+
+When the model switches, the new one answers the caller's last message, so the turn isn't lost. A fallback
+whose key is missing is skipped, and each switch is listed in the call's `providerFallbacks` and on its page.
 
 ### Telnyx (beta)
 

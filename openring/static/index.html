@@ -196,6 +196,8 @@ code.nowrap { white-space: nowrap; overflow-wrap: normal; }
 .tile.provider .head .sub { margin-top: 1px; line-height: 1.4; }
 .tile.provider .note { color: var(--muted); font-size: 13px; margin-top: -4px; }
 .tile.provider .note:empty { display: none; }
+.fallback-note { display: flex; align-items: center; gap: 8px; margin: -6px 0 14px; font-size: 13px; }
+.fallback-note svg.i { width: 15px; height: 15px; color: var(--warn); }
 .tile.provider .note.balance { color: var(--ink); font-variant-numeric: tabular-nums; }
 .tile.provider .note.balance.low { color: var(--warn); font-weight: 500; }
 .show-more { margin-top: 12px; }
@@ -800,6 +802,7 @@ async function viewCall(id) {
     ${card("Messages", "bot", num(msgs.filter(m => m.role === "user" || m.role === "assistant").length), "", msgs.some(m => m.role === "tool_calls") ? `${msgs.filter(m => m.role === "tool_calls").length} tool calls` : "")}
     ${card("Type", "phone", esc(TYPE[c.type] || c.type), "", c.endedReason ? esc(c.endedReason) : "")}
   </div>
+  ${(c.providerFallbacks || []).map(f => `<p class="muted fallback-note">${ICON.bolt}${esc(LAYER_NAMES[f.layer] || f.layer)} switched to <b>${esc(f.to)}</b> at ${esc(new Date(f.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }))}</p>`).join("")}
   <div class="toolbar">${tabs([["transcript", "Transcript"], ["latency", "Response time"], ["json", "JSON"]], callTab)}</div>
   <section class="panel"><div class="body">${panes[callTab]()}</div></section>`;
   v.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { callTab = b.dataset.tab; viewCall(id); });
@@ -807,6 +810,7 @@ async function viewCall(id) {
   if (c.status !== "ended") setTimeout(() => location.hash === "#calls/" + id && viewCall(id).catch(() => {}), 2000);
 }
 
+const LAYER_NAMES = { transcriber: "Speech to text", model: "Model", voice: "Voice" };
 const KINDS = [["transcriber", "Speech to text"], ["model", "Language models"], ["voice", "Voices"], ["telephony", "Telephony"]];
 let oauthError = "";  // why the last OpenRouter sign-in failed, shown once on the Providers page
 let providerNotice = null;  // { key, text }: a message for one card that survives the page redrawing

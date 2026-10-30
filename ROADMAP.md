@@ -5,8 +5,8 @@ something, or pick an item and say you're on it. Shipped work moves to the [chan
 
 ## Next (weeks after the first release)
 
-- **Automatic provider fallback.** When a speech, model or voice provider fails or slows down, switch
-  to the next one mid-call, and route by cost.
+- **Smarter provider fallback.** Fallback on failure is in (beta); next is switching when a provider gets
+  slow, and routing by cost.
 - **100% local, free stack.** Local speech-to-text (Whisper or Moonshine), models through Ollama and the
   Kokoro voice: no per-minute cost at all apart from telephony.
 - **Cost per call in dollars.** Calls already record their tokens, voice characters and transcribed

@@ -137,3 +137,43 @@ def test_openrouter_attribution_can_be_turned_off(keys, monkeypatch):
     monkeypatch.setenv("OPENRING_ATTRIBUTION", "false")
     _, llm, _ = build_services(resolve_plan(assistant(model={"provider": "openrouter", "model": "m"})))
     assert "X-Title" not in llm._client.default_headers
+
+
+def test_fallbacks_use_vapis_fields_and_resolve_each_layer(keys):
+    plan = resolve_plan(assistant(
+        transcriber={"provider": "deepgram", "fallbackPlan": {"transcribers": [{"provider": "assembly-ai"}]}},
+        model={"provider": "groq", "model": "openai/gpt-oss-20b", "temperature": 0.3,
+               "fallbackModels": ["openai/gpt-oss-120b", {"provider": "openai", "model": "gpt-4.1-mini"}]},
+        voice={"provider": "11labs", "voiceId": "v1",
+               "fallbackPlan": {"voices": [{"provider": "deepgram", "voiceId": "thalia"}, {"provider": "playht"}]}},
+    ))
+    assert [p.stt_provider for p in plan.fallbacks["transcriber"]] == ["assembly-ai"]
+    models = [(p.llm_provider, p.llm_model, p.temperature) for p in plan.fallbacks["model"]]
+    assert models == [("groq", "openai/gpt-oss-120b", 0.3), ("openai", "gpt-4.1-mini", 0.3)]
+    assert [p.tts_provider for p in plan.fallbacks["voice"]] == ["deepgram"]  # playht isn't supported: skipped
+    assert any("playht" in w for w in plan.warnings)
+    assert plan.fallbacks["model"][1].stt_provider == "deepgram"  # a fallback changes its own layer only
+    assert resolve_plan(assistant()).fallbacks == {}
+
+
+def test_a_fallback_without_its_key_is_skipped_not_fatal(keys, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY")
+    plan = resolve_plan(assistant(model={"provider": "groq", "model": "m",
+                                         "fallbackModels": [{"provider": "openai", "model": "gpt-4.1-mini"}]}))
+    assert "model" not in plan.fallbacks and "OPENAI_API_KEY" in plan.warnings[0]
+
+
+def test_layers_with_fallbacks_become_switchers_in_order(keys):
+    from pipecat.pipeline.llm_switcher import LLMSwitcher
+    from pipecat.pipeline.service_switcher import ServiceSwitcher
+
+    plan = resolve_plan(assistant(
+        model={"provider": "groq", "model": "openai/gpt-oss-20b",
+               "fallbackModels": [{"provider": "openai", "model": "x"}]},
+        voice={"provider": "11labs", "voiceId": "v1", "fallbackPlan": {"voices": [{"provider": "deepgram"}]}},
+    ))
+    stt, llm, tts = build_services(plan)
+    assert not isinstance(stt, ServiceSwitcher)  # no transcriber fallback: the plain service
+    assert isinstance(llm, LLMSwitcher)
+    assert [s.openring_label for s in llm.services] == ["groq openai/gpt-oss-20b", "openai x"]
+    assert isinstance(tts, ServiceSwitcher) and tts.strategy.active_service is tts.services[0]

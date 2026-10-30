@@ -83,7 +83,8 @@ empresa em outubro de 2026; confira antes de decidir. O OpenRing não tem víncu
 
 | Já funciona | Próximos passos |
 |---|---|
-| Teste no navegador pelo painel (WebRTC) | Troca automática de provedor e roteamento por custo |
+| Teste no navegador pelo painel (WebRTC) | Troca quando um provedor fica lento; roteamento por custo |
+| Provedor reserva no formato do Vapi, inclusive de outro provedor (**beta**) | |
 | Ligações recebidas e feitas pelo Twilio (**beta**: conte como foi) | Ligações de saída pela Telnyx; Plivo |
 | Ligações recebidas pela Telnyx (**beta**) | |
 | APIs `/assistant`, `/phone-number`, `/call` e `/tool` no formato do Vapi | Custo por ligação em dólares |
@@ -130,6 +131,15 @@ curl -X POST http://localhost:8000/assistant \
     "transcriber": {"provider": "deepgram", "model": "nova-3", "language": "pt-BR"}
   }'
 ```
+
+### Provedor reserva (beta)
+
+Mesmos campos do Vapi (`transcriber.fallbackPlan.transcribers`, `model.fallbackModels`,
+`voice.fallbackPlan.voices`). Se um provedor falha no meio da ligação de um jeito que tentar de novo não
+resolve (chave recusada, crédito acabado, provedor fora do ar), o próximo da lista assume até o fim. Diferente
+do Vapi, o modelo reserva pode ser de outro provedor: `"fallbackModels": [{"provider": "openai", "model":
+"gpt-4.1-mini"}]`. Quando o modelo troca, o novo responde a última fala de quem ligou. Exemplo completo no
+[README em inglês](README.md#provider-fallback-beta).
 
 ### Ligações por telefone
 

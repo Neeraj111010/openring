@@ -4,6 +4,17 @@ All notable changes to OpenRing are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Provider fallback (beta), in Vapi's fields: `transcriber.fallbackPlan.transcribers`, `model.fallbackModels`
+  and `voice.fallbackPlan.voices`. When a provider fails in a way a retry won't fix (a rejected key, no
+  credit, an outage, a rate limit), the next one takes over for the rest of the call. A fallback model can be
+  on another provider (`{"provider": "openai", "model": "gpt-4.1-mini"}`), and when the model switches the new
+  one answers the caller's last message. Each switch is recorded in the call's `providerFallbacks` and shown
+  on its page.
+
 ## [0.1.2] - 2026-10-30
 
 ### Added

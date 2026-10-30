@@ -42,6 +42,11 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
   int8 model (~120 MB with voices) in `~/.cache/pipecat/kokoro-onnx`: `warm_up()` at startup
   downloads it if missing (atomic `.part` rename) and loads it once; Pipecat's per-service model
   load is patched to share that instance. Calls refuse Kokoro with a progress message until ready.
+- Fallbacks (`openring/fallback.py`): Vapi's `transcriber.fallbackPlan.transcribers`, `model.fallbackModels`
+  (names, or `{provider, model}` for another provider) and `voice.fallbackPlan.voices` resolve into
+  `StackPlan.fallbacks`; `build_services` wraps a layer in Pipecat's `ServiceSwitcher`/`LLMSwitcher` with
+  the `Failover` strategy (switches on auth, quota, rate-limit, server and connectivity errors, never back).
+  A model switch queues an `LLMRunFrame` so the new model answers; switches land in `providerFallbacks`.
 - Groq's catalog changed in 2026: Llama 3.x is gone; use `openai/gpt-oss-20b` (fast) or
   `openai/gpt-oss-120b`. Groq's Cloudflare returns 403 to Python's default urllib User-Agent.
 - `openring/tools.py` Vapi tools: `function` (POSTs Vapi's `tool-calls` message to `tool.server.url` or the
