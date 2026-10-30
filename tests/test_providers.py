@@ -1,0 +1,124 @@
+"""Provider names are Vapi's: every one OpenRing claims resolves and builds its Pipecat service."""
+
+import pytest
+
+from openring.config import Settings
+from openring.providers import (
+    LLM_PROVIDERS,
+    STT_PROVIDERS,
+    TTS_PROVIDERS,
+    ProviderError,
+    build_services,
+    provider_status,
+    resolve_plan,
+)
+
+KEYS = {e for e in [*STT_PROVIDERS.values(), *TTS_PROVIDERS.values(), *(e for _, e in LLM_PROVIDERS.values())] if e}
+
+
+@pytest.fixture
+def keys(monkeypatch):
+    for env in KEYS:
+        monkeypatch.setenv(env, "fake")
+
+
+def assistant(transcriber=None, model=None, voice=None):
+    return {
+        "transcriber": transcriber or {"provider": "deepgram"},
+        "model": model or {"provider": "groq", "model": "openai/gpt-oss-20b"},
+        "voice": voice or {"provider": "11labs", "voiceId": "v1"},
+    }
+
+
+@pytest.mark.parametrize("name", ["openai", "anthropic", "google", "groq", "openrouter", "deepseek", "deep-seek", "xai",
+                                  "cerebras", "together-ai", "deepinfra", "perplexity-ai", "mistral", "fireworks",
+                                  "ollama", "omniroute"])
+def test_every_llm_provider_resolves_to_its_openai_compatible_api(keys, name):
+    plan = resolve_plan(assistant(model={"provider": name, "model": "m"}))
+    base_url, env = LLM_PROVIDERS[plan.llm_provider]
+    assert plan.llm_base_url == base_url and plan.llm_api_key_env == env
+    if name not in ("openai", "ollama", "omniroute"):
+        assert plan.llm_base_url.startswith("https://")
+
+
+def test_local_llms_need_no_key(monkeypatch):
+    for env in KEYS:
+        monkeypatch.delenv(env, raising=False)
+    for env in ("DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY"):
+        monkeypatch.setenv(env, "fake")
+    resolve_plan(assistant(model={"provider": "ollama", "model": "llama3.2"}))
+    with pytest.raises(ProviderError, match="ANTHROPIC_API_KEY"):
+        resolve_plan(assistant(model={"provider": "anthropic", "model": "claude-sonnet-4-5"}))
+
+
+STT_CLASSES = {
+    "deepgram": "DeepgramSTTService",
+    "assembly-ai": "AssemblyAISTTService",
+    "gladia": "GladiaSTTService",
+    "soniox": "SonioxSTTService",
+    "cartesia": "CartesiaSTTService",
+    "11labs": "ElevenLabsRealtimeSTTService",
+}
+TTS_CLASSES = {
+    "11labs": "ElevenLabsTTSService",
+    "cartesia": "CartesiaTTSService",
+    "deepgram": "DeepgramTTSService",
+    "openai": "OpenAITTSService",
+    "rime-ai": "RimeTTSService",
+    "neuphonic": "NeuphonicTTSService",
+    "smallest-ai": "SmallestTTSService",
+    "inworld": "InworldTTSService",
+}
+
+
+@pytest.mark.parametrize("name", sorted(STT_CLASSES))
+def test_every_transcriber_builds_its_service(keys, name):
+    stt, _, _ = build_services(resolve_plan(assistant(transcriber={"provider": name, "language": "pt-BR"})))
+    assert type(stt).__name__ == STT_CLASSES[name]
+
+
+@pytest.mark.parametrize("name", sorted(TTS_CLASSES))
+def test_every_voice_builds_its_service(keys, name):
+    _, _, tts = build_services(resolve_plan(assistant(voice={"provider": name, "voiceId": "voice-1"})))
+    assert type(tts).__name__ == TTS_CLASSES[name]
+
+
+def test_every_claimed_provider_is_tested():
+    assert set(STT_PROVIDERS) == set(STT_CLASSES)
+    assert set(TTS_PROVIDERS) - {"elevenlabs", "kokoro"} == set(TTS_CLASSES)  # kokoro has its own tests
+
+
+def test_defaults_belong_to_the_default_provider(keys):
+    plan = resolve_plan(assistant(transcriber={"provider": "assembly-ai"}, voice={"provider": "cartesia"}))
+    assert plan.stt_model is None  # not Deepgram's nova-3
+    assert plan.tts_voice is None  # not Kokoro's af_heart
+    plan = resolve_plan({"model": {"provider": "groq", "model": "m"}})
+    assert (plan.stt_provider, plan.stt_model, plan.tts_provider, plan.tts_voice) == (
+        "deepgram", "nova-3", "kokoro", "af_heart")
+
+
+def test_vapi_deepgram_voice_names_become_deepgrams(keys):
+    from openring.providers import _deepgram_voice
+
+    assert _deepgram_voice("thalia", None) == "aura-2-thalia-en"
+    assert _deepgram_voice("asteria", "aura") == "aura-asteria-en"
+    assert _deepgram_voice("aura-2-luna-en", None) == "aura-2-luna-en"
+    assert _deepgram_voice(None, None) == "aura-2-thalia-en"
+
+
+def test_unknown_provider_lists_the_supported_ones(keys):
+    with pytest.raises(ProviderError) as err:
+        resolve_plan(assistant(voice={"provider": "playht", "voiceId": "x"}))
+    assert "cartesia" in str(err.value) and "elevenlabs'" not in str(err.value)  # aliases are not listed
+
+
+def test_provider_status_lists_each_provider_once(keys):
+    rows = provider_status(Settings(db_path=":memory:"))
+    ids = [r["id"] for r in rows]
+    pairs = [(r["kind"], r["id"]) for r in rows]  # Deepgram transcribes and speaks: one row per job
+    assert len(pairs) == len(set(pairs))
+    assert {"anthropic", "assembly-ai", "cartesia", "rime-ai", "ollama", "twilio"} <= set(ids)
+    assert "elevenlabs" not in ids and "deep-seek" not in ids
+    by_id = {r["id"]: r for r in rows}
+    assert by_id["ollama"]["ready"] is None and by_id["anthropic"]["ready"] is True
+    assert {r["kind"] for r in rows} == {"transcriber", "model", "voice", "telephony"}

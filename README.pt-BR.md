@@ -15,7 +15,7 @@ assistentes do Vapi: migrar é praticamente trocar a URL.
 | Ligações recebidas e feitas (`POST /call`) pelo Twilio | |
 | Teste no navegador pelo painel (WebRTC, sem precisar de número) | |
 | APIs `/assistant`, `/phone-number` e `/call` no formato do Vapi | Telnyx, Plivo, Vonage |
-| Transcrição Deepgram; qualquer modelo compatível com OpenAI; voz ElevenLabs ou Kokoro (grátis, local) | Fallback e roteamento por custo entre provedores |
+| Nomes de provedores do Vapi: 16 modelos, 6 transcrições, 9 vozes (incl. Kokoro e Ollama, locais e grátis) | Fallback e roteamento por custo entre provedores |
 | `firstMessage`, `endCallPhrases` e webhook `end-of-call-report` | Modo agência (multi-cliente, white-label) |
 | Ferramentas no formato do Vapi: `function` (seu servidor recebe `tool-calls`), `endCall`, `transferCall`, API `/tool` | Mais tipos de ferramenta (DTMF, base de conhecimento) |
 
@@ -101,6 +101,20 @@ termina de falar. Exemplo completo no [README em inglês](README.md#tools).
 | Modelo | `"provider": "omniroute"` (gateway local grátis) ou `"provider": "groq"` |
 | Voz | `"provider": "kokoro"`, roda local na CPU, sem chave |
 | Telefonia | Crédito de teste do Twilio |
+
+## Provedores
+
+Os nomes são os mesmos do Vapi: o JSON de um assistente passa de um para o outro sem mudança. Cada
+provedor precisa da chave dele no `~/.openring/.env` (ou conectada pela página Providers do painel).
+
+- **Modelo:** `openai`, `anthropic`, `google` (Gemini), `groq`, `openrouter`, `deepseek`, `xai`, `cerebras`,
+  `together-ai`, `deepinfra`, `perplexity-ai`, `mistral`, `fireworks`; locais e sem chave: `ollama`,
+  `omniroute` ou `custom-llm` com `model.url`.
+- **Transcrição:** `deepgram`, `assembly-ai`, `gladia`, `soniox`, `cartesia`, `11labs`.
+- **Voz:** `11labs`, `cartesia`, `deepgram` (Aura), `openai`, `rime-ai`, `neuphonic`, `smallest-ai`,
+  `inworld`; local e grátis: `kokoro`.
+
+Quem já tem chave do Deepgram tem uma voz rápida na nuvem: `{"provider": "deepgram", "voiceId": "thalia"}`.
 
 ## Desenvolvimento
 

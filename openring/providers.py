@@ -19,19 +19,66 @@ class ProviderError(ValueError):
     """Raised when an assistant asks for a provider we cannot build."""
 
 
-# OpenAI-compatible LLM providers: name -> (base_url, api key env var).
+# Provider names are Vapi's, so an assistant exported from Vapi keeps working; a few extras follow.
+#
+# LLMs, all reached through their OpenAI-compatible API: name -> (base_url, api key env var).
 # Anything that speaks the OpenAI chat API can be added here in one line.
-LLM_PROVIDERS: dict[str, tuple[str | None, str]] = {
+LLM_PROVIDERS: dict[str, tuple[str | None, str | None]] = {
     "openai": (None, "OPENAI_API_KEY"),
+    "anthropic": ("https://api.anthropic.com/v1/", "ANTHROPIC_API_KEY"),
+    "google": ("https://generativelanguage.googleapis.com/v1beta/openai/", "GOOGLE_API_KEY"),  # Gemini
     "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
     "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "deepseek": ("https://api.deepseek.com/v1", "DEEPSEEK_API_KEY"),
+    "xai": ("https://api.x.ai/v1", "XAI_API_KEY"),
+    "cerebras": ("https://api.cerebras.ai/v1", "CEREBRAS_API_KEY"),
+    "together-ai": ("https://api.together.xyz/v1", "TOGETHER_API_KEY"),
+    "deepinfra": ("https://api.deepinfra.com/v1/openai", "DEEPINFRA_API_KEY"),
+    "perplexity-ai": ("https://api.perplexity.ai", "PERPLEXITY_API_KEY"),
+    "mistral": ("https://api.mistral.ai/v1", "MISTRAL_API_KEY"),
+    "fireworks": ("https://api.fireworks.ai/inference/v1", "FIREWORKS_API_KEY"),
+    # Local servers that need no key.
+    "ollama": (os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1"), None),
     # OmniRoute: free local gateway to 150+ free model providers.
     "omniroute": (os.environ.get("OMNIROUTE_BASE_URL", "http://localhost:20128/v1"), "OMNIROUTE_API_KEY"),
 }
-STT_PROVIDERS = {"deepgram": "DEEPGRAM_API_KEY"}
-# "11labs" is the provider name Vapi uses for ElevenLabs.
-TTS_PROVIDERS = {"elevenlabs": "ELEVENLABS_API_KEY", "11labs": "ELEVENLABS_API_KEY", "kokoro": None}
+LOCAL_LLMS = {"ollama", "omniroute"}  # they run without a key
+STT_PROVIDERS = {
+    "deepgram": "DEEPGRAM_API_KEY",
+    "assembly-ai": "ASSEMBLYAI_API_KEY",
+    "gladia": "GLADIA_API_KEY",
+    "soniox": "SONIOX_API_KEY",
+    "cartesia": "CARTESIA_API_KEY",
+    "11labs": "ELEVENLABS_API_KEY",
+}
+TTS_PROVIDERS = {
+    "11labs": "ELEVENLABS_API_KEY",
+    "elevenlabs": "ELEVENLABS_API_KEY",
+    "kokoro": None,
+    "cartesia": "CARTESIA_API_KEY",
+    "deepgram": "DEEPGRAM_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "rime-ai": "RIME_API_KEY",
+    "neuphonic": "NEUPHONIC_API_KEY",
+    "smallest-ai": "SMALLEST_API_KEY",
+    "inworld": "INWORLD_API_KEY",
+}
+# Other spellings of the same provider.
+ALIASES = {"deep-seek": "deepseek", "elevenlabs": "11labs", "gemini": "google", "assemblyai": "assembly-ai",
+           "rime": "rime-ai", "smallest": "smallest-ai", "together": "together-ai", "perplexity": "perplexity-ai"}
+PROVIDER_NAMES = {
+    "openai": "OpenAI", "anthropic": "Anthropic", "google": "Google Gemini", "groq": "Groq", "openrouter": "OpenRouter",
+    "deepseek": "DeepSeek", "xai": "xAI Grok", "cerebras": "Cerebras", "together-ai": "Together AI",
+    "deepinfra": "DeepInfra", "perplexity-ai": "Perplexity", "mistral": "Mistral", "fireworks": "Fireworks AI",
+    "ollama": "Ollama", "omniroute": "OmniRoute", "deepgram": "Deepgram", "assembly-ai": "AssemblyAI",
+    "gladia": "Gladia", "soniox": "Soniox", "cartesia": "Cartesia", "11labs": "ElevenLabs", "kokoro": "Kokoro",
+    "rime-ai": "Rime", "neuphonic": "Neuphonic", "smallest-ai": "Smallest AI", "inworld": "Inworld",
+}
+
+
+def _canonical(name: Any) -> str:
+    name = str(name or "").lower()
+    return ALIASES.get(name, name)
 
 DEFAULT_TRANSCRIBER = {"provider": "deepgram", "model": "nova-3", "language": "multi"}
 DEFAULT_VOICE = {"provider": "kokoro", "voiceId": "af_heart"}
@@ -133,20 +180,21 @@ def kokoro_status() -> str:
 
 def provider_status(settings: Any) -> list[dict[str, Any]]:
     """Each provider the dashboard lists, and whether it is ready to use. Keys are never returned."""
-    def has(env: str) -> bool:
-        return bool(os.environ.get(env, "").strip())
+    def has(env: str | None) -> bool:
+        return bool(env and os.environ.get(env, "").strip())
 
-    rows = [{"id": "deepgram", "name": "Deepgram", "kind": "transcriber", "env": "DEEPGRAM_API_KEY",
-             "ready": has("DEEPGRAM_API_KEY")}]
-    names = {"openai": "OpenAI", "groq": "Groq", "openrouter": "OpenRouter", "deepseek": "DeepSeek",
-             "omniroute": "OmniRoute"}
+    rows = [{"id": pid, "name": PROVIDER_NAMES.get(pid, pid), "kind": "transcriber", "env": env, "ready": has(env)}
+            for pid, env in STT_PROVIDERS.items()]
     for pid, (base_url, env) in LLM_PROVIDERS.items():
-        row = {"id": pid, "name": names.get(pid, pid), "kind": "model", "env": env, "ready": has(env)}
-        if pid == "omniroute":  # a local gateway that works without a key, when it is running
-            row.update(env=None, free=True, ready=None, note=f"Works while OmniRoute runs at {base_url}")
+        row = {"id": pid, "name": PROVIDER_NAMES.get(pid, pid), "kind": "model", "env": env, "ready": has(env)}
+        if pid in LOCAL_LLMS:  # a local server that works without a key, when it is running
+            row.update(env=None, free=True, ready=None,
+                       note=f"Works while {PROVIDER_NAMES[pid]} runs at {base_url}")
         rows.append(row)
-    rows.append({"id": "11labs", "name": "ElevenLabs", "kind": "voice", "env": "ELEVENLABS_API_KEY",
-                 "ready": has("ELEVENLABS_API_KEY")})
+    for pid, env in TTS_PROVIDERS.items():
+        if env and pid not in ALIASES:
+            rows.append({"id": pid, "name": PROVIDER_NAMES.get(pid, pid), "kind": "voice", "env": env,
+                         "ready": has(env)})
     kokoro = {"id": "kokoro", "name": "Kokoro", "kind": "voice", "env": None, "free": True,
               "ready": kokoro_installed() and kokoro_ready()}
     if not kokoro_installed():
@@ -197,16 +245,30 @@ def _require_key(env_name: str | None, what: str) -> None:
         raise ProviderError(f"{what} needs the {env_name}{hint}")
 
 
+def _with_defaults(given: dict[str, Any], defaults: dict[str, Any], default_provider: str) -> dict[str, Any]:
+    """Fill in the defaults, but only use the default model or voice with the default provider."""
+    merged = {**defaults, **given}
+    if _canonical(merged.get("provider")) != default_provider:
+        for key in ("model", "voiceId"):
+            if key not in given:
+                merged.pop(key, None)
+    return merged
+
+
+def _supported(table: dict[str, Any], extra: tuple[str, ...] = ()) -> list[str]:
+    return sorted([*(k for k in table if k not in ALIASES), *extra])
+
+
 def resolve_plan(assistant: dict[str, Any], *, check_keys: bool = True) -> StackPlan:
-    transcriber = {**DEFAULT_TRANSCRIBER, **(assistant.get("transcriber") or {})}
+    transcriber = _with_defaults(assistant.get("transcriber") or {}, DEFAULT_TRANSCRIBER, "deepgram")
     model = {**default_model(), **(assistant.get("model") or {})}
-    voice = {**DEFAULT_VOICE, **(assistant.get("voice") or {})}
+    voice = _with_defaults(assistant.get("voice") or {}, DEFAULT_VOICE, "kokoro")
 
-    stt_provider = str(transcriber["provider"]).lower()
+    stt_provider = _canonical(transcriber["provider"])
     if stt_provider not in STT_PROVIDERS:
-        raise ProviderError(f"transcriber provider '{stt_provider}' not supported yet: {sorted(STT_PROVIDERS)}")
+        raise ProviderError(f"transcriber provider '{stt_provider}' not supported yet: {_supported(STT_PROVIDERS)}")
 
-    llm_provider = str(model["provider"]).lower()
+    llm_provider = _canonical(model["provider"])
     llm_api_key = None
     if llm_provider == "custom-llm":
         base_url = model.get("url")
@@ -218,16 +280,16 @@ def resolve_plan(assistant: dict[str, Any], *, check_keys: bool = True) -> Stack
         base_url, key_env = LLM_PROVIDERS[llm_provider]
     else:
         raise ProviderError(
-            f"model provider '{llm_provider}' not supported yet: {sorted([*LLM_PROVIDERS, 'custom-llm'])}"
+            f"model provider '{llm_provider}' not supported yet: {_supported(LLM_PROVIDERS, ('custom-llm',))}"
         )
 
-    tts_provider = str(voice["provider"]).lower()
+    tts_provider = _canonical(voice["provider"])
     if tts_provider not in TTS_PROVIDERS:
-        raise ProviderError(f"voice provider '{tts_provider}' not supported yet: {sorted(TTS_PROVIDERS)}")
+        raise ProviderError(f"voice provider '{tts_provider}' not supported yet: {_supported(TTS_PROVIDERS)}")
 
     if check_keys:
         _require_key(STT_PROVIDERS[stt_provider], f"transcriber '{stt_provider}'")
-        if llm_provider != "omniroute":  # a local OmniRoute may run without a key
+        if llm_provider not in LOCAL_LLMS:  # local servers may run without a key
             _require_key(key_env, f"model provider '{llm_provider}'")
         _require_key(TTS_PROVIDERS[tts_provider], f"voice provider '{tts_provider}'")
         if tts_provider == "kokoro" and not kokoro_ready():
@@ -275,39 +337,74 @@ def _language(code: str | None):
         return code
 
 
-def build_services(plan: StackPlan):
-    """Instantiate Pipecat STT, LLM and TTS services for a call."""
-    from pipecat.services.deepgram.stt import DeepgramSTTService
-    from pipecat.services.openai.llm import OpenAILLMService
+# Speech-to-text services by provider: (module, class). Each takes api_key and Settings(model, language).
+STT_SERVICES = {
+    "assembly-ai": ("pipecat.services.assemblyai.stt", "AssemblyAISTTService"),
+    "gladia": ("pipecat.services.gladia.stt", "GladiaSTTService"),
+    "soniox": ("pipecat.services.soniox.stt", "SonioxSTTService"),
+    "cartesia": ("pipecat.services.cartesia.stt", "CartesiaSTTService"),
+    "11labs": ("pipecat.services.elevenlabs.stt", "ElevenLabsRealtimeSTTService"),
+}
+# Text-to-speech services by provider: (module, class, whether it takes the call's language).
+TTS_SERVICES = {
+    "cartesia": ("pipecat.services.cartesia.tts", "CartesiaTTSService", True),
+    "deepgram": ("pipecat.services.deepgram.tts", "DeepgramTTSService", False),
+    "openai": ("pipecat.services.openai.tts", "OpenAITTSService", False),
+    "rime-ai": ("pipecat.services.rime.tts", "RimeTTSService", True),
+    "neuphonic": ("pipecat.services.neuphonic.tts", "NeuphonicTTSService", True),
+    "smallest-ai": ("pipecat.services.smallest.tts", "SmallestTTSService", True),
+    "inworld": ("pipecat.services.inworld.tts", "InworldTTSService", True),
+}
+DEFAULT_VOICES = {"openai": "alloy", "deepgram": "aura-2-thalia-en"}
 
-    stt = DeepgramSTTService(
-        api_key=os.environ.get("DEEPGRAM_API_KEY", ""),
-        settings=DeepgramSTTService.Settings(
-            model=plan.stt_model or "nova-3", language=_language(plan.stt_language)
-        ),
-    )
 
-    llm_settings: dict[str, Any] = {"model": plan.llm_model}
-    if plan.temperature is not None:
-        llm_settings["temperature"] = plan.temperature
-    api_key = plan.llm_api_key or os.environ.get(plan.llm_api_key_env or "", "") or "not-needed"
-    llm = OpenAILLMService(
-        api_key=api_key,
-        base_url=plan.llm_base_url,
-        settings=OpenAILLMService.Settings(**llm_settings),
-    )
+def _service_class(module: str, name: str, provider: str):
+    import importlib
 
+    try:
+        return getattr(importlib.import_module(module), name)
+    except ImportError as exc:  # an optional dependency of that provider
+        raise ProviderError(f"provider '{provider}' needs an extra package: {exc}") from exc
+
+
+def _build_stt(plan: StackPlan):
+    lang = _language(plan.stt_language)
+    if plan.stt_provider == "deepgram":
+        from pipecat.services.deepgram.stt import DeepgramSTTService
+
+        return DeepgramSTTService(
+            api_key=os.environ.get("DEEPGRAM_API_KEY", ""),
+            settings=DeepgramSTTService.Settings(model=plan.stt_model or "nova-3", language=lang),
+        )
+    service = _service_class(*STT_SERVICES[plan.stt_provider], plan.stt_provider)
+    settings: dict[str, Any] = {}
+    if plan.stt_model:
+        settings["model"] = plan.stt_model
+    if lang and lang != "multi":  # without a language, these services detect it
+        settings["language"] = lang
+    return service(api_key=os.environ.get(STT_PROVIDERS[plan.stt_provider] or "", ""),
+                   settings=service.Settings(**settings))
+
+
+def _deepgram_voice(voice: str | None, model: str | None) -> str:
+    """Deepgram names a voice with its model and language ('aura-2-thalia-en'); Vapi uses the short name."""
+    if not voice:
+        return DEFAULT_VOICES["deepgram"]
+    return voice if voice.startswith("aura") else f"{model or 'aura-2'}-{voice}-en"
+
+
+def _build_tts(plan: StackPlan):
     if plan.tts_provider == "elevenlabs":
         from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 
         tts_settings: dict[str, Any] = {"voice": plan.tts_voice}
         if plan.tts_model:
             tts_settings["model"] = plan.tts_model
-        tts = ElevenLabsTTSService(
+        return ElevenLabsTTSService(
             api_key=os.environ.get("ELEVENLABS_API_KEY", ""),
             settings=ElevenLabsTTSService.Settings(**tts_settings),
         )
-    else:  # kokoro: free, runs locally on CPU
+    if plan.tts_provider == "kokoro":  # free, runs locally on CPU
         try:
             import pipecat.services.kokoro.tts as kokoro_tts
             from pipecat.services.kokoro.tts import KokoroTTSService
@@ -322,10 +419,40 @@ def build_services(plan: StackPlan):
         if lang and lang != "multi":
             kokoro_settings["language"] = lang
         model_path, voices_path = (str(KOKORO_DIR / name) for name in KOKORO_FILES)
-        tts = KokoroTTSService(
+        return KokoroTTSService(
             model_path=model_path,
             voices_path=voices_path,
             settings=KokoroTTSService.Settings(**kokoro_settings),
         )
 
-    return stt, llm, tts
+    module, name, takes_language = TTS_SERVICES[plan.tts_provider]
+    service = _service_class(module, name, plan.tts_provider)
+    settings: dict[str, Any] = {}
+    if plan.tts_provider == "deepgram":
+        settings["voice"] = _deepgram_voice(plan.tts_voice, plan.tts_model)
+    else:
+        if plan.tts_voice or plan.tts_provider in DEFAULT_VOICES:
+            settings["voice"] = plan.tts_voice or DEFAULT_VOICES[plan.tts_provider]
+        if plan.tts_model:
+            settings["model"] = plan.tts_model
+    lang = _language(plan.tts_language)
+    if takes_language and lang and lang != "multi":
+        settings["language"] = lang
+    return service(api_key=os.environ.get(TTS_PROVIDERS[plan.tts_provider] or "", ""),
+                   settings=service.Settings(**settings))
+
+
+def build_services(plan: StackPlan):
+    """Instantiate Pipecat STT, LLM and TTS services for a call."""
+    from pipecat.services.openai.llm import OpenAILLMService
+
+    llm_settings: dict[str, Any] = {"model": plan.llm_model}
+    if plan.temperature is not None:
+        llm_settings["temperature"] = plan.temperature
+    api_key = plan.llm_api_key or os.environ.get(plan.llm_api_key_env or "", "") or "not-needed"
+    llm = OpenAILLMService(
+        api_key=api_key,
+        base_url=plan.llm_base_url,
+        settings=OpenAILLMService.Settings(**llm_settings),
+    )
+    return _build_stt(plan), llm, _build_tts(plan)

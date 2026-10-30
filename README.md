@@ -19,7 +19,7 @@ mostly a base-URL change.
 | Browser test calls from the dashboard (WebRTC, no phone number needed) | Provider fallback and cost routing |
 | Vapi-style `/assistant`, `/phone-number`, `/call`, `/tool` APIs | More tool types (DTMF, knowledge base) |
 | Vapi tools: `function` (your server gets `tool-calls`), `endCall`, `transferCall` | |
-| Deepgram STT; any OpenAI-compatible LLM; ElevenLabs or Kokoro (free, local) TTS | Agency mode (multi-client, white-label) |
+| Vapi's provider names: 16 LLMs, 6 transcribers, 9 voices (incl. free local Kokoro, Ollama) | Agency mode (multi-client, white-label) |
 | `firstMessage`, `endCallPhrases`, `end-of-call-report` webhook, per-turn latency | |
 
 ## Quick start
@@ -136,10 +136,19 @@ transcript.
 
 ## Providers
 
-- **LLM:** `openai`, `groq`, `openrouter`, `deepseek`, `omniroute`, or `custom-llm` with `model.url`
-  pointing at any OpenAI-compatible endpoint.
-- **Transcriber:** `deepgram` (use `"language": "multi"` for multilingual calls).
-- **Voice:** `11labs` / `elevenlabs`, `kokoro`.
+Provider names are Vapi's, so an assistant JSON moves between the two unchanged. Each needs its key in
+`~/.openring/.env` (or connect it from the dashboard's Providers page).
+
+| Layer | `provider` values | Key |
+|---|---|---|
+| LLM | `openai`, `anthropic`, `google` (Gemini), `groq`, `openrouter`, `deepseek` / `deep-seek`, `xai`, `cerebras`, `together-ai`, `deepinfra`, `perplexity-ai`, `mistral`, `fireworks` | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`, ... (the provider's name) |
+| LLM, local | `ollama`, `omniroute`, or `custom-llm` with `model.url` (any OpenAI-compatible endpoint) | none |
+| Transcriber | `deepgram`, `assembly-ai`, `gladia`, `soniox`, `cartesia`, `11labs` | `DEEPGRAM_API_KEY`, `ASSEMBLYAI_API_KEY`, `GLADIA_API_KEY`, `SONIOX_API_KEY`, `CARTESIA_API_KEY`, `ELEVENLABS_API_KEY` |
+| Voice | `11labs` / `elevenlabs`, `cartesia`, `deepgram` (Aura), `openai`, `rime-ai`, `neuphonic`, `smallest-ai`, `inworld` | the provider's key (`RIME_API_KEY`, `NEUPHONIC_API_KEY`, `SMALLEST_API_KEY`, `INWORLD_API_KEY`, ...) |
+| Voice, local | `kokoro` (free, runs on CPU) | none |
+
+Use `"language": "multi"` on Deepgram for multilingual calls. With a Deepgram key you already have a fast
+cloud voice: `{"provider": "deepgram", "voiceId": "thalia"}`.
 
 ## Development
 

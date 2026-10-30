@@ -566,10 +566,15 @@ function openImport() {
   };
 }
 
-const LLM = ["openai", "groq", "openrouter", "deepseek", "omniroute", "custom-llm"];
+// Provider names are Vapi's, so assistants move between the two unchanged.
+const LLM = ["openai", "anthropic", "google", "groq", "openrouter", "deepseek", "xai", "cerebras", "together-ai", "deepinfra", "perplexity-ai", "mistral", "fireworks", "ollama", "omniroute", "custom-llm"];
 // A model each provider actually serves, filled in when the provider changes.
-const SUGGESTED_MODEL = { openai: "gpt-4.1-mini", groq: "openai/gpt-oss-20b", openrouter: "openai/gpt-4.1-mini", deepseek: "deepseek-chat", omniroute: "auto", "custom-llm": "" };
-const VOICES = [["kokoro", "Kokoro (free, local)"], ["11labs", "ElevenLabs"]];
+const SUGGESTED_MODEL = { openai: "gpt-4.1-mini", anthropic: "claude-haiku-5-5", groq: "openai/gpt-oss-20b", openrouter: "openai/gpt-4.1-mini", deepseek: "deepseek-chat", mistral: "mistral-small-latest", "perplexity-ai": "sonar", ollama: "llama3.2", omniroute: "auto", "custom-llm": "" };
+const TRANSCRIBERS = [["deepgram", "Deepgram"], ["assembly-ai", "AssemblyAI"], ["gladia", "Gladia"], ["soniox", "Soniox"], ["cartesia", "Cartesia"], ["11labs", "ElevenLabs"]];
+const VOICES = [["kokoro", "Kokoro (free, local)"], ["11labs", "ElevenLabs"], ["cartesia", "Cartesia"], ["deepgram", "Deepgram Aura"], ["openai", "OpenAI"], ["rime-ai", "Rime"], ["neuphonic", "Neuphonic"], ["smallest-ai", "Smallest AI"], ["inworld", "Inworld"]];
+// A voice each provider has, filled in when the provider changes; the others need a voice ID from their library.
+const SUGGESTED_VOICE = { kokoro: "af_heart", deepgram: "thalia", openai: "alloy" };
+const option = (value, label, current) => `<option value="${esc(value)}" ${value === current ? "selected" : ""}>${esc(label)}</option>`;
 const NEW_ASSISTANT = { model: { provider: "openai", model: "gpt-4.1-mini" }, voice: { provider: "kokoro", voiceId: "af_heart" }, transcriber: { provider: "deepgram", model: "nova-3", language: "multi" } };
 
 async function viewAssistant(id) {
@@ -606,9 +611,9 @@ async function viewAssistant(id) {
     pane.innerHTML = `<form id="f">
     <div class="line-diagram">
       <div class="stage caller"><h3>Caller</h3><span class="muted" style="font-size:12.5px">Phone or browser</span></div><div class="cable"></div>
-      <div class="stage"><h3>Transcriber</h3><label>Provider</label><select name="tp"><option>deepgram</option></select><label>Language</label><input name="tl" value="${esc(t.language || "multi")}" placeholder="pt-BR, en, multi"></div><div class="cable"></div>
-      <div class="stage"><h3>Model</h3><label>Provider</label><select name="mp">${LLM.map(p => `<option ${p === m.provider ? "selected" : ""}>${p}</option>`).join("")}</select><label>Model</label><input name="mm" value="${esc(m.model || "")}"></div><div class="cable"></div>
-      <div class="stage"><h3>Voice</h3><label>Provider</label><select name="vp">${VOICES.map(([k, l]) => `<option value="${k}" ${k === vo.provider || (k === "11labs" && vo.provider === "elevenlabs") ? "selected" : ""}>${l}</option>`).join("")}</select><label>Voice ID</label><input name="vv" value="${esc(vo.voiceId || "")}"></div>
+      <div class="stage"><h3>Transcriber</h3><label>Provider</label><select name="tp">${TRANSCRIBERS.map(([k, l]) => option(k, l, t.provider === "assemblyai" ? "assembly-ai" : t.provider || "deepgram")).join("")}</select><label>Language</label><input name="tl" value="${esc(t.language || "multi")}" placeholder="pt-BR, en, multi"></div><div class="cable"></div>
+      <div class="stage"><h3>Model</h3><label>Provider</label><select name="mp">${LLM.map(p => option(p, p, m.provider === "deep-seek" ? "deepseek" : m.provider)).join("")}</select><label>Model</label><input name="mm" value="${esc(m.model || "")}"></div><div class="cable"></div>
+      <div class="stage"><h3>Voice</h3><label>Provider</label><select name="vp">${VOICES.map(([k, l]) => option(k, l, vo.provider === "elevenlabs" ? "11labs" : vo.provider || "kokoro")).join("")}</select><label>Voice ID</label><input name="vv" value="${esc(vo.voiceId || "")}"></div>
     </div>
     <div class="field" style="margin-top:22px"><label for="name">Name</label><input id="name" name="name" required value="${esc(a.name || "")}" placeholder="Front desk"></div>
     <div class="field"><label for="greet">Greeting</label><p class="hint">The first thing callers hear.</p><input id="greet" name="greet" value="${esc(a.firstMessage || "")}" placeholder="Hi! How can I help you today?"></div>
@@ -617,14 +622,17 @@ async function viewAssistant(id) {
     ${footer}</form>`;
     const mp = $("[name=mp]"), mm = $("[name=mm]");
     mp.onchange = () => { if (!mm.value || Object.values(SUGGESTED_MODEL).includes(mm.value)) mm.value = SUGGESTED_MODEL[mp.value] ?? ""; };
+    const vp = $("[name=vp]"), vv = $("[name=vv]");
+    vp.onchange = () => { if (!vv.value || Object.values(SUGGESTED_VOICE).includes(vv.value)) vv.value = SUGGESTED_VOICE[vp.value] ?? ""; };
     $("#f").onsubmit = e => {
       e.preventDefault();
       const f = new FormData(e.target);
       save({
         name: f.get("name"), firstMessage: f.get("greet") || undefined,
-        transcriber: { ...t, provider: f.get("tp"), model: t.model || "nova-3", language: f.get("tl") || "multi" },
+        // Keep the transcriber's model only while its provider stays the same; each provider has its own.
+        transcriber: { ...t, provider: f.get("tp"), model: f.get("tp") === (t.provider || "deepgram") ? t.model : undefined, language: f.get("tl") || "multi" },
         model: { ...m, provider: f.get("mp"), model: f.get("mm"), messages: [...(m.messages || []).filter(x => x.role !== "system"), ...(f.get("sys") ? [{ role: "system", content: f.get("sys") }] : [])] },
-        voice: { ...vo, provider: f.get("vp"), voiceId: f.get("vv") || undefined },
+        voice: { ...vo, provider: f.get("vp"), voiceId: f.get("vv") || undefined, model: f.get("vp") === (vo.provider || "kokoro") ? vo.model : undefined },
         server: f.get("hook") ? { ...(a.server || {}), url: f.get("hook") } : undefined,
       });
     };
