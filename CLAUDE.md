@@ -24,6 +24,7 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
   `/auth/state|setup|login|logout|password`; the first password is chosen only from direct localhost
   or set by `OPENRING_PASSWORD`; `openring --reset-password` clears it. `/dashboard/info` (session only)
   gives the Settings/Providers pages the API key, URLs and which provider keys are set (never the keys).
+  `GET /providers/{id}/balance` (session) reads what's left on accounts that report it (`keys.BALANCES`).
 - `openring/bot.py` one live call: `run_call(transport, sample_rate=...)` runs Pipecat's pipeline
   transport -> STT -> LLM -> TTS; `twilio_transport` (8 kHz) and `web_transport` (WebRTC) build the
   transport. First message, end-call phrases, saves transcript and per-turn latency

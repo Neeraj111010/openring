@@ -93,6 +93,7 @@ affiliated with any of them.
 | Import assistants, tools and numbers from a Vapi account | |
 | 16 models, 6 speech-to-text and 9 voice providers, with Vapi's names | |
 | Per-turn latency, time to first word, tokens and voice characters per call, with traffic lights | |
+| Credit left on OpenRouter, Deepgram, ElevenLabs, Twilio and Telnyx, on the Providers page | |
 | Call history with transcripts, light and dark themes | |
 
 The full plan is in the [roadmap](ROADMAP.md).

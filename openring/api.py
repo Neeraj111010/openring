@@ -221,6 +221,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
                 "fields": [{"env": env, "label": label, "set": bool(set_now[env])} for env, label in spec["fields"]],
                 "keysUrl": spec["keysUrl"],
                 "oauth": bool(spec.get("oauth")),
+                "balance": row["id"] in keys.BALANCES,
             }
         return row
 
@@ -256,6 +257,16 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         except keys.ConnectError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "checked": checked}
+
+    @app.get("/providers/{provider}/balance", include_in_schema=False, dependencies=[Depends(require_session)])
+    async def provider_balance(provider: str) -> dict[str, Any]:
+        """What's left on the provider account (money or characters); null when the provider won't say."""
+        if provider not in keys.BALANCES:
+            raise HTTPException(status_code=404, detail="this provider doesn't report a balance")
+        values = keys.current_values(provider)
+        if not all(values.values()):
+            raise HTTPException(status_code=400, detail=f"{keys.NAMES[provider]} is not connected")
+        return {"balance": await keys.balance(provider, values)}
 
     @app.delete("/providers/{provider}/connect", include_in_schema=False, dependencies=[Depends(require_session)])
     def disconnect_provider(provider: str) -> dict[str, Any]:

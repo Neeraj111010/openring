@@ -92,6 +92,7 @@ empresa em outubro de 2026; confira antes de decidir. O OpenRing não tem víncu
 | Importação de assistentes, ferramentas e números de uma conta do Vapi | |
 | 16 modelos, 6 transcrições e 9 vozes, com os nomes do Vapi | |
 | Latência por turno, tempo até a primeira palavra, tokens e caracteres de voz por ligação, com farol | |
+| Crédito restante no OpenRouter, Deepgram, ElevenLabs, Twilio e Telnyx, na página Providers | |
 | Histórico com transcrição, tema claro e escuro | |
 
 ## 🔁 Migrar do Vapi

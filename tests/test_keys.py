@@ -218,3 +218,90 @@ def test_openrouter_exchange_sends_the_pkce_verifier():
     assert b'"code_verifier":"v3rifier"' in sent[0].replace(b" ", b"")
     with pytest.raises(keys.ConnectError, match="10 minutes"):
         asyncio.run(go(lambda r: httpx.Response(403, json={"error": "expired"})))
+
+
+def _balance(provider, values, handler):
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await keys.balance(provider, values, client)
+    return asyncio.run(go())
+
+
+def test_balance_reads_what_each_provider_reports():
+    def handler(request):
+        url = str(request.url)
+        if url.endswith("/api/v1/key"):
+            return httpx.Response(200, json={"data": {"limit": 20, "limit_remaining": 12.5, "usage": 7.5}})
+        if url.endswith("/v1/projects"):
+            assert request.headers["authorization"] == "Token dg"
+            return httpx.Response(200, json={"projects": [{"project_id": "p1"}]})
+        if url.endswith("/v1/projects/p1/balances"):
+            return httpx.Response(200, json={"balances": [{"amount": 150.25, "units": "usd"}, {"amount": 49.75}]})
+        if url.endswith("/v1/user/subscription"):
+            return httpx.Response(200, json={"character_count": 95000, "character_limit": 100000,
+                                             "next_character_count_reset_unix": 1793404800})
+        if url.endswith("/Accounts/AC1/Balance.json"):
+            return httpx.Response(200, json={"balance": "1.20", "currency": "USD"})
+        if url.endswith("/v2/balance"):
+            data = {"balance": "30.00", "available_credit": "28.00", "currency": "USD"}
+            return httpx.Response(200, json={"data": data})
+        return httpx.Response(404)
+
+    assert _balance("openrouter", {"OPENROUTER_API_KEY": "or"}, handler) == {
+        "left": 12.5, "unit": "USD", "limit": 20.0, "used": None, "low": False}
+    assert _balance("deepgram", {"DEEPGRAM_API_KEY": "dg"}, handler)["left"] == 200.0
+    eleven = _balance("11labs", {"ELEVENLABS_API_KEY": "el"}, handler)
+    assert eleven["left"] == 5000 and eleven["unit"] == "characters" and eleven["low"] is True
+    assert eleven["resetsAt"].startswith("2026-")
+    twilio = _balance("twilio", {"TWILIO_ACCOUNT_SID": "AC1", "TWILIO_AUTH_TOKEN": "t"}, handler)
+    assert twilio["left"] == 1.2 and twilio["low"] is True
+    assert _balance("telnyx", {"TELNYX_API_KEY": "tx"}, handler)["left"] == 28.0
+    assert _balance("groq", {"GROQ_API_KEY": GROQ_KEY}, handler) is None  # Groq doesn't report one
+
+
+def test_balance_of_an_unlimited_openrouter_key_shows_what_it_spent():
+    def handler(request):
+        if str(request.url).endswith("/api/v1/key"):
+            return httpx.Response(200, json={"data": {"limit": None, "limit_remaining": None, "usage": 3.21}})
+        return httpx.Response(403, json={"error": "management key required"})  # /credits
+
+    assert _balance("openrouter", {"OPENROUTER_API_KEY": "or"}, handler) == {
+        "left": None, "unit": "USD", "limit": None, "used": 3.21, "low": False}
+
+
+def test_balance_is_none_when_the_provider_fails():
+    assert _balance("twilio", {"TWILIO_ACCOUNT_SID": "AC1", "TWILIO_AUTH_TOKEN": "t"},
+                    lambda r: httpx.Response(500)) is None
+
+    def unreachable(request):
+        raise httpx.ConnectError("offline")
+    assert _balance("deepgram", {"DEEPGRAM_API_KEY": "dg"}, unreachable) is None
+
+
+def test_deepgram_balance_explains_a_key_without_billing_scope():
+    def handler(request):
+        if str(request.url).endswith("/v1/projects"):
+            return httpx.Response(200, json={"projects": [{"project_id": "p1"}]})
+        return httpx.Response(403, json={"category": "INSUFFICIENT_PERMISSIONS"})
+
+    assert "billing:read" in _balance("deepgram", {"DEEPGRAM_API_KEY": "dg"}, handler)["unavailable"]
+
+
+def test_balance_route_needs_a_connected_provider(env_file, monkeypatch):
+    async def fake_balance(provider, values, client=None):
+        return {"left": 9.5, "unit": "USD", "limit": None, "used": None, "low": False}
+
+    monkeypatch.setattr(keys, "balance", fake_balance)
+    client = signed_in()
+    assert client.get("/providers/openrouter/balance", headers=DASH).status_code == 400  # not connected
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-" + "x" * 20)
+    assert client.get("/providers/openrouter/balance", headers=DASH).json() == {"balance": fake_balance_result()}
+    assert client.get("/providers/groq/balance", headers=DASH).status_code == 404
+    assert make_client().get("/providers/openrouter/balance").status_code == 401
+    info = client.get("/dashboard/info", headers=DASH).json()
+    flags = {p["id"]: p["connect"]["balance"] for p in info["providers"] if p.get("connect")}
+    assert flags["openrouter"] is True and flags["groq"] is False
+
+
+def fake_balance_result():
+    return {"left": 9.5, "unit": "USD", "limit": None, "used": None, "low": False}

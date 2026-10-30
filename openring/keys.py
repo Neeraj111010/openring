@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -161,6 +162,90 @@ async def check(provider: str, values: dict[str, str], client: httpx.AsyncClient
     if res.status_code == 200 or provider in ONLY_REJECTIONS:
         return True
     raise ConnectError(f"{name} answered with an error ({res.status_code}); try again in a minute")
+
+
+# Providers whose API says how much is left on the account.
+BALANCES = ("openrouter", "deepgram", "11labs", "twilio", "telnyx")
+LOW_MONEY = 2.0  # dollars; and under a tenth of a character allowance
+
+
+def _money(left: float | None, unit: str, *, limit: float | None = None, used: float | None = None) -> dict[str, Any]:
+    low = left is not None and left < LOW_MONEY
+    return {"left": left, "unit": unit.upper(), "limit": limit, "used": used, "low": low}
+
+
+async def _read_balance(provider: str, values: dict[str, str], client: httpx.AsyncClient) -> dict[str, Any] | None:
+    if provider == "openrouter":
+        auth = _bearer(values["OPENROUTER_API_KEY"])
+        res = await client.get("https://openrouter.ai/api/v1/key", headers=auth)
+        if res.status_code != 200:
+            return None
+        key = res.json().get("data") or {}
+        if key.get("limit") is not None and key.get("limit_remaining") is not None:
+            return _money(float(key["limit_remaining"]), "usd", limit=float(key["limit"]))
+        # A key without a spending limit draws on the account's credits, which only a management key can read.
+        res = await client.get("https://openrouter.ai/api/v1/credits", headers=auth)
+        if res.status_code == 200:
+            total = res.json().get("data") or {}
+            bought, spent = float(total.get("total_credits") or 0), float(total.get("total_usage") or 0)
+            return _money(bought - spent, "usd", limit=bought)
+        return _money(None, "usd", used=float(key.get("usage") or 0))
+    if provider == "deepgram":
+        auth = {"Authorization": f"Token {values['DEEPGRAM_API_KEY']}"}
+        res = await client.get("https://api.deepgram.com/v1/projects", headers=auth)
+        projects = (res.json().get("projects") or []) if res.status_code == 200 else []
+        if not projects:
+            return None
+        res = await client.get(f"https://api.deepgram.com/v1/projects/{projects[0]['project_id']}/balances",
+                               headers=auth)
+        if res.status_code == 403:  # keys made for speech only lack the billing scope
+            return {"unavailable": "This key can't read the balance; a Deepgram key with billing:read can."}
+        if res.status_code != 200:
+            return None
+        amounts = [b for b in res.json().get("balances") or [] if str(b.get("units", "usd")).lower() == "usd"]
+        return _money(round(sum(float(b.get("amount") or 0) for b in amounts), 2), "usd")
+    if provider == "11labs":
+        res = await client.get("https://api.elevenlabs.io/v1/user/subscription",
+                               headers={"xi-api-key": values["ELEVENLABS_API_KEY"]})
+        if res.status_code != 200:
+            return None
+        sub = res.json()
+        limit, used = int(sub.get("character_limit") or 0), int(sub.get("character_count") or 0)
+        resets = sub.get("next_character_count_reset_unix")
+        return {"left": max(limit - used, 0), "unit": "characters", "limit": limit, "used": used,
+                "low": limit > 0 and limit - used < limit / 10,
+                "resetsAt": datetime.fromtimestamp(resets, timezone.utc).isoformat() if resets else None}
+    if provider == "twilio":
+        sid = values["TWILIO_ACCOUNT_SID"]
+        res = await client.get(f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Balance.json",
+                               auth=(sid, values["TWILIO_AUTH_TOKEN"]))
+        if res.status_code != 200:
+            return None
+        body = res.json()
+        return _money(float(body.get("balance") or 0), str(body.get("currency") or "usd"))
+    if provider == "telnyx":
+        res = await client.get("https://api.telnyx.com/v2/balance", headers=_bearer(values["TELNYX_API_KEY"]))
+        if res.status_code != 200:
+            return None
+        data = res.json().get("data") or {}
+        left = data.get("available_credit", data.get("balance"))
+        return _money(float(left or 0), str(data.get("currency") or "usd"))
+    return None
+
+
+async def balance(
+    provider: str, values: dict[str, str], client: httpx.AsyncClient | None = None
+) -> dict[str, Any] | None:
+    """What's left on the account as the provider reports it: money or characters. None when it won't say."""
+    if provider not in BALANCES:
+        return None
+    try:
+        if client is None:
+            async with httpx.AsyncClient(timeout=TIMEOUT) as own:
+                return await _read_balance(provider, values, own)
+        return await _read_balance(provider, values, client)
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):  # unreachable, or an answer we can't read
+        return None
 
 
 async def exchange_openrouter_code(code: str, verifier: str, client: httpx.AsyncClient | None = None) -> str:

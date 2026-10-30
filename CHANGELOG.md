@@ -8,6 +8,8 @@ All notable changes to OpenRing are listed here. The format follows
 
 ### Added
 
+- The Providers page shows what's left on each connected account that reports it: dollars on OpenRouter,
+  Deepgram, Twilio and Telnyx, characters on ElevenLabs, with a warning when it runs low.
 - What each call used, in Vapi's `costBreakdown` fields: `llmPromptTokens`, `llmCompletionTokens` and
   `ttsCharacters`, plus `transcriberAudioSeconds`. `performanceMetrics.firstWordLatency` is how long the
   caller waited for the greeting.
