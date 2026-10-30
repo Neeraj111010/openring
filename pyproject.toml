@@ -21,7 +21,17 @@ dependencies = [
 
 [project.optional-dependencies]
 kokoro = ["pipecat-ai[kokoro]>=1.15,<2"]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff>=0.13"]
 
 [project.scripts]
 openring = "openring.__main__:main"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["openring"]
+known-local-folder = ["test_api"]  # tests import shared fixtures from each other

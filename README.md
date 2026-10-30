@@ -1,5 +1,7 @@
 # OpenRing
 
+[![CI](https://github.com/elifalanrocha/openring/actions/workflows/ci.yml/badge.svg)](https://github.com/elifalanrocha/openring/actions/workflows/ci.yml)
+
 **Open-source, self-hosted voice AI agents with a Vapi-compatible API. Zero platform fee.**
 
 Hosted voice platforms charge a per-minute platform fee on top of what you already pay for

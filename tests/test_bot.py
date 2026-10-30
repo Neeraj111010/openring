@@ -12,7 +12,9 @@ def _breakdown(total, **parts):
         measured_from=MeasuredFrom.USER_SILENCE,
         total_secs=total,
         contributions=[
-            LatencyContribution(key=key, label=key, owner="test", owner_kind="service", start_time=0, duration_secs=secs)
+            LatencyContribution(
+                key=key, label=key, owner="test", owner_kind="service", start_time=0, duration_secs=secs
+            )
             for key, secs in parts.items()
         ],
     )

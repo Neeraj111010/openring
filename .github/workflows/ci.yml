@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install "ruff>=0.13"
+      - run: ruff check .
+      - name: Check the npm launcher parses
+        run: node --check bin/openring.js
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.11", "3.12", "3.13"]
+        # While the repository is private, Windows minutes count double and macOS ten times, so a plain
+        # push to main tests Linux only; pull requests, release tags and manual runs add Windows and macOS.
+        # Once the repository is public, Actions minutes are free: drop this condition.
+        include: ${{ fromJSON((github.event_name == 'push' && github.ref_type == 'branch') && '[]' || '[{"os":"windows-latest","python":"3.12"},{"os":"macos-latest","python":"3.12"}]') }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev,kokoro]"
+      - run: pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker build -t openring:ci .
+      - name: The container answers /health
+        run: |
+          docker run -d --name openring -p 8000:8000 openring:ci
+          for i in $(seq 1 30); do curl -sf http://localhost:8000/health && exit 0; sleep 1; done
+          docker logs openring
+          exit 1

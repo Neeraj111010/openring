@@ -3,9 +3,9 @@ import xml.etree.ElementTree as ET
 import pytest
 from fastapi.testclient import TestClient
 
+from openring import providers
 from openring.api import create_app
 from openring.config import Settings
-from openring import providers
 from openring.providers import KOKORO_FILES, ProviderError, build_services, resolve_plan
 from openring.store import Store
 from openring.twilio import compute_signature
