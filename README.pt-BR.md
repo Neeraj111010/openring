@@ -70,6 +70,20 @@ curl -X POST http://localhost:8000/phone-number \
 
 Ligue para o número. As transcrições ficam em `GET /call`.
 
+### Migrar do Vapi
+
+Copie todos os assistentes, ferramentas e números do Twilio de uma conta numa requisição só (ou clique
+em **Import** na página Assistants). A chave é usada uma vez e não fica salva; importar de novo atualiza
+o que veio antes.
+
+```bash
+curl -X POST http://localhost:8000/import   -H "Authorization: Bearer $OPENRING_API_KEY" -H "Content-Type: application/json"   -d '{"baseUrl": "https://api.vapi.ai", "apiKey": "SUA_CHAVE_PRIVADA_DO_VAPI"}'
+```
+
+A resposta lista cada assistente com o que ainda o impede de atender aqui (por exemplo, um provedor que o
+OpenRing ainda não suporta). Depois, aponte o voice webhook de cada número do Twilio importado para
+`$PUBLIC_URL/twilio/voice`.
+
 ### Ferramentas
 
 As ferramentas usam o formato do Vapi: um servidor feito para o Vapi funciona sem mudança. Coloque-as em

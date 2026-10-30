@@ -16,6 +16,7 @@ from loguru import logger
 
 from . import __version__, auth, providers, stats, twilio
 from .config import Settings, get_settings
+from .importer import SourceError, import_account
 from .providers import ProviderError, resolve_plan
 from .store import Store, now_iso
 from .tools import ToolError, check_tool
@@ -262,6 +263,16 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     def delete_tool(tool_id: str) -> dict[str, Any]:
         _get_or_404("tools", tool_id)
         return store.delete("tools", tool_id)
+
+    # ---- Import from another Vapi-compatible API ------------------------------------
+    @app.post("/import", dependencies=auth_deps)
+    async def import_from_api(body: dict[str, Any]) -> dict[str, Any]:
+        """Copy an account's tools, assistants and Twilio numbers. The key is used once, never stored."""
+        try:
+            return await import_account(str(body.get("baseUrl") or "https://api.vapi.ai"),
+                                        str(body.get("apiKey") or ""), store)
+        except SourceError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # ---- Phone numbers --------------------------------------------------------
     @app.post("/phone-number", status_code=201, dependencies=auth_deps)

@@ -83,6 +83,19 @@ curl -X POST http://localhost:8000/call \
   -d '{"phoneNumberId": "PHONE_NUMBER_ID", "customer": {"number": "+5511912345678"}}'
 ```
 
+### Moving from Vapi
+
+Copy every assistant, tool and Twilio number of an account in one request (or press **Import** on the
+Assistants page). The key is used once and never stored; importing again updates what came in before.
+
+```bash
+curl -X POST http://localhost:8000/import   -H "Authorization: Bearer $OPENRING_API_KEY" -H "Content-Type: application/json"   -d '{"baseUrl": "https://api.vapi.ai", "apiKey": "YOUR_VAPI_PRIVATE_KEY"}'
+```
+
+The answer lists each assistant with anything that keeps it from taking calls here yet (for example a
+provider OpenRing doesn't support yet). Documents keep their full JSON, so nothing is lost. Point each
+imported Twilio number's voice webhook at `$PUBLIC_URL/twilio/voice`.
+
 ### Tools
 
 Tools use Vapi's format, so a server written for Vapi works unchanged. Put them in `model.tools`, or

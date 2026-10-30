@@ -315,6 +315,18 @@ dialog::backdrop { background: rgba(5,8,12,.6); }
   <audio id="talkAudio" autoplay></audio>
 </dialog>
 
+<dialog id="importDialog" aria-labelledby="importTitle" style="width:min(560px,92vw)">
+  <form method="dialog" id="importForm">
+    <h2 id="importTitle">Import assistants</h2>
+    <p class="muted">Copies the assistants, tools and Twilio numbers of an account on any Vapi-compatible API. The key is used once and never saved. Importing again updates what you imported before.</p>
+    <div class="field"><label for="importUrl">API base URL</label><input id="importUrl" type="url" required value="https://api.vapi.ai"></div>
+    <div class="field"><label for="importKey">Private API key</label><input id="importKey" type="password" required autocomplete="off"></div>
+    <div class="error" id="importErr" role="alert"></div>
+    <div id="importReport"></div>
+    <div class="row-actions"><span class="spacer"></span><button class="btn ghost" value="cancel" formnovalidate id="importClose">Cancel</button><button class="btn" value="import" id="importGo">Import</button></div>
+  </form>
+</dialog>
+
 <dialog id="callDialog" aria-labelledby="callTitle">
   <form method="dialog" id="callForm">
     <h2 id="callTitle">Call a phone</h2>
@@ -510,7 +522,7 @@ async function viewAssistants() {
   const [items, numbers] = await Promise.all([api("/assistant"), api("/phone-number")]);
   const lines = id => numbers.filter(n => n.assistantId === id).map(n => n.number);
   const v = $("#view");
-  v.innerHTML = `<div class="toolbar"><span class="muted">${items.length} assistant${items.length === 1 ? "" : "s"}</span><button class="btn" id="new">${ICON.plus}New assistant</button></div>
+  v.innerHTML = `<div class="toolbar"><span class="muted">${items.length} assistant${items.length === 1 ? "" : "s"}</span><span class="spacer"></span><button class="btn ghost" id="import" title="Copy assistants, tools and Twilio numbers from a Vapi-compatible API">Import</button><button class="btn" id="new">${ICON.plus}New assistant</button></div>
     ${items.length ? `<div class="tiles">${items.map(a => `<article class="tile link" tabindex="0" data-id="${esc(a.id)}">
       <div class="head"><span class="avatar">${esc(initials(a.name))}</span><div class="grow"><div class="name">${esc(a.name || "Untitled")}</div><div class="sub">${lines(a.id).length ? esc(lines(a.id).join(", ")) : "No phone number"}</div></div></div>
       <div class="greet">${esc(a.firstMessage || "No greeting")}</div>
@@ -519,8 +531,39 @@ async function viewAssistants() {
     </article>`).join("")}</div>`
     : `<div class="panel empty">No assistants yet. Create one, then talk to it from this page.<br><button class="btn" id="new2">${ICON.plus}New assistant</button></div>`}`;
   v.querySelectorAll("#new, #new2").forEach(b => b.onclick = () => go("assistants/new"));
+  $("#import").onclick = openImport;
   v.querySelectorAll(".tile").forEach(t => { t.onclick = () => go("assistants/" + t.dataset.id); t.onkeydown = e => e.key === "Enter" && e.target === t && t.click(); });
   v.querySelectorAll("[data-test]").forEach(b => b.onclick = e => { e.stopPropagation(); startTalk(items.find(a => a.id === b.dataset.test)); });
+}
+
+// Import from a Vapi-compatible API: what came in, and what needs a fix before it can take calls.
+function openImport() {
+  $("#importErr").textContent = "";
+  $("#importReport").innerHTML = "";
+  $("#importKey").value = "";
+  $("#importGo").hidden = false;
+  $("#importClose").textContent = "Cancel";
+  $("#importDialog").showModal();
+  $("#importForm").onsubmit = async e => {
+    if (e.submitter?.value !== "import") return;  // Cancel just closes
+    e.preventDefault();
+    const go_ = $("#importGo");
+    go_.disabled = true; go_.textContent = "Importing…"; $("#importErr").textContent = "";
+    try {
+      const r = await api("/import", { method: "POST", body: JSON.stringify({ baseUrl: $("#importUrl").value.trim(), apiKey: $("#importKey").value.trim() }) });
+      $("#importKey").value = "";
+      const line = (label, problems, extra = "") => `<div class="minirow"><span style="min-width:0">${esc(label)}${extra}${problems?.length ? `<div class="muted" style="font-size:12.5px">${problems.map(esc).join("<br>")}</div>` : ""}</span>${problems?.length ? '<span class="badge warn">Needs a fix</span>' : '<span class="badge ok">Ready</span>'}</div>`;
+      $("#importReport").innerHTML = `
+        <h3 style="font-size:15px;margin:16px 0 4px">${r.assistants.length} assistant${r.assistants.length === 1 ? "" : "s"}, ${r.tools.length} tool${r.tools.length === 1 ? "" : "s"}, ${r.phoneNumbers.filter(n => !n.skipped).length} number${r.phoneNumbers.filter(n => !n.skipped).length === 1 ? "" : "s"}</h3>
+        ${r.assistants.map(a => line(a.name, a.problems, a.created ? "" : ' <span class="muted">(updated)</span>')).join("")}
+        ${r.tools.filter(t => t.problems.length).map(t => line("Tool " + t.name, t.problems)).join("")}
+        ${r.phoneNumbers.map(n => n.skipped ? `<div class="minirow"><span>${esc(n.number)}</span><span class="muted" style="font-size:12.5px">${esc(n.skipped)}</span></div>` : line(n.number, [], ' <span class="muted">· point its Twilio voice webhook here</span>')).join("")}`;
+      go_.hidden = true;
+      $("#importClose").textContent = "Done";
+      $("#importClose").onclick = () => { if (location.hash.startsWith("#assistants")) viewAssistants(); };
+    } catch (err) { $("#importErr").textContent = err.message; }
+    finally { go_.disabled = false; go_.textContent = "Import"; }
+  };
 }
 
 const LLM = ["openai", "groq", "openrouter", "deepseek", "omniroute", "custom-llm"];
