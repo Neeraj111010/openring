@@ -74,7 +74,7 @@ latency is recorded, step by step, and shown in the dashboard.
 | Source code | ✅ Open (MIT) | ❌ Closed | ❌ Closed | ✅ Open core (BSD-2) |
 | Platform fee | ✅ None | US$0.05/min | Per-minute pricing | None self-hosted, US$0.01/min in its cloud |
 | Vapi-compatible API | ✅ | (it's Vapi) | ❌ | ❌ |
-| Get started | `npx openring` | Sign up | Sign up | Docker |
+| Run it yourself | ✅ `npx openring`, no Docker needed (Docker works too) | Sign up for their cloud | Sign up for their cloud | ✅ With Docker |
 
 On every platform you also pay for speech-to-text, the model, the voice and the phone line. Prices are
 from each company's public pricing page in October 2026; check them before you decide. OpenRing isn't

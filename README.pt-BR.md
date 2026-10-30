@@ -74,7 +74,7 @@ etapa por etapa, e aparece no painel.
 | Código | ✅ Aberto (MIT) | ❌ Fechado | ❌ Fechado | ✅ Open core (BSD-2) |
 | Taxa de plataforma | ✅ Nenhuma | US$ 0,05/min | Preço por minuto | Nenhuma no self-hosted, US$ 0,01/min na nuvem dele |
 | API compatível com o Vapi | ✅ | (é o Vapi) | ❌ | ❌ |
-| Para começar | `npx openring` | Cadastro | Cadastro | Docker |
+| Rodar no seu servidor | ✅ `npx openring`, sem precisar de Docker (Docker também funciona) | Cadastro na nuvem deles | Cadastro na nuvem deles | ✅ Com Docker |
 
 Em todas você também paga transcrição, modelo, voz e linha telefônica. Preços das páginas públicas de cada
 empresa em outubro de 2026; confira antes de decidir. O OpenRing não tem vínculo com nenhuma delas.
