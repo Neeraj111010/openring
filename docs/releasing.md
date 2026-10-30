@@ -39,10 +39,19 @@ published by hand, right after the first PyPI release succeeds (the workflow ski
 until then):
 
 ```bash
-npm login
-npm publish --access public
+npm login                    # the account needs two-factor authentication to publish
+npm publish --access public  # a new package can take a minute or two to appear
 ```
 
-Then open the package on npmjs.com → Settings → Trusted publishing → GitHub Actions, and enter
-owner `elifalanrocha`, repository `openring`, workflow `release.yml`, environment `npm`.
-From then on, tags publish to npm automatically.
+Then trust the workflow, **at most 48 hours before the next release**: npm drops a trusted publisher
+that no publish has used within 48 hours of its creation. It needs npm 11.15 or later (`npx npm@latest`
+gets it), and asks for two-factor authentication:
+
+```bash
+npx npm@latest trust github openring --file release.yml --repository elifalanrocha/openring --environment npm
+npx npm@latest trust list openring
+```
+
+Push the release tag right after; that first automated publish validates the trust, and from then on
+tags publish to npm automatically. (The trusted publisher form on npmjs.com may not save; the command
+above does the same.)
