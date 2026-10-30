@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hmac
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, Response
@@ -14,6 +16,22 @@ from .config import Settings, get_settings
 from .providers import ProviderError, resolve_plan
 from .store import Store
 from .twilio import is_valid_signature, say_twiml, stream_twiml
+
+
+LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+# Tunnels (ngrok, cloudflared) and reverse proxies connect from 127.0.0.1 too,
+# so the peer address alone does not prove the request came from this computer.
+PROXY_HEADERS = ("forwarded", "x-forwarded-for", "x-forwarded-host", "x-real-ip", "cf-connecting-ip")
+
+
+def _is_direct_local_request(request: Request) -> bool:
+    peer = request.client.host if request.client else ""
+    if peer not in LOOPBACK:
+        return False
+    if any(h in request.headers for h in PROXY_HEADERS):
+        return False
+    hostname = urlsplit("//" + request.headers.get("host", "")).hostname or ""
+    return hostname in LOOPBACK
 
 
 def create_app(settings: Settings | None = None, store: Store | None = None) -> FastAPI:
@@ -30,7 +48,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         if not settings.api_key:
             return
         token = authorization.removeprefix("Bearer ").strip()
-        if token != settings.api_key:
+        if not hmac.compare_digest(token.encode(), settings.api_key.encode()):
             raise HTTPException(status_code=401, detail="invalid or missing API key")
 
     auth = [Depends(require_key)]
@@ -54,8 +72,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     @app.get("/local-session", include_in_schema=False)
     def local_session(request: Request) -> dict[str, str]:
         """Lets the dashboard connect automatically when opened on the same machine."""
-        host = request.client.host if request.client else ""
-        if host not in ("127.0.0.1", "::1", "localhost"):
+        if not _is_direct_local_request(request):
             raise HTTPException(status_code=403, detail="only available from this computer")
         return {"apiKey": settings.api_key}
 

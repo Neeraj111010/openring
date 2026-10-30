@@ -124,3 +124,26 @@ def test_dashboard_served_without_key():
     client = make_client()
     r = client.get("/")
     assert r.status_code == 200 and "<title>OpenRing</title>" in r.text
+
+
+def _local_client(**kw):
+    settings = Settings(api_key="test-key", public_url="", db_path=":memory:")
+    return TestClient(create_app(settings, Store(":memory:")), client=("127.0.0.1", 50000), **kw)
+
+
+def test_local_session_direct_localhost_only():
+    client = _local_client(base_url="http://localhost:8000")
+    assert client.get("/local-session").json() == {"apiKey": "test-key"}
+
+
+def test_local_session_refused_through_tunnel():
+    # ngrok/cloudflared connect from 127.0.0.1 but keep the public Host and add forwarding headers.
+    client = _local_client(base_url="https://abc.ngrok-free.app")
+    assert client.get("/local-session").status_code == 403
+    local = _local_client(base_url="http://localhost:8000")
+    assert local.get("/local-session", headers={"X-Forwarded-For": "203.0.113.9"}).status_code == 403
+
+
+def test_local_session_refused_from_network():
+    client = make_client()  # TestClient peer is not loopback
+    assert client.get("/local-session").status_code == 403
