@@ -9,7 +9,10 @@ const path = require("path");
 const http = require("http");
 
 const SOURCE = process.env.OPENRING_SOURCE || "git+https://github.com/elifalanrocha/openring";
-const PORT = process.env.PORT || "8000";
+// Flags such as `--port 8001` go on to `openring`; the launcher reads the port to open the browser.
+const userArgs = process.argv.slice(2);
+const portArg = userArgs.find((_, i) => userArgs[i - 1] === "--port") || (userArgs.find((a) => a.startsWith("--port=")) || "").slice(7);
+const PORT = portArg || process.env.PORT || "8000";
 const isWin = process.platform === "win32";
 
 function findUv() {
@@ -56,7 +59,7 @@ if (!uv) { installUv(); uv = findUv(); }
 if (!uv) { console.error("  uv was installed but is not on PATH yet. Open a new terminal and run the command again."); process.exit(1); }
 
 console.log("\n  Starting OpenRing (the first run downloads dependencies and can take a few minutes)...\n");
-const args = ["tool", "run", "--python", "3.12", "--from", `openring[kokoro] @ ${SOURCE}`, "openring"];
+const args = ["tool", "run", "--python", "3.12", "--from", `openring[kokoro] @ ${SOURCE}`, "openring", ...userArgs];
 const child = spawn(uv, args, { stdio: "inherit", env: { ...process.env, PORT } });
 child.on("exit", (code) => process.exit(code ?? 0));
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => child.kill(sig));

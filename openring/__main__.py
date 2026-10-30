@@ -1,7 +1,9 @@
 """`openring` command: first run creates ~/.openring with a generated API key, then starts the server."""
 
+import argparse
 import os
 import secrets
+import socket
 from pathlib import Path
 
 HOME = Path(os.environ.get("OPENRING_HOME", Path.home() / ".openring"))
@@ -47,11 +49,36 @@ def first_run_setup() -> bool:
     return True
 
 
-def main() -> None:
+def port_in_use(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET) as s:
+        if os.name != "nt":  # like uvicorn, ignore connections still closing from a previous run
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind((host, port))
+        except OSError:
+            return True
+    return False
+
+
+def ensure_port_free(host: str, port: int) -> None:
+    if port_in_use(host, port):
+        print(f"\n  Port {port} is already in use, maybe by another OpenRing.")
+        print(f"  Stop that program, or start on another port: openring --port {port + 1}\n")
+        raise SystemExit(1)
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="openring", description="Self-hosted voice AI agents, Vapi-compatible.")
+    parser.add_argument("--port", type=int, help="port to serve on (default: $PORT, or 8000)")
+    args = parser.parse_args(argv)
+
     created = first_run_setup()
     load_env_file(Path.cwd() / ".env")  # a project-local .env takes precedence
     load_env_file(ENV_FILE)
     os.environ.setdefault("OPENRING_DB_PATH", str(HOME / "openring.db"))
+    host = os.environ.get("HOST", "127.0.0.1")
+    port = args.port or int(os.environ.get("PORT", "8000"))
+    ensure_port_free(host, port)
 
     import uvicorn
 
@@ -59,14 +86,13 @@ def main() -> None:
     from .providers import kokoro_installed, kokoro_ready, warm_up
 
     os.environ["OPENRING_ENV_FILE"] = str(ENV_FILE)  # error messages point people to it
-    port = int(os.environ.get("PORT", "8000"))
     print(f"\n  OpenRing is running: http://localhost:{port}")
     print(f"  Settings: {ENV_FILE}" + ("  (created now)" if created else ""))
     if kokoro_installed() and not kokoro_ready():
         print("  Downloading the free Kokoro voice in the background (one time, about 120 MB).")
     warm_up()
     print("  Press Ctrl+C to stop.\n")
-    uvicorn.run(create_app(), host=os.environ.get("HOST", "127.0.0.1"), port=port, log_level="warning")
+    uvicorn.run(create_app(), host=host, port=port, log_level="warning")
 
 
 if __name__ == "__main__":
