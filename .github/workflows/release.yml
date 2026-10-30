@@ -1,6 +1,7 @@
 name: Release
 
-# Pushing a tag like v0.2.0 publishes that version to PyPI, then the `npx openring` launcher to npm.
+# Pushing a tag like v0.2.0 publishes that version to PyPI, then stages the `npx openring` launcher on npm,
+# where a maintainer approves it with two-factor authentication.
 # Both use trusted publishing (OpenID Connect): no tokens are stored in this repository.
 # One-time setup is described in docs/releasing.md.
 
@@ -62,10 +63,11 @@ jobs:
         with:
           node-version: "24"  # trusted publishing needs npm 11.5.1 or later
           registry-url: https://registry.npmjs.org
-      - name: Publish (npm trusts this workflow only once the package exists)
+      - run: npm install -g "npm@^11.15"  # staged publishing needs npm 11.15 or later
+      - name: Stage the release on npm; a maintainer approves it on npmjs.com with two-factor authentication
         run: |
           if npm view openring version > /dev/null 2>&1; then
-            npm publish --provenance --access public
+            npm stage publish . --provenance --access public
           else
             echo "::warning::openring is not on npm yet: publish the first version by hand, see docs/releasing.md"
           fi

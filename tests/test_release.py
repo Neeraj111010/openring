@@ -34,5 +34,5 @@ def test_third_party_lists_every_direct_dependency():
 def test_release_workflow_uses_trusted_publishing():
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     assert "id-token: write" in workflow
-    assert "pypa/gh-action-pypi-publish" in workflow and "npm publish --provenance" in workflow
+    assert "pypa/gh-action-pypi-publish" in workflow and "npm stage publish . --provenance" in workflow
     assert "secrets." not in workflow  # no stored tokens

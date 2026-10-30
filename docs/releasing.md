@@ -10,10 +10,13 @@ its own version number, so both always ship together.
    (`tests/test_release.py` fails if they differ).
 2. Add the changes to `CHANGELOG.md` and commit.
 3. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`.
+   `.github/workflows/release.yml` checks that the tag matches the versions, runs the tests, publishes
+   to PyPI and, once that succeeds, stages the release on npm.
+4. Approve the staged release on npmjs.com (the package's **Staged Packages** tab) with two-factor
+   authentication. Until then `npx openring` keeps installing the previous version.
 
-`.github/workflows/release.yml` then checks that the tag matches the versions, runs the tests, publishes
-to PyPI and, once that succeeds, to npm. It uses trusted publishing: PyPI and npm trust this repository's
-workflow directly, so no tokens are stored anywhere.
+Both registries use trusted publishing: they trust this repository's workflow directly, so no tokens are
+stored anywhere. npm only stages, so a stolen GitHub login alone can't publish a new version.
 
 ## One-time setup
 
@@ -43,7 +46,8 @@ npm login                    # the account needs two-factor authentication to pu
 npm publish --access public  # a new package can take a minute or two to appear
 ```
 
-Then trust the workflow, **at most 48 hours before the next release**: npm drops a trusted publisher
+Then trust the workflow with permission to *stage* releases only, **at most 48 hours before the next
+release**: npm drops a trusted publisher
 that no publish has used within 48 hours of its creation. It needs npm 11.15 or later (`npx npm@latest`
 gets it), and asks for two-factor authentication:
 
