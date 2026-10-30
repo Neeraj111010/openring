@@ -2,7 +2,8 @@
 
 Thanks for helping. OpenRing is a self-hosted voice AI agent platform with a Vapi-compatible API, so the
 most useful contributions make it easier to run, cheaper per minute, or more compatible with existing
-Vapi clients. Small pull requests get merged fastest.
+Vapi clients. Small pull requests get merged fastest. [PRINCIPLES.md](PRINCIPLES.md) says what we
+promise users and how we decide what to build.
 
 New here? Look for issues labeled
 [`good first issue`](https://github.com/elifalanrocha/openring/labels/good%20first%20issue).

@@ -92,6 +92,8 @@ Only one server can use port 8000; stop the old one first, or pass `--port`.
 
 ## Conventions
 
+- `PRINCIPLES.md` holds the project's promises (no platform fee, your keys, Vapi-compatible, one command,
+  honest status) and its feature test; check new work against it.
 - Keep the Vapi JSON shape for any new field; prefer adding over renaming.
 - Every feature gets a test; `pytest` and `ruff check .` must pass before pushing.
 - Never commit `.env` or keys. Don't use Vapi's name or logo except to say "Vapi-compatible".
