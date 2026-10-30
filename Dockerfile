@@ -6,7 +6,7 @@ COPY pyproject.toml README.md ./
 COPY openring ./openring
 RUN pip install --no-cache-dir ".[kokoro]"
 
-ENV OPENRING_DB_PATH=/data/openring.db
+ENV OPENRING_DB_PATH=/data/openring.db HOST=0.0.0.0 OPENRING_HOME=/data
 VOLUME ["/data"]
 EXPOSE 8000
 CMD ["openring"]

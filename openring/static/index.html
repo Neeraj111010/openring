@@ -255,9 +255,18 @@ async function route() {
 }
 document.querySelectorAll(".rail nav button").forEach(b => b.onclick = () => go(b.dataset.view));
 window.addEventListener("hashchange", route);
-renderKey();
-if (!apiKey) askKey();
-route();
+(async () => {
+  // Opened on the same computer as the server: connect without asking for the key.
+  if (!apiKey) {
+    try {
+      const r = await fetch("/local-session");
+      if (r.ok) { apiKey = (await r.json()).apiKey || ""; try { localStorage.setItem("openring-key", apiKey); } catch {} }
+    } catch {}
+  }
+  renderKey();
+  if (!apiKey) askKey();
+  route();
+})();
 </script>
 </body>
 </html>

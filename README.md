@@ -20,6 +20,16 @@ mostly a base-URL change.
 
 ## Quick start
 
+One command. It installs everything it needs (including Python), starts the server and opens the dashboard:
+
+```bash
+npx github:elifalanrocha/openring
+```
+
+You only need [Node.js](https://nodejs.org) 18+. Settings live in `~/.openring/.env`, created on the first run with a generated API key.
+
+### With Docker
+
 ```bash
 cp .env.example .env          # fill in your keys
 docker compose up --build     # API on http://localhost:8000

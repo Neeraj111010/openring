@@ -51,6 +51,14 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     def dashboard() -> FileResponse:
         return FileResponse(Path(__file__).parent / "static" / "index.html")
 
+    @app.get("/local-session", include_in_schema=False)
+    def local_session(request: Request) -> dict[str, str]:
+        """Lets the dashboard connect automatically when opened on the same machine."""
+        host = request.client.host if request.client else ""
+        if host not in ("127.0.0.1", "::1", "localhost"):
+            raise HTTPException(status_code=403, detail="only available from this computer")
+        return {"apiKey": settings.api_key}
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "version": __version__}

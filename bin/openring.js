@@ -1,0 +1,65 @@
+#!/usr/bin/env node
+// One-command launcher: installs uv (which brings its own Python) if needed,
+// runs OpenRing from GitHub, and opens the dashboard when the server is up.
+"use strict";
+const { spawn, spawnSync } = require("child_process");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const http = require("http");
+
+const SOURCE = process.env.OPENRING_SOURCE || "git+https://github.com/elifalanrocha/openring";
+const PORT = process.env.PORT || "8000";
+const isWin = process.platform === "win32";
+
+function findUv() {
+  const candidates = ["uv"];
+  const home = os.homedir();
+  candidates.push(path.join(home, ".local", "bin", isWin ? "uv.exe" : "uv"));
+  candidates.push(path.join(home, ".cargo", "bin", isWin ? "uv.exe" : "uv"));
+  for (const c of candidates) {
+    const r = spawnSync(c, ["--version"], { stdio: "ignore" });
+    if (r.status === 0) return c;
+  }
+  return null;
+}
+
+function installUv() {
+  console.log("  Installing uv (Python manager, one time only)...");
+  const r = isWin
+    ? spawnSync("powershell", ["-ExecutionPolicy", "ByPass", "-NoProfile", "-Command", "irm https://astral.sh/uv/install.ps1 | iex"], { stdio: "inherit" })
+    : spawnSync("sh", ["-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"], { stdio: "inherit" });
+  if (r.status !== 0) {
+    console.error("\n  Could not install uv automatically. Install it from https://docs.astral.sh/uv/ and run this command again.");
+    process.exit(1);
+  }
+}
+
+function openBrowser(url) {
+  if (process.env.OPENRING_NO_BROWSER) return;
+  const cmd = isWin ? ["cmd", ["/c", "start", "", url]] : process.platform === "darwin" ? ["open", [url]] : ["xdg-open", [url]];
+  try { spawn(cmd[0], cmd[1], { stdio: "ignore", detached: true }).unref(); } catch (_) {}
+}
+
+function waitForServer(url, tries = 600) {
+  return new Promise((resolve) => {
+    const tick = (n) => {
+      http.get(url + "/health", (res) => { res.resume(); res.statusCode === 200 ? resolve(true) : retry(n); }).on("error", () => retry(n));
+    };
+    const retry = (n) => (n <= 0 ? resolve(false) : setTimeout(() => tick(n - 1), 1000));
+    tick(tries);
+  });
+}
+
+let uv = findUv();
+if (!uv) { installUv(); uv = findUv(); }
+if (!uv) { console.error("  uv was installed but is not on PATH yet. Open a new terminal and run the command again."); process.exit(1); }
+
+console.log("\n  Starting OpenRing (the first run downloads dependencies and can take a few minutes)...\n");
+const args = ["tool", "run", "--python", "3.12", "--from", `openring[kokoro] @ ${SOURCE}`, "openring"];
+const child = spawn(uv, args, { stdio: "inherit", env: { ...process.env, PORT } });
+child.on("exit", (code) => process.exit(code ?? 0));
+for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => child.kill(sig));
+
+const url = `http://localhost:${PORT}`;
+waitForServer(url).then((up) => { if (up) openBrowser(url); });

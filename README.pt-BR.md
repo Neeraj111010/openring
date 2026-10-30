@@ -19,6 +19,16 @@ assistentes do Vapi: migrar é praticamente trocar a URL.
 
 ## Começo rápido
 
+Um comando só. Ele instala tudo o que precisa (inclusive o Python), sobe o servidor e abre o painel:
+
+```bash
+npx github:elifalanrocha/openring
+```
+
+Basta ter o [Node.js](https://nodejs.org) 18+. As configurações ficam em `~/.openring/.env`, criado na primeira execução com uma chave gerada.
+
+### Com Docker
+
 ```bash
 cp .env.example .env          # preencha suas chaves
 docker compose up --build     # API em http://localhost:8000
