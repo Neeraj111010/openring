@@ -1,0 +1,71 @@
+name: Release
+
+# Pushing a tag like v0.2.0 publishes that version to PyPI, then the `npx openring` launcher to npm.
+# Both use trusted publishing (OpenID Connect): no tokens are stored in this repository.
+# One-time setup is described in docs/releasing.md.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: The tag matches every version number
+        id: version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          py=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          init=$(python -c "import re; print(re.search(r'__version__ = \"(.+)\"', open('openring/__init__.py').read())[1])")
+          npm=$(node -p "require('./package.json').version")
+          echo "tag=$tag pyproject=$py __init__=$init package.json=$npm"
+          [ "$tag" = "$py" ] && [ "$tag" = "$init" ] && [ "$tag" = "$npm" ]
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+      - run: pip install -e ".[dev,kokoro]"
+      - run: pytest -q
+
+  pypi:
+    needs: check
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # trusted publishing
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  npm:
+    # After PyPI: the launcher installs exactly this version from there.
+    needs: [check, pypi]
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      id-token: write  # trusted publishing and provenance
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"  # trusted publishing needs npm 11.5.1 or later
+          registry-url: https://registry.npmjs.org
+      - name: Publish (npm trusts this workflow only once the package exists)
+        run: |
+          if npm view openring version > /dev/null 2>&1; then
+            npm publish --provenance --access public
+          else
+            echo "::warning::openring is not on npm yet: publish the first version by hand, see docs/releasing.md"
+          fi

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // One-command launcher: installs uv (which brings its own Python) if needed,
-// runs OpenRing from GitHub, and opens the dashboard when the server is up.
+// runs OpenRing from PyPI, and opens the dashboard when the server is up.
 "use strict";
 const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
@@ -8,7 +8,10 @@ const os = require("os");
 const path = require("path");
 const http = require("http");
 
-const SOURCE = process.env.OPENRING_SOURCE || "git+https://github.com/elifalanrocha/openring";
+// The PyPI release with this launcher's own version; OPENRING_SOURCE runs a checkout or a git URL instead.
+const VERSION = require("../package.json").version;
+const SOURCE = process.env.OPENRING_SOURCE;
+const PACKAGE = SOURCE ? `openring[kokoro] @ ${SOURCE}` : `openring[kokoro]==${VERSION}`;
 // Flags such as `--port 8001` go on to `openring`; the launcher reads the port to open the browser.
 const userArgs = process.argv.slice(2);
 const portArg = userArgs.find((_, i) => userArgs[i - 1] === "--port") || (userArgs.find((a) => a.startsWith("--port=")) || "").slice(7);
@@ -59,7 +62,7 @@ if (!uv) { installUv(); uv = findUv(); }
 if (!uv) { console.error("  uv was installed but is not on PATH yet. Open a new terminal and run the command again."); process.exit(1); }
 
 console.log("\n  Starting OpenRing (the first run downloads dependencies and can take a few minutes)...\n");
-const args = ["tool", "run", "--python", "3.12", "--from", `openring[kokoro] @ ${SOURCE}`, "openring", ...userArgs];
+const args = ["tool", "run", "--python", "3.12", "--from", PACKAGE, "openring", ...userArgs];
 const child = spawn(uv, args, { stdio: "inherit", env: { ...process.env, PORT } });
 child.on("exit", (code) => process.exit(code ?? 0));
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => child.kill(sig));
