@@ -30,6 +30,8 @@ npx github:elifalanrocha/openring
 ```
 
 You only need [Node.js](https://nodejs.org) 18+. Settings live in `~/.openring/.env`, created on the first run with a generated API key.
+On the first visit, the dashboard asks you to choose its password. The API key stays for apps that call the API
+(find it under **Settings**).
 
 Talk to an assistant before buying a phone number: press **Test** next to it in the dashboard and
 speak into your microphone. Add a Deepgram key and a model key (Groq's free tier works, for example
@@ -40,7 +42,7 @@ first start (about 120 MB).
 
 ```bash
 cp .env.example .env          # fill in your keys
-docker compose up --build     # API on http://localhost:8000
+docker compose up --build     # API on http://localhost:8000; set OPENRING_PASSWORD in .env for the dashboard
 ngrok http 8000               # put the https URL in PUBLIC_URL and restart
 ```
 
@@ -106,7 +108,10 @@ python -m openring
 
 ## Security
 
-Set `OPENRING_API_KEY` before exposing the server. Incoming calls need `TWILIO_AUTH_TOKEN`: every
+Set `OPENRING_API_KEY` before exposing the server. The dashboard has its own password: the first one can
+only be chosen from the server's own computer (`http://localhost`) or with `OPENRING_PASSWORD`, so a stranger
+who finds your tunnel URL cannot claim it first. Sessions are `HttpOnly`, `SameSite=Strict` cookies, and
+repeated wrong passwords are slowed down. Forgot it? `openring --reset-password`. Incoming calls need `TWILIO_AUTH_TOKEN`: every
 Twilio webhook is checked against its `X-Twilio-Signature`, and calls are refused while the token is
 missing (`VALIDATE_TWILIO_SIGNATURE=false` turns the check off, for local tests only). Each call
 accepts a single media stream, so a replayed or second connection is dropped.

@@ -14,6 +14,9 @@ def _env(name: str, default: str = "") -> str:
 class Settings:
     # Bearer token required by the REST API. Empty = API is open (local dev only).
     api_key: str = field(default_factory=lambda: _env("OPENRING_API_KEY"))
+    # Initial dashboard password, for servers nobody opens from their own browser (Docker, VPS).
+    # Used only while no password is set; afterwards it is changed from the dashboard.
+    password: str = field(default_factory=lambda: _env("OPENRING_PASSWORD"))
     # Public https URL where telephony providers reach this server (e.g. an ngrok URL).
     public_url: str = field(default_factory=lambda: _env("PUBLIC_URL").rstrip("/"))
     db_path: str = field(default_factory=lambda: _env("OPENRING_DB_PATH", "data/openring.db"))

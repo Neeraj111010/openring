@@ -11,6 +11,9 @@ ENV_FILE = HOME / ".env"
 
 ENV_TEMPLATE = """# OpenRing settings. Edit and restart `openring` to apply.
 OPENRING_API_KEY={key}
+# Dashboard password. Leave empty to choose it in the browser on first visit (from this computer).
+# Set it for servers you reach over the network (Docker, VPS). Forgot it? Run: openring --reset-password
+OPENRING_PASSWORD=
 # Public https URL Twilio can reach (e.g. from `ngrok http 8000`)
 PUBLIC_URL=
 TWILIO_ACCOUNT_SID=
@@ -67,15 +70,31 @@ def ensure_port_free(host: str, port: int) -> None:
         raise SystemExit(1)
 
 
+def reset_password(db_path: str) -> None:
+    from .auth import Sessions
+    from .store import Store
+
+    Sessions(Store(db_path)).reset_password()
+    print("\n  Dashboard password removed. Start openring and open http://localhost to choose a new one.")
+    if os.environ.get("OPENRING_PASSWORD"):
+        print("  OPENRING_PASSWORD is set, so it becomes the password again on the next start.")
+    print()
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="openring", description="Self-hosted voice AI agents, Vapi-compatible.")
     parser.add_argument("--port", type=int, help="port to serve on (default: $PORT, or 8000)")
+    parser.add_argument("--reset-password", action="store_true",
+                        help="forget the dashboard password; choose a new one at http://localhost on the next visit")
     args = parser.parse_args(argv)
 
     created = first_run_setup()
     load_env_file(Path.cwd() / ".env")  # a project-local .env takes precedence
     load_env_file(ENV_FILE)
     os.environ.setdefault("OPENRING_DB_PATH", str(HOME / "openring.db"))
+    if args.reset_password:
+        reset_password(os.environ["OPENRING_DB_PATH"])
+        return
     host = os.environ.get("HOST", "127.0.0.1")
     port = args.port or int(os.environ.get("PORT", "8000"))
     ensure_port_free(host, port)

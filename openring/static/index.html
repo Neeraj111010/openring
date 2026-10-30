@@ -5,107 +5,258 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpenRing</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Public+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script>
+  // Apply the saved theme before the page paints, so it never flashes the other one.
+  try { const t = localStorage.getItem("openring-theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+</script>
 <style>
 :root {
-  --bg: #eef1f4; --panel: #ffffff; --ink: #1c2430; --muted: #5b6676; --line: #d6dce4;
-  --signal: #0f6e8c; --signal-soft: #e1eef3; --live: #b77d00; --error: #b42318; --ok: #1f7a4d;
-  --radius-lg: 14px; --radius-sm: 6px;
+  --bg: #f3f5f8; --panel: #ffffff; --panel-2: #f7f9fb; --line: #e1e6ed; --ink: #141a22; --muted: #5d6878;
+  --rail: #ffffff; --rail-ink: #3a4553; --rail-active: #e6f2f6;
+  --accent: #0f6e8c; --accent-ink: #ffffff; --accent-soft: #e2f0f5;
+  --c1: #0e7490; --c2: #15803d; --c3: #b45309; --c4: #be123c; --c5: #6d28d9; --c6: #0369a1;
+  --ok: #15803d; --ok-soft: #e3f4ea; --warn: #b45309; --warn-soft: #fbf0dc; --bad: #b42318; --bad-soft: #fde8e6;
+  --shadow: 0 1px 2px rgba(20,26,34,.05);
+  --radius: 12px; --radius-sm: 8px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0a0e13; --panel: #11171f; --panel-2: #161e28; --line: #222c39; --ink: #e7edf3; --muted: #8a97a8;
+    --rail: #0d1218; --rail-ink: #aab6c4; --rail-active: #17303a;
+    --accent: #2fb8cc; --accent-ink: #062027; --accent-soft: rgba(47,184,204,.13);
+    --c1: #38bdf8; --c2: #34d399; --c3: #fbbf24; --c4: #fb7185; --c5: #a78bfa; --c6: #2fb8cc;
+    --ok: #34d399; --ok-soft: rgba(52,211,153,.12); --warn: #fbbf24; --warn-soft: rgba(251,191,36,.12); --bad: #fb7185; --bad-soft: rgba(251,113,133,.12);
+    --shadow: none;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0a0e13; --panel: #11171f; --panel-2: #161e28; --line: #222c39; --ink: #e7edf3; --muted: #8a97a8;
+  --rail: #0d1218; --rail-ink: #aab6c4; --rail-active: #17303a;
+  --accent: #2fb8cc; --accent-ink: #062027; --accent-soft: rgba(47,184,204,.13);
+  --c1: #38bdf8; --c2: #34d399; --c3: #fbbf24; --c4: #fb7185; --c5: #a78bfa; --c6: #2fb8cc;
+  --ok: #34d399; --ok-soft: rgba(52,211,153,.12); --warn: #fbbf24; --warn-soft: rgba(251,191,36,.12); --bad: #fb7185; --bad-soft: rgba(251,113,133,.12);
+  --shadow: none;
+  color-scheme: dark;
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 "Public Sans", system-ui, sans-serif; }
-h1, h2, h3 { font-family: "Bricolage Grotesque", system-ui, sans-serif; margin: 0; letter-spacing: -0.01em; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14.5px/1.5 "Public Sans", system-ui, sans-serif; }
+h1, h2, h3 { font-family: "Bricolage Grotesque", system-ui, sans-serif; margin: 0; letter-spacing: -0.01em; font-weight: 700; }
 button, input, select, textarea { font: inherit; color: inherit; }
-:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+a { color: var(--accent); }
+code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: .92em; background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; overflow-wrap: anywhere; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+[hidden] { display: none !important; }
 
-.app { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
-.rail { background: var(--ink); color: #dfe6ee; padding: 24px 16px; display: flex; flex-direction: column; gap: 28px; }
-.mark { display: flex; align-items: center; gap: 10px; font-family: "Bricolage Grotesque", system-ui, sans-serif; font-size: 22px; font-weight: 700; color: #fff; }
-.mark svg { flex: none; }
-.rail nav { display: flex; flex-direction: column; gap: 4px; }
-.rail nav button { all: unset; cursor: pointer; padding: 9px 12px; border-radius: var(--radius-sm); color: #b9c4d1; }
-.rail nav button[aria-current="page"] { background: #2b3747; color: #fff; }
-.rail nav button:hover { color: #fff; }
-.rail .key { margin-top: auto; font-size: 13px; color: #8f9cad; }
-.rail .key button { all: unset; cursor: pointer; color: #cfe6ee; text-decoration: underline; }
+/* ---- Shell: sidebar + top bar + page ---- */
+.app { display: grid; grid-template-columns: 248px minmax(0, 1fr); min-height: 100vh; }
+.rail { background: var(--rail); border-right: 1px solid var(--line); padding: 20px 14px; display: flex; flex-direction: column; gap: 18px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+.brand { display: flex; align-items: center; gap: 11px; padding: 2px 8px; }
+.brand .logo { width: 36px; height: 36px; border-radius: 10px; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; }
+.brand strong { display: block; font-family: "Bricolage Grotesque", system-ui, sans-serif; font-size: 18px; line-height: 1.1; }
+.brand small { color: var(--muted); font-size: 12px; }
+.rail nav { display: flex; flex-direction: column; gap: 2px; }
+.rail .group { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding: 14px 10px 6px; }
+.rail nav a { display: flex; align-items: center; gap: 11px; padding: 8px 10px; border-radius: var(--radius-sm); color: var(--rail-ink); text-decoration: none; font-weight: 500; }
+.rail nav a:hover { background: var(--panel-2); color: var(--ink); }
+.rail nav a[aria-current="page"] { background: var(--rail-active); color: var(--accent); }
+.rail nav a .ext { margin-left: auto; opacity: .5; width: 14px; height: 14px; }
+.rail .foot { margin-top: auto; display: flex; gap: 8px; }
+.rail .foot button { flex: 1; }
 
-main { padding: 32px 40px; max-width: 1100px; width: 100%; }
-.head { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
-.head h1 { font-size: 30px; }
-.head p { margin: 4px 0 0; color: var(--muted); max-width: 60ch; }
-.btn { border: 0; border-radius: var(--radius-sm); padding: 9px 16px; background: var(--signal); color: #fff; font-weight: 600; cursor: pointer; }
-.btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
-.btn.danger { background: transparent; color: var(--error); border: 1px solid #f0c7c3; }
+.top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 14px; padding: 16px 32px; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+.top .title { flex: 1; min-width: 0; }
+.top h1 { font-size: 21px; }
+.top p { margin: 0; color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.iconbtn { display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: var(--radius-sm); border: 1px solid transparent; background: transparent; color: var(--muted); cursor: pointer; }
+.iconbtn:hover { color: var(--ink); background: var(--panel-2); border-color: var(--line); }
+.health { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ok); padding: 4px 10px; border-radius: 999px; background: var(--ok-soft); }
+.health.down { color: var(--bad); background: var(--bad-soft); }
+.health::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+#menu { display: none; }
+main { padding: 28px 32px 48px; max-width: 1320px; width: 100%; margin: 0 auto; }
 
-.list { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; }
-.row { display: grid; grid-template-columns: 1.3fr 2fr auto; gap: 16px; align-items: center; padding: 14px 18px; border-top: 1px solid var(--line); cursor: pointer; }
-.row:first-child { border-top: 0; }
-.row:hover { background: #f7f9fb; }
-.row .title { font-weight: 600; }
-.row .sub { color: var(--muted); font-size: 13px; }
-.empty { padding: 40px 24px; text-align: center; color: var(--muted); }
-.empty .btn { margin-top: 12px; }
+/* ---- Building blocks ---- */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--accent); border-radius: var(--radius-sm); padding: 8px 15px; background: var(--accent); color: var(--accent-ink); font-weight: 600; cursor: pointer; text-decoration: none; white-space: nowrap; }
+.btn:hover { filter: brightness(1.07); }
+.btn.ghost { background: var(--panel); color: var(--ink); border-color: var(--line); }
+.btn.ghost:hover { border-color: var(--muted); filter: none; }
+.btn.danger { background: transparent; color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
+.btn.small { padding: 5px 11px; font-size: 13px; }
+.btn:disabled { opacity: .5; cursor: default; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+.panel > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px 0; }
+.panel > header h2 { font-size: 13px; font-family: "Public Sans", system-ui, sans-serif; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.panel .body { padding: 16px 20px 20px; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+.toolbar .spacer { flex: 1; }
+.muted { color: var(--muted); }
+.error { color: var(--bad); min-height: 1.2em; margin-top: 10px; }
+.empty { padding: 44px 24px; text-align: center; color: var(--muted); }
+.empty .btn { margin-top: 14px; }
 
-/* The call path: caller -> transcriber -> model -> voice */
-.path { display: flex; align-items: center; flex-wrap: wrap; row-gap: 4px; font-size: 13px; }
-.path .node { padding: 3px 9px; border-radius: 999px; background: var(--signal-soft); color: var(--signal); white-space: nowrap; }
-.path .wire { width: 14px; height: 2px; background: var(--signal); opacity: .45; }
+/* Tabs: a segmented strip, like a period picker */
+.tabs { display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); flex-wrap: wrap; }
+.tabs button { border: 0; background: transparent; padding: 6px 13px; border-radius: 7px; color: var(--muted); cursor: pointer; font-weight: 600; font-size: 13px; }
+.tabs button:hover { color: var(--ink); }
+.tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); }
+.tabs .count { opacity: .7; font-weight: 500; margin-left: 4px; }
 
-.status { font-size: 13px; padding: 2px 9px; border-radius: 999px; background: #edf0f3; color: var(--muted); }
-.status.in-progress { background: #fbf1d9; color: var(--live); }
-.status.ended { background: #e3f1e9; color: var(--ok); }
+/* Big number cards */
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); gap: 14px; margin-bottom: 18px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 15px 17px 16px; box-shadow: var(--shadow); min-width: 0; }
+.card .label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.card .label svg.i { width: 16px; height: 16px; }
+.card .value { font-family: "Bricolage Grotesque", system-ui, sans-serif; font-size: 30px; font-weight: 700; line-height: 1.15; margin-top: 10px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.card .value small { font-size: 15px; font-weight: 500; color: var(--muted); margin-left: 3px; }
+.card .sub { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+.v1 { color: var(--c1); } .v2 { color: var(--c2); } .v3 { color: var(--c3); } .v4 { color: var(--c4); } .v5 { color: var(--c5); } .v6 { color: var(--c6); }
 
-/* Editor */
-.editor { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 24px; }
-.line-diagram { display: grid; grid-template-columns: auto 28px 1fr 28px 1fr 28px 1fr; align-items: center; margin: 8px 0 24px; }
-.stage { border: 1.5px solid var(--signal); border-radius: var(--radius-lg); padding: 12px 14px; min-width: 150px; background: #fbfdfe; }
-.stage.caller { border-style: dashed; background: transparent; min-width: 0; }
-.stage h3 { font-size: 15px; margin-bottom: 8px; }
-.stage label { display: block; font-size: 12px; color: var(--muted); margin-top: 6px; }
-.stage input, .stage select { width: 100%; padding: 5px 7px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: #fff; }
-.cable { height: 2px; background: linear-gradient(90deg, var(--signal) 50%, transparent 50%) 0 0 / 10px 2px repeat-x; }
-.field { margin-top: 14px; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 14px; margin-bottom: 14px; }
+.grid2.even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+
+/* Calls per day */
+.bars { display: flex; align-items: flex-end; gap: 3px; height: 170px; padding-top: 8px; }
+.bars .day { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; }
+.bars .bar { background: var(--accent); border-radius: 3px 3px 0 0; min-height: 2px; opacity: .85; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; }
+.bars .bar .fail { background: var(--bad); }
+.bars .day:hover .bar { opacity: 1; }
+.bars .day.zero .bar { background: var(--line); opacity: 1; }
+.axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-top: 8px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--muted); font-size: 12.5px; }
+.legend span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; background: var(--dot); }
+
+/* Where a turn's time goes: one stacked bar */
+.stack { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--line); margin: 6px 0 16px; }
+.stack span { display: block; height: 100%; }
+.parts { display: grid; gap: 10px; }
+.parts .row2 { display: flex; justify-content: space-between; gap: 12px; }
+.parts .row2 span:first-child::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 8px; background: var(--dot); }
+.parts .row2 b { font-variant-numeric: tabular-nums; }
+.goal { margin-top: 14px; font-size: 13px; color: var(--muted); }
+
+/* Lists and tables */
+.table { width: 100%; border-collapse: collapse; }
+.table th { text-align: left; font-size: 11.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); padding: 12px 16px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.table td { padding: 12px 16px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.table tr:last-child td { border-bottom: 0; }
+.table tbody tr.link { cursor: pointer; }
+.table tbody tr.link:hover { background: var(--panel-2); }
+.table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.scroll { overflow-x: auto; }
+.minirow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.minirow:last-child { border-bottom: 0; }
+.minirow .meter { flex: 1; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; max-width: 140px; }
+.minirow .meter span { display: block; height: 100%; background: var(--accent); }
+
+.badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); white-space: nowrap; }
+.badge.ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+.badge.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.badge.bad { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
+.badge.live { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.badge.ok::before, .badge.live::before, .badge.warn::before, .badge.bad::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+/* The call path: transcriber -> model -> voice */
+.path { display: flex; align-items: center; flex-wrap: wrap; row-gap: 4px; font-size: 12.5px; }
+.path .node { padding: 2px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.path .wire { width: 12px; height: 2px; background: var(--accent); opacity: .4; }
+
+/* Assistant and provider tiles */
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; box-shadow: var(--shadow); min-width: 0; }
+.tile.link { cursor: pointer; }
+.tile.link:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.tile .head { display: flex; align-items: center; gap: 12px; }
+.tile .head .avatar { width: 38px; height: 38px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-weight: 700; font-family: "Bricolage Grotesque", system-ui, sans-serif; flex: none; }
+.tile .head .name { font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile .head .sub { color: var(--muted); font-size: 12.5px; }
+.tile .head .grow { flex: 1; min-width: 0; }
+.tile .greet { color: var(--muted); font-size: 13.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.9em; }
+.tile .actions { display: flex; gap: 8px; margin-top: auto; }
+.section-title { display: flex; align-items: center; gap: 10px; margin: 26px 0 12px; font-size: 16px; }
+.section-title:first-child { margin-top: 0; }
+
+/* Forms */
+.field { margin-top: 16px; }
+.field:first-child { margin-top: 0; }
 .field label { display: block; font-weight: 600; margin-bottom: 4px; }
 .field .hint { color: var(--muted); font-size: 13px; margin: -2px 0 6px; }
-.field input, .field textarea { width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: #fff; }
-.field textarea { min-height: 120px; resize: vertical; }
-.actions { display: flex; gap: 10px; margin-top: 20px; }
-.actions .spacer { flex: 1; }
-.error { color: var(--error); margin-top: 12px; }
+.input, .field input, .field textarea, .field select { width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-2); }
+.field textarea { min-height: 130px; resize: vertical; }
+textarea.code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 13px; min-height: 420px; white-space: pre; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; align-items: center; }
+.row-actions .spacer { flex: 1; }
+.copyline { display: flex; gap: 8px; align-items: center; }
+.copyline code { flex: 1; padding: 8px 10px; display: block; min-width: 0; }
+
+/* Assistant editor: the call path drawn left to right */
+.line-diagram { display: grid; grid-template-columns: auto 26px 1fr 26px 1fr 26px 1fr; align-items: stretch; margin-bottom: 8px; }
+.stage { border: 1.5px solid color-mix(in srgb, var(--accent) 60%, var(--line)); border-radius: var(--radius); padding: 12px 14px; background: var(--panel-2); min-width: 0; }
+.stage.caller { border-style: dashed; background: transparent; display: flex; flex-direction: column; justify-content: center; }
+.stage h3 { font-size: 14px; margin-bottom: 4px; }
+.stage label { display: block; font-size: 12px; color: var(--muted); margin-top: 7px; }
+.stage input, .stage select { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.cable { align-self: center; height: 2px; background: linear-gradient(90deg, var(--accent) 50%, transparent 50%) 0 0 / 10px 2px repeat-x; }
 
 /* Transcript */
-.transcript { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
-.bubble { max-width: 70%; padding: 9px 13px; border-radius: 14px; }
-.bubble.assistant { background: var(--signal-soft); align-self: flex-start; border-bottom-left-radius: 4px; }
-.bubble.user { background: #fff; border: 1px solid var(--line); align-self: flex-end; border-bottom-right-radius: 4px; }
-.meta { display: flex; gap: 18px; flex-wrap: wrap; color: var(--muted); font-size: 14px; }
+.transcript { display: flex; flex-direction: column; gap: 8px; }
+.bubble { max-width: min(72%, 640px); padding: 9px 13px; border-radius: 14px; overflow-wrap: anywhere; }
+.bubble.assistant { background: var(--accent-soft); align-self: flex-start; border-bottom-left-radius: 4px; }
+.bubble.user { background: var(--panel-2); border: 1px solid var(--line); align-self: flex-end; border-bottom-right-radius: 4px; }
+.turns { display: grid; gap: 10px; }
+.turn { display: grid; grid-template-columns: 64px minmax(0, 1fr) 70px; align-items: center; gap: 12px; font-size: 13px; }
+.turn .stack { margin: 0; height: 12px; }
+pre.json { margin: 0; padding: 16px; overflow: auto; max-height: 560px; font-size: 12.5px; background: var(--panel-2); border-radius: var(--radius-sm); border: 1px solid var(--line); }
 
-dialog { border: 0; border-radius: var(--radius-lg); padding: 24px; width: min(420px, 92vw); }
-dialog::backdrop { background: rgba(28,36,48,.45); }
+/* Getting started */
+.steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.step { display: flex; gap: 12px; align-items: flex-start; padding: 14px; border-radius: var(--radius-sm); background: var(--panel-2); border: 1px solid var(--line); }
+.step .n { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 13px; flex: none; border: 1.5px solid var(--muted); color: var(--muted); }
+.step.done .n { background: var(--ok); border-color: var(--ok); color: var(--panel); }
+.step b { display: block; }
+.step p { margin: 2px 0 8px; color: var(--muted); font-size: 13px; }
+
+/* Sign-in screen */
+.gate { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; background: radial-gradient(1200px 500px at 50% -10%, var(--accent-soft), transparent 70%), var(--bg); }
+.gate .panel { width: min(400px, 100%); padding: 30px 28px; }
+.gate .brand { justify-content: center; margin-bottom: 18px; padding: 0; }
+.gate h1 { font-size: 22px; text-align: center; }
+.gate p.lead { text-align: center; color: var(--muted); margin: 6px 0 22px; }
+.gate .btn { width: 100%; margin-top: 18px; padding: 10px; }
+
+dialog { border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; width: min(440px, 92vw); background: var(--panel); color: var(--ink); }
+dialog::backdrop { background: rgba(5,8,12,.6); }
 
 /* Browser test call: one ring per voice, swelling with its loudness */
 .talk { text-align: center; }
 .voices { display: flex; justify-content: center; gap: 48px; margin: 24px 0 12px; }
 .voice { display: grid; justify-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
-.voice .ring { width: 64px; height: 64px; border-radius: 50%; border: 2px solid var(--signal); background: var(--signal-soft); transform: scale(calc(1 + var(--level, 0) * .35)); }
+.voice .ring { width: 64px; height: 64px; border-radius: 50%; border: 2px solid var(--accent); background: var(--accent-soft); transform: scale(calc(1 + var(--level, 0) * .35)); }
 #youMeter .ring { border-color: var(--muted); background: transparent; }
 .talk .state { color: var(--muted); min-height: 3em; margin: 8px 0 0; }
-.talk .actions { justify-content: center; }
-.row .tools { display: flex; align-items: center; gap: 12px; }
-.row .tools .btn { padding: 5px 12px; }
+.talk .row-actions { justify-content: center; }
 
-@media (max-width: 800px) {
-  .app { grid-template-columns: 1fr; }
-  .rail { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 12px 16px; }
-  .rail nav { flex-direction: row; flex-wrap: wrap; width: 100%; }
-  .rail .key { position: absolute; top: 14px; right: 16px; margin: 0; text-align: right; }
-  .rail .key br { display: none; }
-  .rail .key #keyState { margin-right: 6px; }
-  .rail { position: relative; }
-  main { padding: 20px 16px; }
-  .row { grid-template-columns: 1fr; gap: 6px; }
-  .line-diagram { grid-template-columns: 1fr; gap: 0; }
-  .cable { width: 2px; height: 16px; margin-left: 24px; background: var(--signal); opacity: .5; }
+@media (max-width: 1100px) {
+  .grid2, .grid2.even { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 860px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .rail { position: fixed; inset: 0 auto 0 0; width: 264px; z-index: 20; transform: translateX(-100%); transition: transform .2s; box-shadow: 0 0 40px rgba(0,0,0,.35); }
+  .app.menu-open .rail { transform: none; }
+  #menu { display: inline-grid; }
+  .top { padding: 12px 16px; }
+  .top p { display: none; }
+  main { padding: 20px 16px 40px; }
+  .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .card .value { font-size: 24px; }
+  .line-diagram { grid-template-columns: minmax(0, 1fr); }
+  .cable { width: 2px; height: 14px; margin-left: 24px; background: var(--accent); opacity: .5; }
+  .tiles { grid-template-columns: minmax(0, 1fr); }
+  .bubble { max-width: 88%; }
+  .hide-sm { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
@@ -114,30 +265,41 @@ dialog::backdrop { background: rgba(28,36,48,.45); }
 </style>
 </head>
 <body>
-<div class="app">
-  <aside class="rail">
-    <div class="mark">
-      <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><circle cx="13" cy="13" r="11" fill="none" stroke="#5fb4cf" stroke-width="2"/><circle cx="13" cy="13" r="5.5" fill="none" stroke="#5fb4cf" stroke-width="2" opacity=".6"/><circle cx="13" cy="13" r="2" fill="#fff"/></svg>
-      OpenRing
+<div id="gate" hidden></div>
+
+<div class="app" id="app" hidden>
+  <aside class="rail" id="rail">
+    <div class="brand">
+      <span class="logo"><svg class="i" viewBox="0 0 24 24" style="width:22px;height:22px"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5" opacity=".6"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg></span>
+      <div><strong>OpenRing</strong><small id="version"></small></div>
     </div>
     <nav aria-label="Sections">
-      <button data-view="assistants">Assistants</button>
-      <button data-view="numbers">Phone numbers</button>
-      <button data-view="calls">Calls</button>
+      <a href="#home" data-view="home"><svg class="i" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg>Home</a>
+      <div class="group">Agents</div>
+      <a href="#assistants" data-view="assistants"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9.5 16h5"/></svg>Assistants</a>
+      <a href="#numbers" data-view="numbers"><svg class="i" viewBox="0 0 24 24"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>Phone numbers</a>
+      <div class="group">Activity</div>
+      <a href="#calls" data-view="calls"><svg class="i" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Calls</a>
+      <div class="group">System</div>
+      <a href="#providers" data-view="providers"><svg class="i" viewBox="0 0 24 24"><path d="M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0zM12 16v5"/></svg>Providers</a>
+      <a href="#settings" data-view="settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1"/></svg>Settings</a>
+      <div class="group">Help</div>
+      <a href="https://github.com/elifalanrocha/openring#readme" target="_blank" rel="noopener"><svg class="i" viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2zM4 21V5M8 7h7"/></svg>Docs<svg class="i ext" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></a>
+      <a href="https://github.com/elifalanrocha/openring/issues" target="_blank" rel="noopener"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>Report a problem<svg class="i ext" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></a>
     </nav>
-    <div class="key">API key: <span id="keyState">not set</span><br><button id="setKey">Change</button></div>
+    <div class="foot"><button class="btn ghost small" id="signOut2"><svg class="i" viewBox="0 0 24 24"><path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4M10 17l5-5-5-5M15 12H4"/></svg>Sign out</button></div>
   </aside>
-  <main id="view" aria-live="polite"></main>
+  <div>
+    <header class="top">
+      <button class="iconbtn" id="menu" aria-label="Open menu"><svg class="i" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+      <div class="title"><h1 id="pageTitle"></h1><p id="pageSub"></p></div>
+      <span class="health" id="health">Online</span>
+      <button class="iconbtn" id="theme" aria-label="Switch light or dark theme"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
+      <button class="iconbtn" id="signOut" aria-label="Sign out" title="Sign out"><svg class="i" viewBox="0 0 24 24"><path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4M10 17l5-5-5-5M15 12H4"/></svg></button>
+    </header>
+    <main id="view" aria-live="polite"></main>
+  </div>
 </div>
-
-<dialog id="keyDialog">
-  <form method="dialog">
-    <h2>Connect to this server</h2>
-    <p style="color:var(--muted)">Paste the value of <code>OPENRING_API_KEY</code> from your <code>.env</code>. It stays in this browser.</p>
-    <div class="field"><label for="keyInput">API key</label><input id="keyInput" type="password" autocomplete="off"></div>
-    <div class="actions"><span class="spacer"></span><button class="btn" value="save">Save key</button></div>
-  </form>
-</dialog>
 
 <dialog id="talkDialog" class="talk" aria-labelledby="talkTitle">
   <h2 id="talkTitle">Browser test</h2>
@@ -146,138 +308,324 @@ dialog::backdrop { background: rgba(28,36,48,.45); }
     <div class="voice" id="botMeter"><span class="ring"></span>Assistant</div>
   </div>
   <p class="state" id="talkState" role="status"></p>
-  <div class="actions" id="talkActions"></div>
+  <div class="row-actions" id="talkActions"></div>
   <audio id="talkAudio" autoplay></audio>
 </dialog>
 
 <dialog id="callDialog" aria-labelledby="callTitle">
   <form method="dialog" id="callForm">
     <h2 id="callTitle">Call a phone</h2>
-    <p style="color:var(--muted)" id="callFrom"></p>
+    <p class="muted" id="callFrom"></p>
     <div class="field"><label for="callTo">Phone to call</label><input id="callTo" type="tel" required autocomplete="tel" placeholder="+5511912345678"></div>
     <div class="error" id="callErr" role="alert"></div>
-    <div class="actions"><span class="spacer"></span><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn" value="call">Call</button></div>
+    <div class="row-actions"><span class="spacer"></span><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn" value="call">Call</button></div>
   </form>
 </dialog>
 
 <script>
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-let apiKey = "";
-try { apiKey = localStorage.getItem("openring-key") || ""; } catch {}
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
+// Earlier dashboards kept the API key in the browser; sign-in replaced it, so drop the copy.
+try { localStorage.removeItem("openring-key"); } catch {}
 
+// The session cookie is sent automatically; the header proves the request comes from this page.
 async function api(path, opts = {}) {
-  const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", Authorization: "Bearer " + apiKey, ...(opts.headers || {}) } });
-  if (res.status === 401) { askKey(); throw new Error("The API key is missing or wrong. Paste the key from your .env."); }
+  const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", "X-OpenRing": "dashboard", ...(opts.headers || {}) } });
   const body = res.status === 204 ? null : await res.json().catch(() => null);
+  if (res.status === 401 && !path.startsWith("/auth/")) { showGate(); throw new Error("Your session ended. Sign in again."); }
   if (!res.ok) throw new Error(body?.detail || `Request failed (${res.status})`);
   return body;
 }
-function askKey() { $("#keyInput").value = apiKey; $("#keyDialog").showModal(); }
-$("#keyDialog").addEventListener("close", () => {
-  if ($("#keyDialog").returnValue !== "save") return;
-  apiKey = $("#keyInput").value.trim();
-  try { localStorage.setItem("openring-key", apiKey); } catch {}
-  renderKey(); route();
-});
-$("#setKey").onclick = askKey;
-function renderKey() { $("#keyState").textContent = apiKey ? "saved" : "not set"; }
+
+// ---- Formatting -------------------------------------------------------------------------
+const num = n => n == null ? "—" : Number(n).toLocaleString("en-US");
+const ms = n => n == null ? "—" : n >= 1000 ? (n / 1000).toFixed(2) + " s" : n + " ms";
+const dur = s => { if (!s) return "—"; s = Math.round(s); return s < 60 ? s + "s" : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`; };
+const when = iso => { if (!iso) return ""; const d = new Date(iso), today = new Date().toDateString() === d.toDateString(); return today ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); };
+const initials = s => (s || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase();
+const caller = c => c.type === "webCall" ? "Browser test" : c.type === "outboundPhoneCall" ? `Call to ${c.customer?.number || "?"}` : c.customer?.number || "Unknown caller";
+const TYPE = { webCall: "Browser", inboundPhoneCall: "Inbound", outboundPhoneCall: "Outbound" };
+const failed = c => /^(pipeline-error|provider-error|assistant-not-found|twilio-failed)/.test(c.endedReason || "");
+const ENDED = {
+  "customer-ended-call": "Caller hung up", "assistant-said-end-call-phrase": "Assistant said goodbye",
+  "customer-busy": "Line busy", "customer-did-not-answer": "No answer",
+  "twilio-failed-to-connect-call": "Twilio couldn't connect", "assistant-not-found": "Assistant was deleted",
+};
+const endedLabel = r => ENDED[r] || (r.startsWith("pipeline-error") ? "Error during the call" : r.startsWith("provider-error") ? "Provider not set up" : r);
+function statusBadge(c) {
+  if (c.status === "ended") return failed(c) ? `<span class="badge bad" title="${esc(c.endedReason)}">Failed</span>` : `<span class="badge ok">Ended</span>`;
+  if (c.status === "in-progress") return `<span class="badge live">Live</span>`;
+  return `<span class="badge warn">${esc(c.status || "queued")}</span>`;
+}
+
+const ICON = {
+  phone: '<svg class="i" viewBox="0 0 24 24"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>',
+  clock: '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  check: '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>',
+  bolt: '<svg class="i" viewBox="0 0 24 24"><path d="M13 3 4 14h7l-1 7 9-11h-7z"/></svg>',
+  coin: '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.5-1-1.6-1.5-3-1.5-1.7 0-3 .8-3 2s1.3 1.7 3 2 3 .8 3 2-1.3 2-3 2c-1.4 0-2.5-.5-3-1.5M12 6v2M12 16v2"/></svg>',
+  bot: '<svg class="i" viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01"/></svg>',
+  hash: '<svg class="i" viewBox="0 0 24 24"><path d="M5 9h14M5 15h14M10 4 8 20M16 4l-2 16"/></svg>',
+  timer: '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4M9 2h6"/></svg>',
+  mic: '<svg class="i" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
+  copy: '<svg class="i" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg>',
+  plus: '<svg class="i" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
+  refresh: '<svg class="i" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>',
+};
+const card = (label, icon, value, cls, sub = "") => `<div class="card"><div class="label">${ICON[icon]}${label}</div><div class="value ${cls}">${value}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+const tabs = (items, current, attr = "tab") => `<div class="tabs" role="tablist">${items.map(([k, label, count]) => `<button role="tab" data-${attr}="${k}" aria-selected="${k === current}">${label}${count != null ? `<span class="count">${count}</span>` : ""}</button>`).join("")}</div>`;
+function copyButtons(root) {
+  root.querySelectorAll("[data-copy]").forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); const t = b.innerHTML; b.textContent = "Copied"; setTimeout(() => b.innerHTML = t, 1200); } catch {}
+  });
+}
+
+// ---- Sign in ----------------------------------------------------------------------------
+const BRAND = `<div class="brand"><span class="logo"><svg class="i" viewBox="0 0 24 24" style="width:22px;height:22px"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5" opacity=".6"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg></span><div><strong>OpenRing</strong></div></div>`;
+
+async function showGate() {
+  const state = await api("/auth/state").catch(() => ({ passwordSet: true }));
+  if (state.signedIn) return startApp(state);
+  $("#app").hidden = true;
+  const g = $("#gate");
+  g.hidden = false;
+  if (!state.passwordSet && !state.canSetUp) {
+    g.innerHTML = `<div class="gate"><div class="panel">${BRAND}<h1>Finish setting up</h1>
+      <p class="lead">This server has no dashboard password yet. For safety, it can only be chosen from the server's own computer.</p>
+      <p class="muted">Open <code>http://localhost:8000</code> on that computer, or add <code>OPENRING_PASSWORD=…</code> to its <code>.env</code> and restart OpenRing.</p></div></div>`;
+    return;
+  }
+  const setup = !state.passwordSet;
+  g.innerHTML = `<div class="gate"><form class="panel" id="gateForm">${BRAND}
+    <h1>${setup ? "Create your password" : "Welcome back"}</h1>
+    <p class="lead">${setup ? "You'll use it to open this dashboard. Your API key stays for apps that call the API." : "Sign in to manage your voice agents."}</p>
+    <div class="field"><label for="pw">Password</label><input id="pw" type="password" required minlength="${setup ? 8 : 1}" autocomplete="${setup ? "new-password" : "current-password"}" autofocus></div>
+    ${setup ? `<div class="field"><label for="pw2">Repeat password</label><input id="pw2" type="password" required autocomplete="new-password"><p class="hint" style="margin-top:6px">At least 8 characters.</p></div>` : ""}
+    <div class="error" id="gateErr" role="alert"></div>
+    <button class="btn">${setup ? "Create password and continue" : "Sign in"}</button>
+    ${setup ? "" : `<p class="muted" style="font-size:12.5px;text-align:center;margin:16px 0 0">Forgot it? Run <code>openring --reset-password</code> on the server.</p>`}
+  </form></div>`;
+  $("#pw").focus();
+  $("#gateForm").onsubmit = async e => {
+    e.preventDefault();
+    const pw = $("#pw").value;
+    if (setup && pw !== $("#pw2").value) return $("#gateErr").textContent = "The passwords don't match.";
+    try { await api(setup ? "/auth/setup" : "/auth/login", { method: "POST", body: JSON.stringify({ password: pw }) }); startApp(await api("/auth/state")); }
+    catch (err) { $("#gateErr").textContent = err.message[0].toUpperCase() + err.message.slice(1) + "."; }
+  };
+}
+
+async function signOut() { await api("/auth/logout", { method: "POST" }).catch(() => {}); showGate(); }
+
+// ---- Pages ------------------------------------------------------------------------------
+const PAGES = {
+  home: ["Home", "How your voice agents are doing"],
+  assistants: ["Assistants", "Each assistant answers with its own instructions, model and voice"],
+  numbers: ["Phone numbers", "Your Twilio numbers and who answers them"],
+  calls: ["Calls", "Every call with its transcript and response time"],
+  providers: ["Providers", "Speech, model and voice services this server can use"],
+  settings: ["Settings", "API access, webhooks and your password"],
+};
+function setPage(name, title, sub) {
+  const [t, s] = PAGES[name] || [title, sub];
+  $("#pageTitle").textContent = title || t;
+  $("#pageSub").textContent = sub ?? s;
+  document.title = (title || t) + " · OpenRing";
+  document.querySelectorAll(".rail nav a[data-view]").forEach(a => a.dataset.view === name ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current"));
+}
+
+const PERIODS = [["1", "Today"], ["7", "7D"], ["30", "30D"], ["90", "90D"], ["0", "All"]];
+const PARTS = [["endpointingLatency", "Waiting for silence", "var(--muted)"], ["transcriberLatency", "Transcription", "var(--c1)"], ["modelLatency", "Model", "var(--c5)"], ["voiceLatency", "Voice", "var(--c3)"]];
+
+async function viewHome() {
+  setPage("home");
+  const days = store.get("openring-period") || "30";
+  const [s, assistants, numbers, info, recent] = await Promise.all([api("/stats?days=" + days), api("/assistant"), api("/phone-number"), api("/dashboard/info"), api("/call?limit=6")]);
+  const name = id => assistants.find(a => a.id === id)?.name || "Deleted assistant";
+  const ready = id => info.providers.find(p => p.id === id)?.ready;
+  const hasModel = info.providers.some(p => p.kind === "model" && p.id !== "omniroute" && p.ready);
+  const steps = [
+    [ready("deepgram") && hasModel, "Add your provider keys", "Deepgram for speech plus one model provider. The Kokoro voice is free.", `<a class="btn ghost small" href="#providers">See providers</a>`],
+    [assistants.length > 0, "Create an assistant", "Give it a greeting, instructions, a model and a voice.", `<a class="btn ghost small" href="#assistants/new">New assistant</a>`],
+    [s.byType.webCall > 0 || recent.some(c => c.type === "webCall"), "Talk to it here", "Test it with your microphone, no phone number needed.", assistants[0] ? `<button class="btn ghost small" id="firstTest">Test ${esc(assistants[0].name || "it")}</button>` : ""],
+    [numbers.length > 0, "Connect a phone number", "Point a Twilio number at this server.", `<a class="btn ghost small" href="#numbers">Add a number</a>`],
+  ];
+  const max = Math.max(1, ...s.perDay.map(d => d.calls));
+  const lp = s.latencyParts, lpTotal = PARTS.reduce((t, [k]) => t + (lp[k] || 0), 0);
+  const label = d => new Date(d + "T12:00:00").toLocaleDateString([], { month: "short", day: "numeric" });
+  const pd = s.perDay;
+
+  const v = $("#view");
+  v.innerHTML = `
+  ${steps.every(x => x[0]) ? "" : `<section class="panel" style="margin-bottom:18px"><header><h2>Get started</h2><span class="muted" style="font-size:13px">${steps.filter(x => x[0]).length} of ${steps.length} done</span></header><div class="body"><div class="steps">${steps.map(([done, t, p, act], i) => `<div class="step ${done ? "done" : ""}"><span class="n">${done ? "✓" : i + 1}</span><div><b>${t}</b><p>${p}</p>${done ? "" : act}</div></div>`).join("")}</div></div></section>`}
+  <div class="toolbar"><h2 style="font-size:18px">Overview</h2>${tabs(PERIODS, days, "period")}</div>
+  <div class="cards">
+    ${card("Calls", "phone", num(s.calls), "v1", s.inProgress ? `${s.inProgress} live now` : `${num(s.byType.inboundPhoneCall || 0)} in · ${num(s.byType.outboundPhoneCall || 0)} out · ${num(s.byType.webCall || 0)} browser`)}
+    ${card("Minutes", "clock", num(s.minutes), "v2", s.averageDurationSeconds ? `${dur(s.averageDurationSeconds)} per call` : "")}
+    ${card("Success rate", "check", s.successRate == null ? "—" : s.successRate + '<small>%</small>', s.successRate != null && s.successRate < 90 ? "v4" : "v2", s.failed ? `${s.failed} failed` : "No failures")}
+    ${card("Response time", "bolt", ms(s.latencyMedianMs), s.latencyMedianMs > 1200 ? "v3" : "v6", s.turns ? `median of ${num(s.turns)} turns` : "No turns yet")}
+    ${card("Fees avoided", "coin", "$" + s.platformFeeSaved.toFixed(2), "v3", '<span title="Hosted voice platforms charge about US$0.05 per minute for orchestration alone.">vs $0.05/min platforms</span>')}
+    ${card("Assistants", "bot", num(assistants.length), "v5", `${num(numbers.length)} phone number${numbers.length === 1 ? "" : "s"}`)}
+  </div>
+  <div class="grid2">
+    <section class="panel"><header><h2>Calls per day</h2><div class="legend"><span style="--dot:var(--accent)">Calls</span><span style="--dot:var(--bad)">Failed</span></div></header>
+      <div class="body"><div class="bars">${pd.map(d => `<div class="day ${d.calls ? "" : "zero"}" title="${esc(label(d.date))}: ${d.calls} call${d.calls === 1 ? "" : "s"}, ${d.minutes} min${d.failed ? `, ${d.failed} failed` : ""}"><div class="bar" style="height:${d.calls ? Math.max(4, d.calls / max * 100) : 1.5}%">${d.failed ? `<div class="fail" style="height:${d.failed / d.calls * 100}%"></div>` : ""}</div></div>`).join("")}</div>
+      <div class="axis"><span>${esc(label(pd[0].date))}</span>${pd.length > 2 ? `<span>${esc(label(pd[Math.floor(pd.length / 2)].date))}</span>` : ""}<span>${esc(label(pd[pd.length - 1].date))}</span></div></div></section>
+    <section class="panel"><header><h2>Where the time goes</h2></header>
+      <div class="body">${lpTotal ? `<div class="stack">${PARTS.map(([k, , c]) => `<span style="width:${(lp[k] || 0) / lpTotal * 100}%;background:${c}" title="${esc(k)}"></span>`).join("")}</div>
+        <div class="parts">${PARTS.map(([k, l, c]) => `<div class="row2"><span style="--dot:${c}">${l}</span><b>${ms(lp[k])}</b></div>`).join("")}
+          <div class="row2" style="border-top:1px solid var(--line);padding-top:10px"><span style="--dot:transparent">Whole turn, average</span><b>${ms(s.latencyAverageMs)}</b></div></div>
+        <p class="goal">From the moment the caller stops talking to the first word of the answer, averaged per turn. Under 1.2 s feels natural.</p>`
+        : `<p class="muted">Talk to an assistant to see how long each step takes: waiting for silence, transcription, the model and the voice.</p>`}</div></section>
+  </div>
+  <div class="grid2 even">
+    <section class="panel"><header><h2>Recent calls</h2><a href="#calls" style="font-size:13px">See all</a></header>
+      <div class="body" style="padding-top:8px">${recent.length ? recent.map(c => `<div class="minirow" style="cursor:pointer" data-call="${esc(c.id)}"><div style="min-width:0"><b>${esc(caller(c))}</b><div class="muted" style="font-size:12.5px">${esc(name(c.assistantId))} · ${when(c.createdAt)}</div></div><span class="muted">${dur(c.durationSeconds)}</span>${statusBadge(c)}</div>`).join("") : `<p class="muted">No calls yet.</p>`}</div></section>
+    <div style="display:grid;gap:14px;align-content:start">
+      <section class="panel"><header><h2>Busiest assistants</h2></header>
+        <div class="body" style="padding-top:8px">${s.byAssistant.length ? s.byAssistant.map(b => `<div class="minirow"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(name(b.assistantId))}</span><span class="meter"><span style="width:${b.calls / s.byAssistant[0].calls * 100}%"></span></span><span class="muted" style="white-space:nowrap">${num(b.calls)} calls · ${num(b.minutes)} min</span></div>`).join("") : `<p class="muted">No calls in this period.</p>`}</div></section>
+      <section class="panel"><header><h2>How calls ended</h2></header>
+        <div class="body" style="padding-top:8px">${Object.keys(s.endedReasons).length ? Object.entries(s.endedReasons).map(([r, n]) => `<div class="minirow"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r)}">${esc(endedLabel(r))}</span><span class="meter"><span style="width:${n / Math.max(...Object.values(s.endedReasons)) * 100}%;background:${failed({ endedReason: r }) ? "var(--bad)" : "var(--accent)"}"></span></span><span class="muted">${num(n)}</span></div>`).join("") : `<p class="muted">No finished calls in this period.</p>`}</div></section>
+    </div>
+  </div>`;
+  v.querySelectorAll("[data-period]").forEach(b => b.onclick = () => { store.set("openring-period", b.dataset.period); viewHome(); });
+  v.querySelectorAll("[data-call]").forEach(r => r.onclick = () => go("calls/" + r.dataset.call));
+  if ($("#firstTest")) $("#firstTest").onclick = () => startTalk(assistants[0]);
+}
+
+function pathChips(a) {
+  const t = a.transcriber || {}, m = a.model || {}, v = a.voice || {};
+  return `<div class="path"><span class="node">${esc(t.provider || "deepgram")} ${esc(t.language || "")}</span><span class="wire"></span><span class="node">${esc(m.model || "default model")}</span><span class="wire"></span><span class="node">${esc(v.provider || "kokoro")}${v.voiceId ? " · " + esc(v.voiceId) : ""}</span></div>`;
+}
+
+async function viewAssistants() {
+  setPage("assistants");
+  const [items, numbers] = await Promise.all([api("/assistant"), api("/phone-number")]);
+  const lines = id => numbers.filter(n => n.assistantId === id).map(n => n.number);
+  const v = $("#view");
+  v.innerHTML = `<div class="toolbar"><span class="muted">${items.length} assistant${items.length === 1 ? "" : "s"}</span><button class="btn" id="new">${ICON.plus}New assistant</button></div>
+    ${items.length ? `<div class="tiles">${items.map(a => `<article class="tile link" tabindex="0" data-id="${esc(a.id)}">
+      <div class="head"><span class="avatar">${esc(initials(a.name))}</span><div class="grow"><div class="name">${esc(a.name || "Untitled")}</div><div class="sub">${lines(a.id).length ? esc(lines(a.id).join(", ")) : "No phone number"}</div></div></div>
+      <div class="greet">${esc(a.firstMessage || "No greeting")}</div>
+      ${pathChips(a)}
+      <div class="actions"><button class="btn small" data-test="${esc(a.id)}">${ICON.mic}Test</button><button class="btn ghost small" data-edit="${esc(a.id)}">Edit</button></div>
+    </article>`).join("")}</div>`
+    : `<div class="panel empty">No assistants yet. Create one, then talk to it from this page.<br><button class="btn" id="new2">${ICON.plus}New assistant</button></div>`}`;
+  v.querySelectorAll("#new, #new2").forEach(b => b.onclick = () => go("assistants/new"));
+  v.querySelectorAll(".tile").forEach(t => { t.onclick = () => go("assistants/" + t.dataset.id); t.onkeydown = e => e.key === "Enter" && e.target === t && t.click(); });
+  v.querySelectorAll("[data-test]").forEach(b => b.onclick = e => { e.stopPropagation(); startTalk(items.find(a => a.id === b.dataset.test)); });
+}
 
 const LLM = ["openai", "groq", "openrouter", "deepseek", "omniroute", "custom-llm"];
 // A model each provider actually serves, filled in when the provider changes.
 const SUGGESTED_MODEL = { openai: "gpt-4.1-mini", groq: "openai/gpt-oss-20b", openrouter: "openai/gpt-4.1-mini", deepseek: "deepseek-chat", omniroute: "auto", "custom-llm": "" };
 const VOICES = [["kokoro", "Kokoro (free, local)"], ["11labs", "ElevenLabs"]];
-const ago = iso => iso ? new Date(iso).toLocaleString() : "";
+const NEW_ASSISTANT = { model: { provider: "openai", model: "gpt-4.1-mini" }, voice: { provider: "kokoro", voiceId: "af_heart" }, transcriber: { provider: "deepgram", model: "nova-3", language: "multi" } };
 
-function pathChips(a) {
-  const t = a.transcriber || {}, m = a.model || {}, v = a.voice || {};
-  return `<div class="path"><span class="node">${esc(t.provider || "deepgram")} ${esc(t.language || "")}</span><span class="wire"></span><span class="node">${esc(m.model || "default model")}</span><span class="wire"></span><span class="node">${esc(v.provider || "kokoro")}</span></div>`;
-}
-
-async function viewAssistants() {
-  const items = await api("/assistant");
-  const v = $("#view");
-  v.innerHTML = `<div class="head"><div><h1>Assistants</h1><p>Each assistant answers calls with its own instructions, model and voice.</p></div><button class="btn" id="new">New assistant</button></div>
-    <div class="list">${items.length ? items.map(a => `<div class="row" tabindex="0" data-id="${a.id}"><div><div class="title">${esc(a.name || "Untitled")}</div><div class="sub">${esc(a.firstMessage || "No greeting")}</div></div>${pathChips(a)}<span class="tools"><button class="btn ghost" data-test="${a.id}" title="Talk to it from this browser">Test</button><span class="sub">Edit</span></span></div>`).join("")
-      : `<div class="empty">No assistants yet. Create one to answer your first call.<br><button class="btn" id="new2">New assistant</button></div>`}</div>`;
-  v.querySelectorAll("#new, #new2").forEach(b => b.onclick = () => editAssistant(null));
-  v.querySelectorAll(".row").forEach(r => { r.onclick = () => editAssistant(items.find(a => a.id === r.dataset.id)); r.onkeydown = e => e.key === "Enter" && e.target === r && r.click(); });
-  v.querySelectorAll("[data-test]").forEach(b => b.onclick = e => { e.stopPropagation(); startTalk(items.find(a => a.id === b.dataset.test)); });
-}
-
-function editAssistant(a) {
-  a = a || { model: { provider: "openai", model: "gpt-4.1-mini" }, voice: { provider: "kokoro", voiceId: "af_heart" }, transcriber: { provider: "deepgram", model: "nova-3", language: "multi" } };
+async function viewAssistant(id) {
+  const a = id === "new" ? structuredClone(NEW_ASSISTANT) : await api("/assistant/" + id);
+  setPage("assistants", a.id ? a.name || "Assistant" : "New assistant", "Follow the call from left to right: the caller is transcribed, answered by the model and spoken back");
+  const tab = location.hash.endsWith("/json") ? "json" : "setup";
   const m = a.model || {}, vo = a.voice || {}, t = a.transcriber || {};
   const system = (m.messages || []).find(x => x.role === "system")?.content || "";
+  const base = "#assistants/" + (a.id || "new");
   const v = $("#view");
-  v.innerHTML = `<div class="head"><div><h1>${a.id ? esc(a.name || "Assistant") : "New assistant"}</h1><p>Follow the call from left to right: what the caller says is transcribed, answered by the model and spoken back.</p></div>${a.id ? `<button type="button" class="btn ghost" id="test" title="Talk to the saved version from this browser">Test</button>` : ""}</div>
-  <form class="editor" id="f">
+  v.innerHTML = `<div class="toolbar">${tabs([["setup", "Setup"], ["json", "JSON"]], tab)}<span class="spacer"></span>${a.id ? `<button type="button" class="btn ghost" id="test">${ICON.mic}Test</button>` : ""}</div>
+  <section class="panel"><div class="body" id="pane"></div></section>`;
+  v.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { location.hash = base + (b.dataset.tab === "json" ? "/json" : ""); });
+  if (a.id) $("#test").onclick = () => startTalk(a);
+  const pane = $("#pane");
+  const save = async body => {
+    try { await api(a.id ? "/assistant/" + a.id : "/assistant", { method: a.id ? "PATCH" : "POST", body: JSON.stringify(body) }); go("assistants"); }
+    catch (err) { $("#err").textContent = err.message; }
+  };
+  const footer = `<div class="error" id="err" role="alert"></div>
+    <div class="row-actions">${a.id ? `<button type="button" class="btn danger" id="del">Delete</button>` : ""}<span class="spacer"></span><a class="btn ghost" href="#assistants">Cancel</a><button class="btn">${a.id ? "Save changes" : "Create assistant"}</button></div>`;
+
+  if (tab === "json") {
+    const { id: _i, createdAt: _c, updatedAt: _u, ...doc } = a;
+    pane.innerHTML = `<form id="f"><p class="muted" style="margin-top:0">The same JSON shape as Vapi's assistant API. Paste an assistant exported from another platform, or edit fields the form doesn't show.</p>
+      <textarea class="input code" id="json" spellcheck="false" aria-label="Assistant JSON">${esc(JSON.stringify(doc, null, 2))}</textarea>${footer}</form>`;
+    $("#f").onsubmit = e => {
+      e.preventDefault();
+      let body;
+      try { body = JSON.parse($("#json").value); } catch (err) { return $("#err").textContent = "That isn't valid JSON: " + err.message; }
+      save(body);
+    };
+  } else {
+    pane.innerHTML = `<form id="f">
     <div class="line-diagram">
-      <div class="stage caller"><h3>Caller</h3><span class="sub" style="color:var(--muted)">Phone line</span></div><div class="cable"></div>
+      <div class="stage caller"><h3>Caller</h3><span class="muted" style="font-size:12.5px">Phone or browser</span></div><div class="cable"></div>
       <div class="stage"><h3>Transcriber</h3><label>Provider</label><select name="tp"><option>deepgram</option></select><label>Language</label><input name="tl" value="${esc(t.language || "multi")}" placeholder="pt-BR, en, multi"></div><div class="cable"></div>
       <div class="stage"><h3>Model</h3><label>Provider</label><select name="mp">${LLM.map(p => `<option ${p === m.provider ? "selected" : ""}>${p}</option>`).join("")}</select><label>Model</label><input name="mm" value="${esc(m.model || "")}"></div><div class="cable"></div>
       <div class="stage"><h3>Voice</h3><label>Provider</label><select name="vp">${VOICES.map(([k, l]) => `<option value="${k}" ${k === vo.provider || (k === "11labs" && vo.provider === "elevenlabs") ? "selected" : ""}>${l}</option>`).join("")}</select><label>Voice ID</label><input name="vv" value="${esc(vo.voiceId || "")}"></div>
     </div>
-    <div class="field"><label for="name">Name</label><input id="name" name="name" required value="${esc(a.name || "")}" placeholder="Front desk"></div>
+    <div class="field" style="margin-top:22px"><label for="name">Name</label><input id="name" name="name" required value="${esc(a.name || "")}" placeholder="Front desk"></div>
     <div class="field"><label for="greet">Greeting</label><p class="hint">The first thing callers hear.</p><input id="greet" name="greet" value="${esc(a.firstMessage || "")}" placeholder="Hi! How can I help you today?"></div>
-    <div class="field"><label for="sys">Instructions</label><p class="hint">How the assistant should behave on the call.</p><textarea id="sys" name="sys" placeholder="You are a friendly receptionist...">${esc(system)}</textarea></div>
+    <div class="field"><label for="sys">Instructions</label><p class="hint">How the assistant should behave on the call.</p><textarea id="sys" name="sys" placeholder="You are a friendly assistant for...">${esc(system)}</textarea></div>
     <div class="field"><label for="hook">Call report URL</label><p class="hint">Optional. We send the transcript here when a call ends.</p><input id="hook" name="hook" value="${esc((a.server || {}).url || "")}" placeholder="https://your-app.com/webhook"></div>
-    <div class="error" id="err" role="alert"></div>
-    <div class="actions">${a.id ? `<button type="button" class="btn danger" id="del">Delete assistant</button>` : ""}<span class="spacer"></span><button type="button" class="btn ghost" id="cancel">Cancel</button><button class="btn">${a.id ? "Save changes" : "Create assistant"}</button></div>
-  </form>`;
-  $("#cancel").onclick = () => go("assistants");
-  if (a.id) $("#test").onclick = () => startTalk(a);
-  const mp = $("[name=mp]"), mm = $("[name=mm]");
-  mp.onchange = () => { if (!mm.value || Object.values(SUGGESTED_MODEL).includes(mm.value)) mm.value = SUGGESTED_MODEL[mp.value] ?? ""; };
-  if (a.id) $("#del").onclick = async () => { if (confirm("Delete this assistant? Numbers using it will stop answering.")) { await api("/assistant/" + a.id, { method: "DELETE" }); go("assistants"); } };
-  $("#f").onsubmit = async e => {
-    e.preventDefault();
-    const f = new FormData(e.target);
-    const body = {
-      name: f.get("name"), firstMessage: f.get("greet") || undefined,
-      transcriber: { provider: f.get("tp"), model: "nova-3", language: f.get("tl") || "multi" },
-      model: { ...m, provider: f.get("mp"), model: f.get("mm"), messages: f.get("sys") ? [{ role: "system", content: f.get("sys") }] : [] },
-      voice: { provider: f.get("vp"), voiceId: f.get("vv") || undefined },
-      server: f.get("hook") ? { url: f.get("hook") } : undefined,
+    ${footer}</form>`;
+    const mp = $("[name=mp]"), mm = $("[name=mm]");
+    mp.onchange = () => { if (!mm.value || Object.values(SUGGESTED_MODEL).includes(mm.value)) mm.value = SUGGESTED_MODEL[mp.value] ?? ""; };
+    $("#f").onsubmit = e => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      save({
+        name: f.get("name"), firstMessage: f.get("greet") || undefined,
+        transcriber: { ...t, provider: f.get("tp"), model: t.model || "nova-3", language: f.get("tl") || "multi" },
+        model: { ...m, provider: f.get("mp"), model: f.get("mm"), messages: [...(m.messages || []).filter(x => x.role !== "system"), ...(f.get("sys") ? [{ role: "system", content: f.get("sys") }] : [])] },
+        voice: { ...vo, provider: f.get("vp"), voiceId: f.get("vv") || undefined },
+        server: f.get("hook") ? { ...(a.server || {}), url: f.get("hook") } : undefined,
+      });
     };
-    try { await api(a.id ? "/assistant/" + a.id : "/assistant", { method: a.id ? "PATCH" : "POST", body: JSON.stringify(body) }); go("assistants"); }
-    catch (err) { $("#err").textContent = err.message; }
-  };
+  }
+  if (a.id) $("#del").onclick = async () => { if (confirm("Delete this assistant? Numbers using it will stop answering.")) { await api("/assistant/" + a.id, { method: "DELETE" }); go("assistants"); } };
 }
 
 async function viewNumbers() {
-  const [nums, assistants] = await Promise.all([api("/phone-number"), api("/assistant")]);
+  setPage("numbers");
+  const [nums, assistants, info] = await Promise.all([api("/phone-number"), api("/assistant"), api("/dashboard/info")]);
   const name = id => assistants.find(a => a.id === id)?.name || "No assistant";
   const v = $("#view");
-  v.innerHTML = `<div class="head"><div><h1>Phone numbers</h1><p>Point each Twilio number's voice webhook to <code>${esc(location.origin)}/twilio/voice</code>, then choose who answers it.</p></div></div>
-  <form class="editor" id="add" style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:16px">
-    <div class="field" style="margin:0;flex:1;min-width:180px"><label for="num">Number</label><input id="num" name="num" required placeholder="+15551234567"></div>
-    <div class="field" style="margin:0;flex:1;min-width:180px"><label for="as">Answered by</label><select id="as" name="as" style="width:100%;padding:9px;border:1px solid var(--line);border-radius:6px">${assistants.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join("")}</select></div>
-    <button class="btn">Add number</button>
-  </form>
-  <div class="error" id="err" role="alert"></div>
-  <div class="list">${nums.length ? nums.map(n => `<div class="row" style="cursor:default"><div class="title">${esc(n.number)}</div><div class="sub">Answered by ${esc(name(n.assistantId))}</div><span class="tools"><button class="btn ghost" data-call="${n.id}">Call a phone</button><button class="btn danger" data-del="${n.id}">Remove</button></span></div>`).join("")
-    : `<div class="empty">No numbers yet. Add your Twilio number above.</div>`}</div>`;
+  v.innerHTML = `<section class="panel" style="margin-bottom:18px"><header><h2>Connect a Twilio number</h2></header><div class="body">
+    <p style="margin-top:0">In Twilio, open the number and set <b>A call comes in</b> to this webhook (HTTP POST):</p>
+    <div class="copyline"><code>${esc(info.twilioVoiceUrl)}</code><button class="btn ghost small" data-copy="${esc(info.twilioVoiceUrl)}">${ICON.copy}Copy</button></div>
+    ${info.publicUrl ? "" : `<p class="muted" style="margin-bottom:0">Twilio can't reach <code>localhost</code>. Start a tunnel (<code>cloudflared tunnel --url http://localhost:8000</code>), put its URL in <code>PUBLIC_URL</code> and restart.</p>`}
+    <form id="add" style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-top:18px">
+      <div class="field" style="margin:0;flex:1;min-width:180px"><label for="num">Number</label><input id="num" name="num" required placeholder="+15551234567"></div>
+      <div class="field" style="margin:0;flex:1;min-width:180px"><label for="as">Answered by</label><select id="as" name="as">${assistants.map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join("")}</select></div>
+      <button class="btn">${ICON.plus}Add number</button>
+    </form><div class="error" id="err" role="alert"></div></div></section>
+  ${nums.length ? `<div class="tiles">${nums.map(n => `<article class="tile">
+      <div class="head"><span class="avatar">${ICON.phone}</span><div class="grow"><div class="name">${esc(n.number)}</div><div class="sub">Answered by ${esc(name(n.assistantId))}</div></div><span class="badge">${esc(n.provider || "twilio")}</span></div>
+      <div class="actions"><button class="btn ghost small" data-call="${esc(n.id)}">${ICON.phone}Call a phone</button><span style="flex:1"></span><button class="btn danger small" data-del="${esc(n.id)}">Remove</button></div>
+    </article>`).join("")}</div>`
+    : `<div class="panel empty">No numbers yet. Add your Twilio number above.</div>`}`;
+  copyButtons(v);
   $("#add").onsubmit = async e => {
     e.preventDefault(); const f = new FormData(e.target);
     try { await api("/phone-number", { method: "POST", body: JSON.stringify({ number: f.get("num"), assistantId: f.get("as") }) }); viewNumbers(); }
     catch (err) { $("#err").textContent = err.message; }
   };
-  v.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => { await api("/phone-number/" + b.dataset.del, { method: "DELETE" }); viewNumbers(); });
+  v.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => { if (confirm("Remove this number from OpenRing?")) { await api("/phone-number/" + b.dataset.del, { method: "DELETE" }); viewNumbers(); } });
   v.querySelectorAll("[data-call]").forEach(b => b.onclick = () => { const n = nums.find(x => x.id === b.dataset.call); callPhone(n, name(n.assistantId)); });
 }
 
 // The number's assistant calls a phone: an outbound call, placed by Twilio.
 function callPhone(n, assistantName) {
   $("#callFrom").textContent = `${assistantName} calls from ${n.number}. On a Twilio trial account, only verified numbers can be called.`;
-  try { $("#callTo").value = localStorage.getItem("openring-call-to") || ""; } catch {}
+  $("#callTo").value = store.get("openring-call-to") || "";
   $("#callErr").textContent = "";
   $("#callDialog").showModal();
   $("#callForm").onsubmit = async e => {
     if (e.submitter?.value !== "call") return;  // Cancel just closes
     e.preventDefault();
     const to = $("#callTo").value.trim();
-    try { localStorage.setItem("openring-call-to", to); } catch {}
+    store.set("openring-call-to", to);
     try {
       const call = await api("/call", { method: "POST", body: JSON.stringify({ phoneNumberId: n.id, customer: { number: to } }) });
       $("#callDialog").close();
@@ -286,42 +634,101 @@ function callPhone(n, assistantName) {
   };
 }
 
+const CALL_FILTERS = { all: () => true, phone: c => c.type !== "webCall", browser: c => c.type === "webCall", failed: failed };
+
 async function viewCalls() {
-  const [calls, assistants] = await Promise.all([api("/call"), api("/assistant")]);
+  setPage("calls");
+  const [calls, assistants] = await Promise.all([api("/call?limit=500"), api("/assistant")]);
   const name = id => assistants.find(a => a.id === id)?.name || "Deleted assistant";
+  const filter = CALL_FILTERS[store.get("openring-calls-filter")] ? store.get("openring-calls-filter") : "all";
+  const shown = calls.filter(CALL_FILTERS[filter]);
+  const count = k => calls.filter(CALL_FILTERS[k]).length;
   const v = $("#view");
-  v.innerHTML = `<div class="head"><div><h1>Calls</h1><p>Every call with its transcript. Refresh to see new ones.</p></div><button class="btn ghost" id="refresh">Refresh</button></div>
-  <div class="list">${calls.length ? calls.map(c => `<div class="row" tabindex="0" data-id="${c.id}"><div><div class="title">${esc(caller(c))}</div><div class="sub">${ago(c.createdAt)}</div></div><div class="sub">${esc(name(c.assistantId))}${c.durationSeconds ? ` · ${Math.round(c.durationSeconds)}s` : ""}</div><span class="status ${esc(c.status)}">${esc(c.status)}</span></div>`).join("")
-    : `<div class="empty">No calls yet. Call one of your numbers, or press Test on an assistant to talk to it from here.</div>`}</div>`;
+  v.innerHTML = `<div class="toolbar">${tabs([["all", "All", count("all")], ["phone", "Phone", count("phone")], ["browser", "Browser", count("browser")], ["failed", "Failed", count("failed")]], filter, "filter")}<button class="btn ghost" id="refresh">${ICON.refresh}Refresh</button></div>
+  <section class="panel">${shown.length ? `<div class="scroll"><table class="table"><thead><tr><th>Caller</th><th>Assistant</th><th class="hide-sm">Type</th><th class="num">Duration</th><th class="num hide-sm">Response</th><th>Status</th><th class="num hide-sm">When</th></tr></thead><tbody>
+    ${shown.map(c => `<tr class="link" tabindex="0" data-id="${esc(c.id)}"><td><b>${esc(caller(c))}</b></td><td>${esc(name(c.assistantId))}</td><td class="hide-sm muted">${esc(TYPE[c.type] || c.type)}</td><td class="num">${dur(c.durationSeconds)}</td><td class="num hide-sm">${ms(c.artifact?.performanceMetrics?.turnLatencyAverage)}</td><td>${statusBadge(c)}</td><td class="num hide-sm muted">${when(c.createdAt)}</td></tr>`).join("")}
+  </tbody></table></div>` : `<div class="empty">${calls.length ? "No calls match this filter." : "No calls yet. Call one of your numbers, or press Test on an assistant to talk to it from here."}</div>`}</section>`;
   $("#refresh").onclick = viewCalls;
-  v.querySelectorAll(".row").forEach(r => { r.onclick = () => go("calls/" + r.dataset.id); r.onkeydown = e => e.key === "Enter" && r.click(); });
+  v.querySelectorAll("[data-filter]").forEach(b => b.onclick = () => { store.set("openring-calls-filter", b.dataset.filter); viewCalls(); });
+  v.querySelectorAll("tr.link").forEach(r => { r.onclick = () => go("calls/" + r.dataset.id); r.onkeydown = e => e.key === "Enter" && r.click(); });
 }
 
-const caller = c => c.type === "webCall" ? "Browser test"
-  : c.type === "outboundPhoneCall" ? `Call to ${c.customer?.number}` : c.customer?.number || "Unknown caller";
-
+let callTab = "transcript";
 async function viewCall(id) {
   const [c, assistants] = await Promise.all([api("/call/" + id), api("/assistant")]);
-  showCall(c, aid => assistants.find(a => a.id === aid)?.name || "Deleted assistant");
+  if (location.hash !== "#calls/" + id) return;
+  const name = assistants.find(a => a.id === c.assistantId)?.name || "Deleted assistant";
+  setPage("calls", caller(c), `${name} · ${when(c.startedAt || c.createdAt)}`);
+  const pm = c.artifact?.performanceMetrics || {}, msgs = c.messages || [], turns = pm.turnLatencies || [];
+  const maxTurn = Math.max(1, ...turns.map(t => t.turnLatency));
+  const panes = {
+    transcript: () => msgs.length ? `<div class="transcript">${msgs.map(m => `<div class="bubble ${m.role === "user" ? "user" : "assistant"}">${esc(m.message)}</div>`).join("")}</div>` : `<p class="muted">${c.status === "ended" ? "No transcript for this call." : "The transcript appears when the call ends."}</p>`,
+    latency: () => turns.length ? `<div class="legend" style="margin-bottom:14px">${PARTS.map(([, l, col]) => `<span style="--dot:${col}">${l}</span>`).join("")}</div><div class="turns">${turns.map((t, i) => `<div class="turn"><span class="muted">Turn ${i + 1}</span><div class="stack" style="width:${t.turnLatency / maxTurn * 100}%">${PARTS.map(([k, l, col]) => `<span style="width:${(t[k] || 0) / Math.max(1, PARTS.reduce((s, [p]) => s + (t[p] || 0), 0)) * 100}%;background:${col}" title="${l}: ${t[k] || 0} ms"></span>`).join("")}</div><b class="num">${ms(t.turnLatency)}</b></div>`).join("")}</div>` : `<p class="muted">No response times recorded for this call.</p>`,
+    json: () => `<pre class="json">${esc(JSON.stringify(c, null, 2))}</pre>`,
+  };
+  const v = $("#view");
+  v.innerHTML = `<div class="toolbar"><a class="btn ghost" href="#calls">← All calls</a><span class="spacer"></span>${statusBadge(c)}</div>
+  <div class="cards">
+    ${card("Duration", "clock", dur(c.durationSeconds), "v2")}
+    ${card("Response time", "bolt", ms(pm.turnLatencyAverage), pm.turnLatencyAverage > 1200 ? "v3" : "v6", turns.length ? `average of ${turns.length} turns` : "")}
+    ${card("Messages", "hash", num(msgs.length), "v5")}
+    ${card("Type", "phone", esc(TYPE[c.type] || c.type), "v1", c.endedReason ? esc(c.endedReason) : "")}
+  </div>
+  <div class="toolbar">${tabs([["transcript", "Transcript"], ["latency", "Response time"], ["json", "JSON"]], callTab)}</div>
+  <section class="panel"><div class="body">${panes[callTab]()}</div></section>`;
+  v.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { callTab = b.dataset.tab; viewCall(id); });
   // Follow a live call until it ends, as long as it is still on screen.
   if (c.status !== "ended") setTimeout(() => location.hash === "#calls/" + id && viewCall(id).catch(() => {}), 2000);
 }
 
-// Time from the caller falling silent to the assistant starting to speak, averaged over the call.
-function latencyText(c) {
-  const pm = c.artifact?.performanceMetrics;
-  if (!pm?.turnLatencyAverage) return "";
-  const parts = `Waiting for silence ${pm.endpointingLatencyAverage} ms, transcription ${pm.transcriberLatencyAverage} ms, model ${pm.modelLatencyAverage} ms, voice ${pm.voiceLatencyAverage} ms`;
-  return `<span title="${esc(parts)}">Response time: ${pm.turnLatencyAverage} ms (average of ${pm.turnLatencies.length} turns)</span>`;
+const KINDS = [["transcriber", "Speech to text"], ["model", "Language models"], ["voice", "Voices"], ["telephony", "Telephony"]];
+async function viewProviders() {
+  setPage("providers");
+  const info = await api("/dashboard/info");
+  const filter = store.get("openring-providers-filter") === "ready" ? "ready" : "all";
+  const rows = info.providers.filter(p => filter === "all" || p.ready);
+  const v = $("#view");
+  v.innerHTML = `<div class="toolbar">${tabs([["all", "All", info.providers.length], ["ready", "Ready", info.providers.filter(p => p.ready).length]], filter, "pf")}</div>
+  <section class="panel" style="margin-bottom:6px"><div class="body"><p style="margin:0">Provider keys live in ${info.envFile ? `<code>${esc(info.envFile)}</code>` : "the server's <code>.env</code> file"}. Add a key there and restart OpenRing. Keys are never sent to this page.</p></div></section>
+  ${KINDS.map(([kind, title]) => { const list = rows.filter(p => p.kind === kind); return list.length ? `<h2 class="section-title">${title}<span class="badge">${list.filter(p => p.ready).length}/${list.length}</span></h2>
+    <div class="tiles">${list.map(p => `<article class="tile"><div class="head"><span class="avatar">${esc(initials(p.name))}</span><div class="grow"><div class="name">${esc(p.name)}${p.free ? ' <span class="badge ok" style="margin-left:6px">Free</span>' : ""}</div><div class="sub">${p.env ? `<code>${esc(p.env)}</code>` : "Runs on this computer"}</div></div>${p.ready ? '<span class="badge ok">Ready</span>' : p.ready === null ? '<span class="badge">Local</span>' : '<span class="badge">Not set</span>'}</div>${p.note ? `<div class="muted" style="font-size:13px">${esc(p.note)}</div>` : ""}</article>`).join("")}</div>` : ""; }).join("")}`;
+  v.querySelectorAll("[data-pf]").forEach(b => b.onclick = () => { store.set("openring-providers-filter", b.dataset.pf); viewProviders(); });
 }
 
-function showCall(c, name) {
-  const msgs = c.messages || [];
-  $("#view").innerHTML = `<div class="head"><div><h1>${esc(caller(c))}</h1></div><button class="btn ghost" id="back">Back to calls</button></div>
-  <div class="editor"><div class="meta"><span>Assistant: ${esc(name(c.assistantId))}</span><span>Started: ${ago(c.startedAt || c.createdAt)}</span><span>Duration: ${c.durationSeconds ? Math.round(c.durationSeconds) + "s" : "—"}</span>${latencyText(c)}<span class="status ${esc(c.status)}">${esc(c.status)}</span></div>
-  ${c.endedReason ? `<p class="sub" style="color:var(--muted)">Ended: ${esc(c.endedReason)}</p>` : ""}
-  <div class="transcript">${msgs.length ? msgs.map(m => `<div class="bubble ${m.role === "user" ? "user" : "assistant"}">${esc(m.message)}</div>`).join("") : `<p style="color:var(--muted)">No transcript for this call.</p>`}</div></div>`;
-  $("#back").onclick = () => go("calls");
+async function viewSettings() {
+  setPage("settings");
+  const info = await api("/dashboard/info");
+  const tab = store.get("openring-settings-tab") === "security" ? "security" : "api";
+  const v = $("#view");
+  v.innerHTML = `<div class="toolbar">${tabs([["api", "API access"], ["security", "Password"]], tab, "st")}</div>
+  ${tab === "api" ? `<div class="grid2 even">
+    <section class="panel"><header><h2>API</h2></header><div class="body">
+      <div class="field"><label>Base URL</label><p class="hint">Point a Vapi-compatible client here instead of the hosted API.</p><div class="copyline"><code>${esc(info.baseUrl)}</code><button class="btn ghost small" data-copy="${esc(info.baseUrl)}">${ICON.copy}Copy</button></div></div>
+      <div class="field"><label>API key</label><p class="hint">Send it as <code>Authorization: Bearer …</code>. Set in <code>OPENRING_API_KEY</code>.</p><div class="copyline"><code id="key">${"•".repeat(24)}</code><button class="btn ghost small" id="reveal">Show</button><button class="btn ghost small" data-copy="${esc(info.apiKey)}">${ICON.copy}Copy</button></div></div>
+      <div class="field"><label>Try it</label><pre class="json" style="white-space:pre-wrap;overflow-wrap:anywhere">curl ${esc(info.baseUrl)}/assistant \\
+  -H "Authorization: Bearer $OPENRING_API_KEY"</pre></div>
+    </div></section>
+    <section class="panel"><header><h2>Telephony</h2></header><div class="body">
+      <div class="field"><label>Public URL</label><p class="hint">Where Twilio reaches this server (<code>PUBLIC_URL</code>).</p>${info.publicUrl ? `<code>${esc(info.publicUrl)}</code>` : `<span class="badge warn">Not set</span>`}</div>
+      <div class="field"><label>Twilio voice webhook</label><p class="hint">Set it on each number, HTTP POST.</p><div class="copyline"><code>${esc(info.twilioVoiceUrl)}</code><button class="btn ghost small" data-copy="${esc(info.twilioVoiceUrl)}">${ICON.copy}Copy</button></div></div>
+      <div class="field"><label>Version</label><span class="muted">OpenRing ${esc(info.version)}</span></div>
+    </div></section></div>`
+  : `<section class="panel" style="max-width:520px"><header><h2>Change password</h2></header><div class="body"><form id="pwForm">
+      <div class="field"><label for="cur">Current password</label><input id="cur" type="password" required autocomplete="current-password"></div>
+      <div class="field"><label for="np">New password</label><input id="np" type="password" required minlength="8" autocomplete="new-password"></div>
+      <div class="field"><label for="np2">Repeat new password</label><input id="np2" type="password" required autocomplete="new-password"></div>
+      <div class="error" id="err" role="alert"></div>
+      <div class="row-actions"><span class="spacer"></span><button class="btn">Change password</button></div>
+      <p class="muted" style="font-size:13px;margin-bottom:0">Changing it signs out every other browser.</p></form></div></section>`}`;
+  v.querySelectorAll("[data-st]").forEach(b => b.onclick = () => { store.set("openring-settings-tab", b.dataset.st); viewSettings(); });
+  copyButtons(v);
+  if ($("#reveal")) $("#reveal").onclick = e => { const k = $("#key"), shown = k.textContent === info.apiKey; k.textContent = shown ? "•".repeat(24) : info.apiKey; e.target.textContent = shown ? "Show" : "Hide"; };
+  if ($("#pwForm")) $("#pwForm").onsubmit = async e => {
+    e.preventDefault();
+    if ($("#np").value !== $("#np2").value) return $("#err").textContent = "The new passwords don't match.";
+    try { await api("/auth/password", { method: "POST", body: JSON.stringify({ current: $("#cur").value, password: $("#np").value }) }); e.target.reset(); $("#err").textContent = ""; $("#err").insertAdjacentHTML("afterbegin", '<span style="color:var(--ok)">Password changed.</span>'); }
+    catch (err) { $("#err").textContent = err.message; }
+  };
 }
 
 // ---- Browser test: talk to an assistant through this computer's microphone ------------------
@@ -418,31 +825,54 @@ async function openCall(id) {
     await new Promise(r => setTimeout(r, 500));
   }
   $("#talkDialog").close();
+  callTab = "transcript";
   go("calls/" + id);
 }
 
 $("#talkDialog").addEventListener("close", () => endTalk());
 
-const views = { assistants: viewAssistants, numbers: viewNumbers, calls: viewCalls };
+// ---- Routing and shell ------------------------------------------------------------------
+const views = { home: viewHome, assistants: viewAssistants, numbers: viewNumbers, calls: viewCalls, providers: viewProviders, settings: viewSettings };
 function go(name) { location.hash = name; }
 async function route() {
-  const [name, id] = (location.hash.slice(1) || "assistants").split("/");
-  document.querySelectorAll(".rail nav button").forEach(b => b.dataset.view === name ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current"));
-  try { await (name === "calls" && id ? viewCall(id) : (views[name] || viewAssistants)()); }
-  catch (err) { $("#view").innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
-}
-document.querySelectorAll(".rail nav button").forEach(b => b.onclick = () => go(b.dataset.view));
-window.addEventListener("hashchange", route);
-(async () => {
-  // Opened on the same computer as the server: connect with its key, even over an old saved one.
+  if ($("#app").hidden) return;
+  $("#app").classList.remove("menu-open");
+  const [name, id] = (location.hash.slice(1) || "home").split("/");
   try {
-    const r = await fetch("/local-session");
-    if (r.ok) { apiKey = (await r.json()).apiKey || apiKey; try { localStorage.setItem("openring-key", apiKey); } catch {} }
-  } catch {}
-  renderKey();
-  if (!apiKey) askKey();
+    if (name === "calls" && id) await viewCall(id);
+    else if (name === "assistants" && id) await viewAssistant(id);
+    else await (views[name] || viewHome)();
+  } catch (err) { $("#view").innerHTML = `<div class="panel empty">${esc(err.message)}</div>`; }
+}
+
+function startApp(state) {
+  $("#gate").hidden = true;
+  $("#gate").innerHTML = "";
+  $("#app").hidden = false;
+  $("#version").textContent = "v" + (state.version || "");
   route();
-})();
+}
+
+function toggleTheme() {
+  const dark = getComputedStyle(document.documentElement).colorScheme === "dark";
+  document.documentElement.dataset.theme = dark ? "light" : "dark";
+  store.set("openring-theme", document.documentElement.dataset.theme);
+}
+
+async function checkHealth() {
+  const ok = await fetch("/health").then(r => r.ok).catch(() => false);
+  const h = $("#health");
+  h.classList.toggle("down", !ok);
+  h.textContent = ok ? "Online" : "Offline";
+}
+
+$("#theme").onclick = toggleTheme;
+$("#signOut").onclick = signOut;
+$("#signOut2").onclick = signOut;
+$("#menu").onclick = () => $("#app").classList.toggle("menu-open");
+window.addEventListener("hashchange", route);
+setInterval(checkHealth, 15000);
+showGate();
 </script>
 </body>
 </html>

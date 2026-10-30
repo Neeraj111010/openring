@@ -40,6 +40,47 @@ class Store:
                     f"CREATE TABLE IF NOT EXISTS {name} ("
                     "id TEXT PRIMARY KEY, created_at TEXT NOT NULL, doc TEXT NOT NULL)"
                 )
+            # Server-wide values (the dashboard password hash) and dashboard login sessions.
+            self._db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            self._db.execute(
+                "CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, expires_at REAL NOT NULL)"
+            )
+            self._db.commit()
+
+    def get_setting(self, key: str) -> str | None:
+        with self._lock:
+            row = self._db.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def set_setting(self, key: str, value: str | None) -> None:
+        with self._lock:
+            if value is None:
+                self._db.execute("DELETE FROM settings WHERE key = ?", (key,))
+            else:
+                self._db.execute(
+                    "INSERT INTO settings (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (key, value),
+                )
+            self._db.commit()
+
+    def add_session(self, token_hash: str, expires_at: float) -> None:
+        with self._lock:
+            self._db.execute("INSERT INTO sessions (token_hash, expires_at) VALUES (?, ?)", (token_hash, expires_at))
+            self._db.commit()
+
+    def session_expiry(self, token_hash: str) -> float | None:
+        with self._lock:
+            row = self._db.execute("SELECT expires_at FROM sessions WHERE token_hash = ?", (token_hash,)).fetchone()
+        return row[0] if row else None
+
+    def delete_sessions(self, token_hash: str | None = None) -> None:
+        """Ends one session, or every session when no token is given."""
+        with self._lock:
+            if token_hash is None:
+                self._db.execute("DELETE FROM sessions")
+            else:
+                self._db.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
             self._db.commit()
 
     def _check(self, collection: str) -> None:

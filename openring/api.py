@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import os
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from loguru import logger
 
-from . import __version__, twilio
+from . import __version__, auth, providers, stats, twilio
 from .config import Settings, get_settings
 from .providers import ProviderError, resolve_plan
 from .store import Store, now_iso
@@ -61,14 +62,47 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     if not settings.validate_twilio_signature:
         logger.warning("VALIDATE_TWILIO_SIGNATURE=false: /twilio/voice accepts requests from anyone. Local tests only.")
 
-    def require_key(authorization: str = Header(default="")) -> None:
+    sessions = auth.Sessions(store)
+    throttle = auth.Throttle()
+    if settings.password and not sessions.password_set:
+        if problem := auth.password_problem(settings.password):
+            logger.error("OPENRING_PASSWORD ignored: {}", problem)
+        else:
+            sessions.set_password(settings.password)
+
+    def signed_in(request: Request) -> bool:
+        """A dashboard session: the login cookie plus the header only the dashboard sends."""
+        if request.headers.get(auth.DASHBOARD_HEADER) != "dashboard":
+            return False
+        return sessions.valid(request.cookies.get(auth.COOKIE, ""))
+
+    def require_key(request: Request, authorization: str = Header(default="")) -> None:
         if not settings.api_key:
             return
         token = authorization.removeprefix("Bearer ").strip()
-        if not hmac.compare_digest(token.encode(), settings.api_key.encode()):
-            raise HTTPException(status_code=401, detail="invalid or missing API key")
+        if token and hmac.compare_digest(token.encode(), settings.api_key.encode()):
+            return
+        if signed_in(request):
+            return
+        raise HTTPException(status_code=401, detail="invalid or missing API key")
 
-    auth = [Depends(require_key)]
+    def require_session(request: Request) -> None:
+        if not signed_in(request):
+            raise HTTPException(status_code=401, detail="sign in to the dashboard")
+
+    auth_deps = [Depends(require_key)]
+
+    def with_session_cookie(body: dict[str, Any], request: Request) -> JSONResponse:
+        response = JSONResponse(body)
+        response.set_cookie(
+            auth.COOKIE,
+            sessions.start(),
+            max_age=auth.SESSION_SECONDS,
+            httponly=True,
+            samesite="strict",
+            secure=request.url.scheme == "https",
+        )
+        return response
 
     def _get_or_404(collection: str, item_id: str) -> dict[str, Any]:
         doc = store.get(collection, item_id)
@@ -84,46 +118,115 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
 
     @app.get("/", include_in_schema=False)
     def dashboard() -> FileResponse:
-        return FileResponse(Path(__file__).parent / "static" / "index.html")
-
-    @app.get("/local-session", include_in_schema=False)
-    def local_session(request: Request) -> dict[str, str]:
-        """Lets the dashboard connect automatically when opened on the same machine."""
-        if not _is_direct_local_request(request):
-            raise HTTPException(status_code=403, detail="only available from this computer")
-        return {"apiKey": settings.api_key}
+        # Revalidate every time, so an upgraded OpenRing never shows yesterday's dashboard.
+        return FileResponse(Path(__file__).parent / "static" / "index.html", headers={"Cache-Control": "no-cache"})
 
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "version": __version__}
 
+    # ---- Dashboard login ---------------------------------------------------------
+    @app.get("/auth/state", include_in_schema=False)
+    def auth_state(request: Request) -> dict[str, Any]:
+        return {
+            "passwordSet": sessions.password_set,
+            "signedIn": signed_in(request),
+            # Before a password exists, only someone at this computer may choose it: through a
+            # tunnel, a stranger with the URL could otherwise take the dashboard first.
+            "canSetUp": _is_direct_local_request(request),
+            "version": __version__,
+        }
+
+    @app.post("/auth/setup", include_in_schema=False)
+    def auth_setup(body: dict[str, Any], request: Request) -> JSONResponse:
+        if sessions.password_set:
+            raise HTTPException(status_code=409, detail="a password is already set; sign in instead")
+        if not _is_direct_local_request(request):
+            raise HTTPException(
+                status_code=403,
+                detail="choose the password from the server's own computer (http://localhost), "
+                "or set OPENRING_PASSWORD and restart",
+            )
+        password = str(body.get("password") or "")
+        if problem := auth.password_problem(password):
+            raise HTTPException(status_code=400, detail=problem)
+        sessions.set_password(password)
+        return with_session_cookie({"signedIn": True}, request)
+
+    @app.post("/auth/login", include_in_schema=False)
+    def auth_login(body: dict[str, Any], request: Request) -> JSONResponse:
+        who = request.client.host if request.client else "?"
+        if throttle.blocked(who):
+            raise HTTPException(status_code=429, detail="too many wrong passwords; wait a few minutes")
+        if not sessions.check(str(body.get("password") or "")):
+            throttle.fail(who)
+            raise HTTPException(status_code=401, detail="wrong password")
+        throttle.clear(who)
+        return with_session_cookie({"signedIn": True}, request)
+
+    @app.post("/auth/logout", include_in_schema=False)
+    def auth_logout(request: Request) -> JSONResponse:
+        sessions.end(request.cookies.get(auth.COOKIE, ""))
+        response = JSONResponse({"signedIn": False})
+        response.delete_cookie(auth.COOKIE)
+        return response
+
+    @app.post("/auth/password", include_in_schema=False, dependencies=[Depends(require_session)])
+    def auth_change_password(body: dict[str, Any], request: Request) -> JSONResponse:
+        if not sessions.check(str(body.get("current") or "")):
+            raise HTTPException(status_code=400, detail="the current password is wrong")
+        password = str(body.get("password") or "")
+        if problem := auth.password_problem(password):
+            raise HTTPException(status_code=400, detail=problem)
+        sessions.set_password(password)  # signs out every other browser
+        return with_session_cookie({"signedIn": True}, request)
+
+    @app.get("/dashboard/info", include_in_schema=False, dependencies=[Depends(require_session)])
+    def dashboard_info(request: Request) -> dict[str, Any]:
+        """What the Settings and Providers pages show. Provider keys are reported as set or not, never shown."""
+        base = settings.public_url or f"{request.url.scheme}://{request.url.netloc}"
+        return {
+            "version": __version__,
+            "apiKey": settings.api_key,
+            "publicUrl": settings.public_url,
+            "baseUrl": base,
+            "twilioVoiceUrl": base + "/twilio/voice",
+            "envFile": os.environ.get("OPENRING_ENV_FILE", ""),
+            "providers": providers.provider_status(settings),
+        }
+
+    @app.get("/stats", dependencies=auth_deps)
+    def call_stats(days: int | None = 30) -> dict[str, Any]:
+        """Totals for the dashboard's overview; `days=0` covers every call."""
+        return stats.summarize(store.list("calls", limit=100_000), days or None)
+
     # ---- Assistants (same JSON shape as Vapi's /assistant) -------------------
-    @app.post("/assistant", status_code=201, dependencies=auth)
+    @app.post("/assistant", status_code=201, dependencies=auth_deps)
     def create_assistant(body: dict[str, Any]) -> dict[str, Any]:
         _validate_assistant(body)
         return store.create("assistants", body)
 
-    @app.get("/assistant", dependencies=auth)
+    @app.get("/assistant", dependencies=auth_deps)
     def list_assistants(limit: int = 100) -> list[dict[str, Any]]:
         return store.list("assistants", limit)
 
-    @app.get("/assistant/{assistant_id}", dependencies=auth)
+    @app.get("/assistant/{assistant_id}", dependencies=auth_deps)
     def get_assistant(assistant_id: str) -> dict[str, Any]:
         return _get_or_404("assistants", assistant_id)
 
-    @app.patch("/assistant/{assistant_id}", dependencies=auth)
+    @app.patch("/assistant/{assistant_id}", dependencies=auth_deps)
     def update_assistant(assistant_id: str, body: dict[str, Any]) -> dict[str, Any]:
         current = _get_or_404("assistants", assistant_id)
         _validate_assistant({**current, **body})
         return store.update("assistants", assistant_id, body)
 
-    @app.delete("/assistant/{assistant_id}", dependencies=auth)
+    @app.delete("/assistant/{assistant_id}", dependencies=auth_deps)
     def delete_assistant(assistant_id: str) -> dict[str, Any]:
         _get_or_404("assistants", assistant_id)
         return store.delete("assistants", assistant_id)
 
     # ---- Phone numbers --------------------------------------------------------
-    @app.post("/phone-number", status_code=201, dependencies=auth)
+    @app.post("/phone-number", status_code=201, dependencies=auth_deps)
     def create_phone_number(body: dict[str, Any]) -> dict[str, Any]:
         if not body.get("number"):
             raise HTTPException(status_code=400, detail="number is required (E.164, e.g. +15551234567)")
@@ -132,36 +235,36 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         body.setdefault("provider", "twilio")
         return store.create("phone_numbers", body)
 
-    @app.get("/phone-number", dependencies=auth)
+    @app.get("/phone-number", dependencies=auth_deps)
     def list_phone_numbers(limit: int = 100) -> list[dict[str, Any]]:
         return store.list("phone_numbers", limit)
 
-    @app.get("/phone-number/{number_id}", dependencies=auth)
+    @app.get("/phone-number/{number_id}", dependencies=auth_deps)
     def get_phone_number(number_id: str) -> dict[str, Any]:
         return _get_or_404("phone_numbers", number_id)
 
-    @app.patch("/phone-number/{number_id}", dependencies=auth)
+    @app.patch("/phone-number/{number_id}", dependencies=auth_deps)
     def update_phone_number(number_id: str, body: dict[str, Any]) -> dict[str, Any]:
         _get_or_404("phone_numbers", number_id)
         if body.get("assistantId"):
             _get_or_404("assistants", body["assistantId"])
         return store.update("phone_numbers", number_id, body)
 
-    @app.delete("/phone-number/{number_id}", dependencies=auth)
+    @app.delete("/phone-number/{number_id}", dependencies=auth_deps)
     def delete_phone_number(number_id: str) -> dict[str, Any]:
         _get_or_404("phone_numbers", number_id)
         return store.delete("phone_numbers", number_id)
 
     # ---- Calls ------------------------------------------------------------------
-    @app.get("/call", dependencies=auth)
+    @app.get("/call", dependencies=auth_deps)
     def list_calls(limit: int = 100) -> list[dict[str, Any]]:
         return store.list("calls", limit)
 
-    @app.get("/call/{call_id}", dependencies=auth)
+    @app.get("/call/{call_id}", dependencies=auth_deps)
     def get_call(call_id: str) -> dict[str, Any]:
         return _get_or_404("calls", call_id)
 
-    @app.post("/call", status_code=201, dependencies=auth)
+    @app.post("/call", status_code=201, dependencies=auth_deps)
     async def create_call(body: dict[str, Any]) -> dict[str, Any]:
         """Outbound phone call, Vapi-style: the assistant calls `customer.number` from one of your numbers."""
         number = _get_or_404("phone_numbers", str(body.get("phoneNumberId") or ""))
@@ -205,7 +308,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     # Browser calls outlive the request that starts them; holding the tasks keeps them from being collected.
     web_calls: set[asyncio.Task] = set()
 
-    @app.post("/call/web", status_code=201, dependencies=auth)
+    @app.post("/call/web", status_code=201, dependencies=auth_deps)
     async def create_web_call(body: dict[str, Any]) -> dict[str, Any]:
         """Talk to an assistant from the browser: answers the page's WebRTC offer and starts the call."""
         from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection

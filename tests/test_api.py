@@ -197,6 +197,7 @@ def test_dashboard_served_without_key():
     client = make_client()
     r = client.get("/")
     assert r.status_code == 200 and "<title>OpenRing</title>" in r.text
+    assert r.headers["cache-control"] == "no-cache"  # an upgrade shows the new dashboard right away
 
 
 def _local_client(**kw):
@@ -204,19 +205,78 @@ def _local_client(**kw):
     return TestClient(create_app(settings, Store(":memory:")), client=("127.0.0.1", 50000), **kw)
 
 
-def test_local_session_direct_localhost_only():
-    client = _local_client(base_url="http://localhost:8000")
-    assert client.get("/local-session").json() == {"apiKey": "test-key"}
+DASH = {"X-OpenRing": "dashboard"}
 
 
-def test_local_session_refused_through_tunnel():
+def test_password_setup_only_from_this_computer():
     # ngrok/cloudflared connect from 127.0.0.1 but keep the public Host and add forwarding headers.
-    client = _local_client(base_url="https://abc.ngrok-free.app")
-    assert client.get("/local-session").status_code == 403
+    tunnel = _local_client(base_url="https://abc.ngrok-free.app")
+    assert tunnel.get("/auth/state").json()["canSetUp"] is False
+    assert tunnel.post("/auth/setup", json={"password": "long enough"}).status_code == 403
+    forwarded = _local_client(base_url="http://localhost:8000")
+    assert forwarded.post("/auth/setup", json={"password": "long enough"},
+                          headers={"X-Forwarded-For": "203.0.113.9"}).status_code == 403
+    assert make_client().post("/auth/setup", json={"password": "long enough"}).status_code == 403
+
     local = _local_client(base_url="http://localhost:8000")
-    assert local.get("/local-session", headers={"X-Forwarded-For": "203.0.113.9"}).status_code == 403
+    state = local.get("/auth/state").json()
+    assert state["canSetUp"] and not state["passwordSet"] and not state["signedIn"]
+    assert local.post("/auth/setup", json={"password": "short"}).status_code == 400
+    assert local.post("/auth/setup", json={"password": "long enough"}).status_code == 200
+    assert local.get("/auth/state", headers=DASH).json()["signedIn"] is True
+    assert local.post("/auth/setup", json={"password": "another one"}).status_code == 409
 
 
-def test_local_session_refused_from_network():
-    client = make_client()  # TestClient peer is not loopback
-    assert client.get("/local-session").status_code == 403
+def test_dashboard_session_unlocks_the_api():
+    client = make_client(password="correct horse")
+    assert client.get("/assistant").status_code == 401
+    assert client.post("/auth/login", json={"password": "wrong password"}).status_code == 401
+    r = client.post("/auth/login", json={"password": "correct horse"})
+    assert r.status_code == 200
+    cookie = r.headers["set-cookie"].lower()
+    assert "httponly" in cookie and "samesite=strict" in cookie
+    # The cookie alone is not enough: a cross-site request cannot add the dashboard header.
+    assert client.get("/assistant").status_code == 401
+    assert client.get("/assistant", headers=DASH).status_code == 200
+    info = client.get("/dashboard/info", headers=DASH).json()
+    assert info["apiKey"] == "test-key"
+    assert info["twilioVoiceUrl"] == "https://ring.example.com/twilio/voice"
+    assert {p["id"] for p in info["providers"]} >= {"deepgram", "groq", "11labs", "kokoro", "twilio"}
+    assert "test-key" not in str(info["providers"])
+
+    client.post("/auth/logout", headers=DASH)
+    assert client.get("/assistant", headers=DASH).status_code == 401
+
+
+def test_dashboard_info_needs_a_session_not_the_api_key():
+    client = make_client()
+    assert client.get("/dashboard/info", headers=AUTH).status_code == 401
+
+
+def test_change_password_signs_out_other_browsers():
+    settings = Settings(api_key="test-key", public_url="", db_path=":memory:", password="first password")
+    app = create_app(settings, Store(":memory:"))
+    a, b = TestClient(app), TestClient(app)
+    for c in (a, b):
+        assert c.post("/auth/login", json={"password": "first password"}).status_code == 200
+    assert a.post("/auth/password", json={"current": "nope", "password": "second password"},
+                  headers=DASH).status_code == 400
+    assert a.post("/auth/password", json={"current": "first password", "password": "second password"},
+                  headers=DASH).status_code == 200
+    assert a.get("/assistant", headers=DASH).status_code == 200
+    assert b.get("/assistant", headers=DASH).status_code == 401
+    assert b.post("/auth/login", json={"password": "second password"}).status_code == 200
+
+
+def test_login_throttled_after_many_wrong_passwords():
+    client = make_client(password="correct horse")
+    for _ in range(10):
+        assert client.post("/auth/login", json={"password": "guess"}).status_code == 401
+    assert client.post("/auth/login", json={"password": "correct horse"}).status_code == 429
+
+
+def test_stats_endpoint():
+    client = make_client()
+    assert client.get("/stats").status_code == 401
+    body = client.get("/stats?days=7", headers=AUTH).json()
+    assert body["calls"] == 0 and len(body["perDay"]) == 7

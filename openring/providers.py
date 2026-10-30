@@ -131,6 +131,36 @@ def kokoro_status() -> str:
     return f"the free Kokoro voice is still downloading ({mb} of about 120 MB, one time only); try again in a minute"
 
 
+def provider_status(settings: Any) -> list[dict[str, Any]]:
+    """Each provider the dashboard lists, and whether it is ready to use. Keys are never returned."""
+    def has(env: str) -> bool:
+        return bool(os.environ.get(env, "").strip())
+
+    rows = [{"id": "deepgram", "name": "Deepgram", "kind": "transcriber", "env": "DEEPGRAM_API_KEY",
+             "ready": has("DEEPGRAM_API_KEY")}]
+    names = {"openai": "OpenAI", "groq": "Groq", "openrouter": "OpenRouter", "deepseek": "DeepSeek",
+             "omniroute": "OmniRoute"}
+    for pid, (base_url, env) in LLM_PROVIDERS.items():
+        row = {"id": pid, "name": names.get(pid, pid), "kind": "model", "env": env, "ready": has(env)}
+        if pid == "omniroute":  # a local gateway that works without a key, when it is running
+            row.update(env=None, free=True, ready=None, note=f"Works while OmniRoute runs at {base_url}")
+        rows.append(row)
+    rows.append({"id": "11labs", "name": "ElevenLabs", "kind": "voice", "env": "ELEVENLABS_API_KEY",
+                 "ready": has("ELEVENLABS_API_KEY")})
+    kokoro = {"id": "kokoro", "name": "Kokoro", "kind": "voice", "env": None, "free": True,
+              "ready": kokoro_installed() and kokoro_ready()}
+    if not kokoro_installed():
+        kokoro["note"] = "not installed: pip install 'openring[kokoro]'"
+    elif not kokoro_ready():
+        kokoro["note"] = (f"download failed: {_kokoro['error']}" if _kokoro["error"]
+                          else f"downloading, {_kokoro['bytes'] // 1_000_000} of about 120 MB")
+    rows.append(kokoro)
+    rows.append({"id": "twilio", "name": "Twilio", "kind": "telephony", "env": "TWILIO_AUTH_TOKEN",
+                 "ready": bool(settings.twilio_account_sid and settings.twilio_auth_token and settings.public_url),
+                 "note": None if settings.public_url else "set PUBLIC_URL so Twilio can reach this server"})
+    return rows
+
+
 def default_model() -> dict[str, Any]:
     return {
         "provider": os.environ.get("DEFAULT_LLM_PROVIDER", "openai"),

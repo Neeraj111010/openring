@@ -27,6 +27,8 @@ npx github:elifalanrocha/openring
 ```
 
 Basta ter o [Node.js](https://nodejs.org) 18+. As configurações ficam em `~/.openring/.env`, criado na primeira execução com uma chave gerada.
+No primeiro acesso, o painel pede para você criar a senha dele. A chave da API continua valendo para os apps
+que chamam a API (ela aparece em **Settings**). Esqueceu a senha? `openring --reset-password`.
 
 Converse com um assistente antes de comprar um número: clique em **Test** ao lado dele no painel e
 fale no microfone. Antes, coloque no `~/.openring/.env` uma chave do Deepgram e uma de modelo (o plano
@@ -37,7 +39,7 @@ primeira execução (cerca de 120 MB).
 
 ```bash
 cp .env.example .env          # preencha suas chaves
-docker compose up --build     # API em http://localhost:8000
+docker compose up --build     # API em http://localhost:8000; defina OPENRING_PASSWORD no .env para o painel
 ngrok http 8000               # coloque a URL https em PUBLIC_URL e reinicie
 ```
 
