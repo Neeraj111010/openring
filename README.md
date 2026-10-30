@@ -14,6 +14,7 @@ mostly a base-URL change.
 | Works today | On the roadmap |
 |---|---|
 | Inbound phone calls via Twilio | Outbound calls (`POST /call`) |
+| Browser test calls from the dashboard (WebRTC, no phone number needed) | |
 | Vapi-style `/assistant`, `/phone-number`, `/call` APIs | Telnyx, Plivo, Vonage |
 | Deepgram STT; any OpenAI-compatible LLM; ElevenLabs or Kokoro (free, local) TTS | Provider fallback and cost routing |
 | `firstMessage`, `endCallPhrases`, `end-of-call-report` webhook | Tool calls, dashboard, agency mode (multi-client, white-label) |
@@ -27,6 +28,11 @@ npx github:elifalanrocha/openring
 ```
 
 You only need [Node.js](https://nodejs.org) 18+. Settings live in `~/.openring/.env`, created on the first run with a generated API key.
+
+Talk to an assistant before buying a phone number: press **Test** next to it in the dashboard and
+speak into your microphone. Add a Deepgram key and a model key (Groq's free tier works, for example
+with `openai/gpt-oss-20b`) to `~/.openring/.env` first. The free Kokoro voice downloads itself on the
+first start (about 120 MB).
 
 ### With Docker
 

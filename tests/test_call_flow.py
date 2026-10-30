@@ -60,6 +60,8 @@ def fake_bot(monkeypatch):
         runs.append((call_id, plan))
         await websocket.close()
 
+    # The stub gets the raw websocket instead of a Pipecat transport, so it can hang up.
+    monkeypatch.setattr("openring.bot.twilio_transport", lambda websocket, *_: websocket)
     monkeypatch.setattr("openring.bot.run_call", run_call)
     return runs
 

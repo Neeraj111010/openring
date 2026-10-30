@@ -13,6 +13,7 @@ assistentes do Vapi: migrar é praticamente trocar a URL.
 | Já funciona | Próximos passos |
 |---|---|
 | Ligações recebidas pelo Twilio | Ligações de saída (`POST /call`) |
+| Teste no navegador pelo painel (WebRTC, sem precisar de número) | |
 | APIs `/assistant`, `/phone-number` e `/call` no formato do Vapi | Telnyx, Plivo, Vonage |
 | Transcrição Deepgram; qualquer modelo compatível com OpenAI; voz ElevenLabs ou Kokoro (grátis, local) | Fallback e roteamento por custo entre provedores |
 | `firstMessage`, `endCallPhrases` e webhook `end-of-call-report` | Ferramentas, painel, modo agência (multi-cliente, white-label) |
@@ -26,6 +27,11 @@ npx github:elifalanrocha/openring
 ```
 
 Basta ter o [Node.js](https://nodejs.org) 18+. As configurações ficam em `~/.openring/.env`, criado na primeira execução com uma chave gerada.
+
+Converse com um assistente antes de comprar um número: clique em **Test** ao lado dele no painel e
+fale no microfone. Antes, coloque no `~/.openring/.env` uma chave do Deepgram e uma de modelo (o plano
+grátis do Groq serve, por exemplo com `openai/gpt-oss-20b`). A voz grátis Kokoro se baixa sozinha na
+primeira execução (cerca de 120 MB).
 
 ### Com Docker
 

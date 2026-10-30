@@ -153,6 +153,38 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     def create_call() -> None:
         raise HTTPException(status_code=501, detail="outbound calls are on the roadmap; inbound calls work today")
 
+    # Browser calls outlive the request that starts them; holding the tasks keeps them from being collected.
+    web_calls: set[asyncio.Task] = set()
+
+    @app.post("/call/web", status_code=201, dependencies=auth)
+    async def create_web_call(body: dict[str, Any]) -> dict[str, Any]:
+        """Talk to an assistant from the browser: answers the page's WebRTC offer and starts the call."""
+        from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
+
+        from .bot import run_call, web_transport
+
+        assistant = _get_or_404("assistants", str(body.get("assistantId") or ""))
+        if not body.get("sdp"):
+            raise HTTPException(status_code=400, detail="sdp is required: the browser's WebRTC offer")
+        try:
+            plan = resolve_plan(assistant)
+        except ProviderError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        connection = SmallWebRTCConnection()
+        try:
+            await connection.initialize(sdp=body["sdp"], type=body.get("type") or "offer")
+        except Exception as exc:  # aiortc raises several error types for a malformed offer
+            raise HTTPException(status_code=400, detail=f"invalid WebRTC offer: {exc}") from exc
+        call = store.create(
+            "calls",
+            {"type": "webCall", "status": "in-progress", "startedAt": now_iso(), "assistantId": assistant["id"]},
+        )
+        task = asyncio.create_task(run_call(web_transport(connection), plan=plan, call_id=call["id"], store=store))
+        web_calls.add(task)
+        task.add_done_callback(web_calls.discard)
+        answer = connection.get_answer()
+        return {**call, "answer": {"sdp": answer["sdp"], "type": answer["type"]}}
+
     # ---- Twilio -------------------------------------------------------------------
     @app.post("/twilio/voice")
     async def twilio_voice(request: Request) -> Response:
@@ -200,7 +232,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     async def twilio_media(websocket: WebSocket) -> None:
         from pipecat.runner.utils import parse_telephony_websocket
 
-        from .bot import run_call
+        from .bot import PHONE_SAMPLE_RATE, run_call, twilio_transport
 
         await websocket.accept()
         try:
@@ -234,7 +266,11 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             await websocket.close()
             return
         await run_call(
-            websocket, plan=plan, call_data=dict(call_data), call_id=call_id, store=store, settings=settings
+            twilio_transport(websocket, dict(call_data), settings),
+            plan=plan,
+            call_id=call_id,
+            store=store,
+            sample_rate=PHONE_SAMPLE_RATE,
         )
 
     return app

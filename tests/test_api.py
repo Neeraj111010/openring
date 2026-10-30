@@ -5,7 +5,8 @@ from fastapi.testclient import TestClient
 
 from openring.api import create_app
 from openring.config import Settings
-from openring.providers import ProviderError, build_services, resolve_plan
+from openring import providers
+from openring.providers import KOKORO_FILES, ProviderError, build_services, resolve_plan
 from openring.store import Store
 from openring.twilio import compute_signature
 
@@ -120,6 +121,9 @@ def test_plan_maps_vapi_fields(monkeypatch):
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     with pytest.raises(ProviderError, match="GROQ_API_KEY"):
         resolve_plan(ASSISTANT)
+    monkeypatch.setenv("OPENRING_ENV_FILE", "/home/me/.openring/.env")  # set by the `openring` command
+    with pytest.raises(ProviderError, match="add it to /home/me/.openring/.env and restart"):
+        resolve_plan(ASSISTANT)
 
 
 def test_services_instantiate(monkeypatch):
@@ -129,6 +133,53 @@ def test_services_instantiate(monkeypatch):
     assert type(stt).__name__ == "DeepgramSTTService"
     assert type(llm).__name__ == "OpenAILLMService"
     assert type(tts).__name__ == "ElevenLabsTTSService"
+
+
+def test_kokoro_call_waits_for_the_model_download(monkeypatch, tmp_path):
+    monkeypatch.setattr(providers, "KOKORO_DIR", tmp_path)
+    started = []
+    monkeypatch.setattr(providers, "prepare_kokoro", lambda: started.append(True))
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "fake")
+    monkeypatch.setenv("GROQ_API_KEY", "fake")
+    assistant = {**ASSISTANT, "voice": {"provider": "kokoro", "voiceId": "pf_dora"}}
+    with pytest.raises(ProviderError, match="still downloading"):
+        resolve_plan(assistant)
+    assert started
+    for name in KOKORO_FILES:
+        (tmp_path / name).write_bytes(b"model")
+    assert resolve_plan(assistant).tts_provider == "kokoro"
+
+
+def test_kokoro_download_lands_whole_files_only(monkeypatch, tmp_path):
+    import contextlib
+
+    import httpx
+
+    monkeypatch.setattr(providers, "KOKORO_DIR", tmp_path)
+    monkeypatch.setattr(providers, "_kokoro", {"thread": None, "bytes": 0, "error": "", "model": None})
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def iter_bytes(self, _size):
+            yield b"abc"
+            raise httpx.ReadError("connection lost")
+
+    @contextlib.contextmanager
+    def stream(*_args, **_kwargs):
+        yield Response()
+
+    monkeypatch.setattr(httpx, "stream", stream)
+    with pytest.raises(httpx.ReadError):
+        providers._download_kokoro()
+    assert not providers.kokoro_ready()
+
+    Response.iter_bytes = lambda self, _size: iter([b"abc", b"def"])
+    providers._download_kokoro()
+    assert providers.kokoro_ready()
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(KOKORO_FILES)  # no .part left behind
+    assert (tmp_path / next(iter(KOKORO_FILES))).read_bytes() == b"abcdef"
 
 
 def test_dashboard_served_without_key():

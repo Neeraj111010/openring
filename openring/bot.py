@@ -1,7 +1,8 @@
-"""Runs one live phone call: telephony websocket <-> STT -> LLM -> TTS."""
+"""Runs one live call, by phone or from the browser: audio in -> STT -> LLM -> TTS -> audio out."""
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -22,6 +23,8 @@ LATENCY_PARTS = {
     "speech_synthesis": "voiceLatency",
 }
 LATENCY_FIELDS = (*dict.fromkeys(LATENCY_PARTS.values()), "turnLatency")
+# Phone audio is 8 kHz; browser calls keep Pipecat's defaults (16 kHz in, 24 kHz out).
+PHONE_SAMPLE_RATE = 8000
 
 
 def turn_latency(breakdown: Any) -> dict[str, int]:
@@ -43,26 +46,8 @@ def performance_metrics(turns: list[dict[str, int]]) -> dict[str, Any]:
     return metrics
 
 
-async def run_call(
-    websocket: WebSocket,
-    *,
-    plan: StackPlan,
-    call_data: dict[str, Any],
-    call_id: str,
-    store: Store,
-    settings: Settings,
-) -> None:
-    from pipecat.audio.vad.silero import SileroVADAnalyzer
-    from pipecat.frames.frames import EndFrame, LLMRunFrame, TTSSpeakFrame
-    from pipecat.observers.user_bot_latency_observer import MeasuredFrom, UserBotLatencyObserver
-    from pipecat.pipeline.pipeline import Pipeline
-    from pipecat.pipeline.runner import PipelineRunner
-    from pipecat.pipeline.task import PipelineParams, PipelineTask
-    from pipecat.processors.aggregators.llm_context import LLMContext
-    from pipecat.processors.aggregators.llm_response_universal import (
-        LLMContextAggregatorPair,
-        LLMUserAggregatorParams,
-    )
+def twilio_transport(websocket: WebSocket, call_data: dict[str, Any], settings: Settings) -> Any:
+    """Audio of a phone call, carried by a Twilio media stream."""
     from pipecat.serializers.twilio import TwilioFrameSerializer
     from pipecat.transports.websocket.fastapi import (
         FastAPIWebsocketParams,
@@ -78,7 +63,7 @@ async def run_call(
         # Auto hang-up uses the Twilio REST API, so it needs credentials.
         params=TwilioFrameSerializer.InputParams(auto_hang_up=has_creds),
     )
-    transport = FastAPIWebsocketTransport(
+    return FastAPIWebsocketTransport(
         websocket=websocket,
         params=FastAPIWebsocketParams(
             audio_in_enabled=True,
@@ -88,7 +73,40 @@ async def run_call(
         ),
     )
 
-    stt, llm, tts = build_services(plan)
+
+def web_transport(connection: Any) -> Any:
+    """Audio of a browser test call, over the WebRTC connection the dashboard opened."""
+    from pipecat.transports.base_transport import TransportParams
+    from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
+
+    return SmallWebRTCTransport(
+        webrtc_connection=connection,
+        params=TransportParams(audio_in_enabled=True, audio_out_enabled=True),
+    )
+
+
+async def run_call(
+    transport: Any,
+    *,
+    plan: StackPlan,
+    call_id: str,
+    store: Store,
+    sample_rate: int | None = None,
+) -> None:
+    from pipecat.audio.vad.silero import SileroVADAnalyzer
+    from pipecat.frames.frames import EndFrame, LLMRunFrame, TTSSpeakFrame
+    from pipecat.observers.user_bot_latency_observer import MeasuredFrom, UserBotLatencyObserver
+    from pipecat.pipeline.pipeline import Pipeline
+    from pipecat.pipeline.runner import PipelineRunner
+    from pipecat.pipeline.task import PipelineParams, PipelineTask
+    from pipecat.processors.aggregators.llm_context import LLMContext
+    from pipecat.processors.aggregators.llm_response_universal import (
+        LLMContextAggregatorPair,
+        LLMUserAggregatorParams,
+    )
+
+    # Loading a local voice model takes a moment; doing it off the event loop keeps other calls flowing.
+    stt, llm, tts = await asyncio.to_thread(build_services, plan)
     context = LLMContext(messages=list(plan.messages))
     aggregators = LLMContextAggregatorPair(
         context, user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer())
@@ -113,17 +131,19 @@ async def run_call(
             turns.append(turn_latency(breakdown))
             logger.info("call {} turn latency {} ms", call_id, turns[-1]["turnLatency"])
 
+    rates = {"audio_in_sample_rate": sample_rate, "audio_out_sample_rate": sample_rate} if sample_rate else {}
     task = PipelineTask(
         pipeline,
-        params=PipelineParams(audio_in_sample_rate=8000, audio_out_sample_rate=8000, enable_metrics=True),
+        params=PipelineParams(enable_metrics=True, **rates),
         observers=[latency],
     )
 
     @transport.event_handler("on_client_connected")
     async def _on_connected(_transport, _client):
         if plan.first_message:
+            # In the context (and transcript) right away, even if the voice fails to say it.
             context.add_message({"role": "assistant", "content": plan.first_message})
-            await task.queue_frames([TTSSpeakFrame(plan.first_message)])
+            await task.queue_frames([TTSSpeakFrame(plan.first_message, append_to_context=False)])
         else:
             await task.queue_frames([LLMRunFrame()])
 
@@ -136,8 +156,10 @@ async def run_call(
 
         @aggregators.assistant().event_handler("on_assistant_turn_stopped")
         async def _maybe_hang_up(_aggregator, message):
+            nonlocal ended_reason
             text = str(getattr(message, "content", message) or "").lower()
             if any(p in text for p in phrases):
+                ended_reason = "assistant-said-end-call-phrase"
                 await task.queue_frames([EndFrame()])
 
     started = time.monotonic()  # the caller already marked the call in-progress

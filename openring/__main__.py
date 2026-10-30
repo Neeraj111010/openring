@@ -56,10 +56,15 @@ def main() -> None:
     import uvicorn
 
     from .api import create_app
+    from .providers import kokoro_installed, kokoro_ready, warm_up
 
+    os.environ["OPENRING_ENV_FILE"] = str(ENV_FILE)  # error messages point people to it
     port = int(os.environ.get("PORT", "8000"))
     print(f"\n  OpenRing is running: http://localhost:{port}")
     print(f"  Settings: {ENV_FILE}" + ("  (created now)" if created else ""))
+    if kokoro_installed() and not kokoro_ready():
+        print("  Downloading the free Kokoro voice in the background (one time, about 120 MB).")
+    warm_up()
     print("  Press Ctrl+C to stop.\n")
     uvicorn.run(create_app(), host=os.environ.get("HOST", "127.0.0.1"), port=port, log_level="warning")
 

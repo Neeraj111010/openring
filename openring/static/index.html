@@ -83,6 +83,17 @@ main { padding: 32px 40px; max-width: 1100px; width: 100%; }
 dialog { border: 0; border-radius: var(--radius-lg); padding: 24px; width: min(420px, 92vw); }
 dialog::backdrop { background: rgba(28,36,48,.45); }
 
+/* Browser test call: one ring per voice, swelling with its loudness */
+.talk { text-align: center; }
+.voices { display: flex; justify-content: center; gap: 48px; margin: 24px 0 12px; }
+.voice { display: grid; justify-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
+.voice .ring { width: 64px; height: 64px; border-radius: 50%; border: 2px solid var(--signal); background: var(--signal-soft); transform: scale(calc(1 + var(--level, 0) * .35)); }
+#youMeter .ring { border-color: var(--muted); background: transparent; }
+.talk .state { color: var(--muted); min-height: 3em; margin: 8px 0 0; }
+.talk .actions { justify-content: center; }
+.row .tools { display: flex; align-items: center; gap: 12px; }
+.row .tools .btn { padding: 5px 12px; }
+
 @media (max-width: 800px) {
   .app { grid-template-columns: 1fr; }
   .rail { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 12px 16px; }
@@ -96,7 +107,10 @@ dialog::backdrop { background: rgba(28,36,48,.45); }
   .line-diagram { grid-template-columns: 1fr; gap: 0; }
   .cable { width: 2px; height: 16px; margin-left: 24px; background: var(--signal); opacity: .5; }
 }
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+  .voice .ring { transform: none; opacity: calc(.45 + var(--level, 0) * .55); }
+}
 </style>
 </head>
 <body>
@@ -125,6 +139,17 @@ dialog::backdrop { background: rgba(28,36,48,.45); }
   </form>
 </dialog>
 
+<dialog id="talkDialog" class="talk" aria-labelledby="talkTitle">
+  <h2 id="talkTitle">Browser test</h2>
+  <div class="voices" aria-hidden="true">
+    <div class="voice" id="youMeter"><span class="ring"></span>You</div>
+    <div class="voice" id="botMeter"><span class="ring"></span>Assistant</div>
+  </div>
+  <p class="state" id="talkState" role="status"></p>
+  <div class="actions" id="talkActions"></div>
+  <audio id="talkAudio" autoplay></audio>
+</dialog>
+
 <script>
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -149,6 +174,8 @@ $("#setKey").onclick = askKey;
 function renderKey() { $("#keyState").textContent = apiKey ? "saved" : "not set"; }
 
 const LLM = ["openai", "groq", "openrouter", "deepseek", "omniroute", "custom-llm"];
+// A model each provider actually serves, filled in when the provider changes.
+const SUGGESTED_MODEL = { openai: "gpt-4.1-mini", groq: "openai/gpt-oss-20b", openrouter: "openai/gpt-4.1-mini", deepseek: "deepseek-chat", omniroute: "auto", "custom-llm": "" };
 const VOICES = [["kokoro", "Kokoro (free, local)"], ["11labs", "ElevenLabs"]];
 const ago = iso => iso ? new Date(iso).toLocaleString() : "";
 
@@ -161,10 +188,11 @@ async function viewAssistants() {
   const items = await api("/assistant");
   const v = $("#view");
   v.innerHTML = `<div class="head"><div><h1>Assistants</h1><p>Each assistant answers calls with its own instructions, model and voice.</p></div><button class="btn" id="new">New assistant</button></div>
-    <div class="list">${items.length ? items.map(a => `<div class="row" tabindex="0" data-id="${a.id}"><div><div class="title">${esc(a.name || "Untitled")}</div><div class="sub">${esc(a.firstMessage || "No greeting")}</div></div>${pathChips(a)}<span class="sub">Edit</span></div>`).join("")
+    <div class="list">${items.length ? items.map(a => `<div class="row" tabindex="0" data-id="${a.id}"><div><div class="title">${esc(a.name || "Untitled")}</div><div class="sub">${esc(a.firstMessage || "No greeting")}</div></div>${pathChips(a)}<span class="tools"><button class="btn ghost" data-test="${a.id}" title="Talk to it from this browser">Test</button><span class="sub">Edit</span></span></div>`).join("")
       : `<div class="empty">No assistants yet. Create one to answer your first call.<br><button class="btn" id="new2">New assistant</button></div>`}</div>`;
   v.querySelectorAll("#new, #new2").forEach(b => b.onclick = () => editAssistant(null));
-  v.querySelectorAll(".row").forEach(r => { r.onclick = () => editAssistant(items.find(a => a.id === r.dataset.id)); r.onkeydown = e => e.key === "Enter" && r.click(); });
+  v.querySelectorAll(".row").forEach(r => { r.onclick = () => editAssistant(items.find(a => a.id === r.dataset.id)); r.onkeydown = e => e.key === "Enter" && e.target === r && r.click(); });
+  v.querySelectorAll("[data-test]").forEach(b => b.onclick = e => { e.stopPropagation(); startTalk(items.find(a => a.id === b.dataset.test)); });
 }
 
 function editAssistant(a) {
@@ -172,7 +200,7 @@ function editAssistant(a) {
   const m = a.model || {}, vo = a.voice || {}, t = a.transcriber || {};
   const system = (m.messages || []).find(x => x.role === "system")?.content || "";
   const v = $("#view");
-  v.innerHTML = `<div class="head"><div><h1>${a.id ? esc(a.name || "Assistant") : "New assistant"}</h1><p>Follow the call from left to right: what the caller says is transcribed, answered by the model and spoken back.</p></div></div>
+  v.innerHTML = `<div class="head"><div><h1>${a.id ? esc(a.name || "Assistant") : "New assistant"}</h1><p>Follow the call from left to right: what the caller says is transcribed, answered by the model and spoken back.</p></div>${a.id ? `<button type="button" class="btn ghost" id="test" title="Talk to the saved version from this browser">Test</button>` : ""}</div>
   <form class="editor" id="f">
     <div class="line-diagram">
       <div class="stage caller"><h3>Caller</h3><span class="sub" style="color:var(--muted)">Phone line</span></div><div class="cable"></div>
@@ -188,6 +216,9 @@ function editAssistant(a) {
     <div class="actions">${a.id ? `<button type="button" class="btn danger" id="del">Delete assistant</button>` : ""}<span class="spacer"></span><button type="button" class="btn ghost" id="cancel">Cancel</button><button class="btn">${a.id ? "Save changes" : "Create assistant"}</button></div>
   </form>`;
   $("#cancel").onclick = () => go("assistants");
+  if (a.id) $("#test").onclick = () => startTalk(a);
+  const mp = $("[name=mp]"), mm = $("[name=mm]");
+  mp.onchange = () => { if (!mm.value || Object.values(SUGGESTED_MODEL).includes(mm.value)) mm.value = SUGGESTED_MODEL[mp.value] ?? ""; };
   if (a.id) $("#del").onclick = async () => { if (confirm("Delete this assistant? Numbers using it will stop answering.")) { await api("/assistant/" + a.id, { method: "DELETE" }); go("assistants"); } };
   $("#f").onsubmit = async e => {
     e.preventDefault();
@@ -230,10 +261,17 @@ async function viewCalls() {
   const name = id => assistants.find(a => a.id === id)?.name || "Deleted assistant";
   const v = $("#view");
   v.innerHTML = `<div class="head"><div><h1>Calls</h1><p>Every call with its transcript. Refresh to see new ones.</p></div><button class="btn ghost" id="refresh">Refresh</button></div>
-  <div class="list">${calls.length ? calls.map(c => `<div class="row" tabindex="0" data-id="${c.id}"><div><div class="title">${esc(c.customer?.number || "Unknown caller")}</div><div class="sub">${ago(c.createdAt)}</div></div><div class="sub">${esc(name(c.assistantId))}${c.durationSeconds ? ` · ${Math.round(c.durationSeconds)}s` : ""}</div><span class="status ${esc(c.status)}">${esc(c.status)}</span></div>`).join("")
-    : `<div class="empty">No calls yet. Call one of your numbers and it shows up here.</div>`}</div>`;
+  <div class="list">${calls.length ? calls.map(c => `<div class="row" tabindex="0" data-id="${c.id}"><div><div class="title">${esc(caller(c))}</div><div class="sub">${ago(c.createdAt)}</div></div><div class="sub">${esc(name(c.assistantId))}${c.durationSeconds ? ` · ${Math.round(c.durationSeconds)}s` : ""}</div><span class="status ${esc(c.status)}">${esc(c.status)}</span></div>`).join("")
+    : `<div class="empty">No calls yet. Call one of your numbers, or press Test on an assistant to talk to it from here.</div>`}</div>`;
   $("#refresh").onclick = viewCalls;
-  v.querySelectorAll(".row").forEach(r => { r.onclick = () => showCall(calls.find(c => c.id === r.dataset.id), name); r.onkeydown = e => e.key === "Enter" && r.click(); });
+  v.querySelectorAll(".row").forEach(r => { r.onclick = () => go("calls/" + r.dataset.id); r.onkeydown = e => e.key === "Enter" && r.click(); });
+}
+
+const caller = c => c.type === "webCall" ? "Browser test" : c.customer?.number || "Unknown caller";
+
+async function viewCall(id) {
+  const [c, assistants] = await Promise.all([api("/call/" + id), api("/assistant")]);
+  showCall(c, aid => assistants.find(a => a.id === aid)?.name || "Deleted assistant");
 }
 
 // Time from the caller falling silent to the assistant starting to speak, averaged over the call.
@@ -246,31 +284,128 @@ function latencyText(c) {
 
 function showCall(c, name) {
   const msgs = c.messages || [];
-  $("#view").innerHTML = `<div class="head"><div><h1>${esc(c.customer?.number || "Unknown caller")}</h1></div><button class="btn ghost" id="back">Back to calls</button></div>
+  $("#view").innerHTML = `<div class="head"><div><h1>${esc(caller(c))}</h1></div><button class="btn ghost" id="back">Back to calls</button></div>
   <div class="editor"><div class="meta"><span>Assistant: ${esc(name(c.assistantId))}</span><span>Started: ${ago(c.startedAt || c.createdAt)}</span><span>Duration: ${c.durationSeconds ? Math.round(c.durationSeconds) + "s" : "—"}</span>${latencyText(c)}<span class="status ${esc(c.status)}">${esc(c.status)}</span></div>
   ${c.endedReason ? `<p class="sub" style="color:var(--muted)">Ended: ${esc(c.endedReason)}</p>` : ""}
   <div class="transcript">${msgs.length ? msgs.map(m => `<div class="bubble ${m.role === "user" ? "user" : "assistant"}">${esc(m.message)}</div>`).join("") : `<p style="color:var(--muted)">No transcript for this call.</p>`}</div></div>`;
   $("#back").onclick = () => go("calls");
 }
 
+// ---- Browser test: talk to an assistant through this computer's microphone ------------------
+let talk = null;  // the call in progress: { pc, mic, meters, callId }
+
+function talkState(text) { $("#talkState").textContent = text; }
+
+// Candidates for this computer are found right away; slower network ones are not needed.
+function iceGathered(pc) {
+  return new Promise(resolve => {
+    if (pc.iceGatheringState === "complete") return resolve();
+    pc.addEventListener("icegatheringstatechange", () => pc.iceGatheringState === "complete" && resolve());
+    setTimeout(resolve, 2000);
+  });
+}
+
+// Drives a ring's --level (0 to 1) from the loudness of a stream.
+function meter(stream, el) {
+  const ctx = new AudioContext(), analyser = ctx.createAnalyser(), data = new Uint8Array(512);
+  analyser.fftSize = 512;
+  ctx.createMediaStreamSource(stream).connect(analyser);
+  (function tick() {
+    if (ctx.state === "closed") return el.style.setProperty("--level", 0);
+    analyser.getByteTimeDomainData(data);
+    let peak = 0;
+    for (const v of data) peak = Math.max(peak, Math.abs(v - 128));
+    el.style.setProperty("--level", Math.min(1, peak / 48).toFixed(2));
+    requestAnimationFrame(tick);
+  })();
+  return ctx;
+}
+
+async function startTalk(a) {
+  if (talk) return;
+  $("#talkTitle").textContent = `Talking to ${a.name || "your assistant"}`;
+  $("#talkActions").innerHTML = `<button class="btn danger" id="hangUp">Hang up</button>`;
+  $("#hangUp").onclick = () => endTalk();
+  $("#talkDialog").showModal();
+  if (!navigator.mediaDevices?.getUserMedia) return showTalkEnd(null, "This browser only allows the microphone on https or http://localhost. Open the dashboard that way and try again.");
+  talk = { meters: [] };
+  try {
+    talkState("Allow the microphone to start the call.");
+    const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    if (!talk) return mic.getTracks().forEach(t => t.stop());  // closed while asking
+    talk.mic = mic;
+    talk.meters.push(meter(mic, $("#youMeter")));
+    const pc = talk.pc = new RTCPeerConnection();
+    mic.getTracks().forEach(t => pc.addTrack(t, mic));
+    pc.ontrack = e => {
+      const voice = e.streams[0] || new MediaStream([e.track]);
+      $("#talkAudio").srcObject = voice;
+      talk?.meters.push(meter(voice, $("#botMeter")));
+    };
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === "connected") talkState("Connected. Say hello.");
+      if (["failed", "disconnected", "closed"].includes(pc.connectionState)) endTalk();
+    };
+    talkState("Connecting…");
+    await pc.setLocalDescription(await pc.createOffer());
+    await iceGathered(pc);
+    const call = await api("/call/web", { method: "POST", body: JSON.stringify({ assistantId: a.id, sdp: pc.localDescription.sdp, type: pc.localDescription.type }) });
+    if (!talk) return;
+    talk.callId = call.id;
+    await pc.setRemoteDescription(call.answer);
+  } catch (err) {
+    endTalk(err.name === "NotAllowedError" ? "The microphone is blocked for this page. Allow it from the address bar and try again." : err.message);
+  }
+}
+
+function endTalk(problem) {
+  if (!talk) return;
+  const { pc, mic, meters, callId } = talk;
+  talk = null;
+  pc?.close();
+  mic?.getTracks().forEach(t => t.stop());
+  meters.forEach(m => m.close());
+  $("#talkAudio").srcObject = null;
+  showTalkEnd(callId, problem);
+}
+
+function showTalkEnd(callId, problem) {
+  talkState(problem || "Call ended.");
+  $("#talkActions").innerHTML = `${callId ? `<button class="btn" id="seeCall">See transcript</button>` : ""}<button class="btn ghost" id="closeTalk">Close</button>`;
+  $("#closeTalk").onclick = () => $("#talkDialog").close();
+  if (callId) $("#seeCall").onclick = () => openCall(callId);
+}
+
+// The transcript is saved a moment after hanging up, so wait for the call to end first.
+async function openCall(id) {
+  talkState("Saving the transcript…");
+  for (let i = 0; i < 20; i++) {
+    const c = await api("/call/" + id).catch(() => null);
+    if (!c || c.status === "ended") break;
+    await new Promise(r => setTimeout(r, 500));
+  }
+  $("#talkDialog").close();
+  go("calls/" + id);
+}
+
+$("#talkDialog").addEventListener("close", () => endTalk());
+
 const views = { assistants: viewAssistants, numbers: viewNumbers, calls: viewCalls };
 function go(name) { location.hash = name; }
 async function route() {
-  const name = (location.hash.slice(1) || "assistants");
+  const [name, id] = (location.hash.slice(1) || "assistants").split("/");
   document.querySelectorAll(".rail nav button").forEach(b => b.dataset.view === name ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current"));
-  try { await (views[name] || viewAssistants)(); }
+  try { await (name === "calls" && id ? viewCall(id) : (views[name] || viewAssistants)()); }
   catch (err) { $("#view").innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
 }
 document.querySelectorAll(".rail nav button").forEach(b => b.onclick = () => go(b.dataset.view));
 window.addEventListener("hashchange", route);
 (async () => {
-  // Opened on the same computer as the server: connect without asking for the key.
-  if (!apiKey) {
-    try {
-      const r = await fetch("/local-session");
-      if (r.ok) { apiKey = (await r.json()).apiKey || ""; try { localStorage.setItem("openring-key", apiKey); } catch {} }
-    } catch {}
-  }
+  // Opened on the same computer as the server: connect with its key, even over an old saved one.
+  try {
+    const r = await fetch("/local-session");
+    if (r.ok) { apiKey = (await r.json()).apiKey || apiKey; try { localStorage.setItem("openring-key", apiKey); } catch {} }
+  } catch {}
   renderKey();
   if (!apiKey) askKey();
   route();
