@@ -13,6 +13,35 @@ from .config import Settings
 from .providers import StackPlan, build_services
 from .store import Store, now_iso
 
+# Pipecat's named parts of a user-to-bot turn, mapped to Vapi's performanceMetrics fields.
+LATENCY_PARTS = {
+    "endpointing_wait": "endpointingLatency",
+    "turn_detection": "endpointingLatency",
+    "transcription": "transcriberLatency",
+    "llm_inference": "modelLatency",
+    "speech_synthesis": "voiceLatency",
+}
+LATENCY_FIELDS = (*dict.fromkeys(LATENCY_PARTS.values()), "turnLatency")
+
+
+def turn_latency(breakdown: Any) -> dict[str, int]:
+    """One turn the way Vapi reports it: milliseconds per stage, plus the whole turn."""
+    turn = dict.fromkeys(LATENCY_FIELDS, 0)
+    for part in breakdown.contributions:
+        if part.key in LATENCY_PARTS:
+            turn[LATENCY_PARTS[part.key]] += round(part.duration_secs * 1000)
+    turn["turnLatency"] = round(breakdown.total_secs * 1000)
+    return turn
+
+
+def performance_metrics(turns: list[dict[str, int]]) -> dict[str, Any]:
+    """Vapi-style `artifact.performanceMetrics`: every turn and the average of each field."""
+    metrics: dict[str, Any] = {"turnLatencies": turns}
+    if turns:
+        for name in LATENCY_FIELDS:
+            metrics[name + "Average"] = round(sum(t[name] for t in turns) / len(turns))
+    return metrics
+
 
 async def run_call(
     websocket: WebSocket,
@@ -25,6 +54,7 @@ async def run_call(
 ) -> None:
     from pipecat.audio.vad.silero import SileroVADAnalyzer
     from pipecat.frames.frames import EndFrame, LLMRunFrame, TTSSpeakFrame
+    from pipecat.observers.user_bot_latency_observer import MeasuredFrom, UserBotLatencyObserver
     from pipecat.pipeline.pipeline import Pipeline
     from pipecat.pipeline.runner import PipelineRunner
     from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -74,9 +104,19 @@ async def run_call(
             aggregators.assistant(),
         ]
     )
+    latency = UserBotLatencyObserver()
+    turns: list[dict[str, int]] = []
+
+    @latency.event_handler("on_latency_breakdown")
+    async def _on_latency(_observer, breakdown):
+        if breakdown.measured_from == MeasuredFrom.USER_SILENCE:  # the greeting is not a turn
+            turns.append(turn_latency(breakdown))
+            logger.info("call {} turn latency {} ms", call_id, turns[-1]["turnLatency"])
+
     task = PipelineTask(
         pipeline,
         params=PipelineParams(audio_in_sample_rate=8000, audio_out_sample_rate=8000, enable_metrics=True),
+        observers=[latency],
     )
 
     @transport.event_handler("on_client_connected")
@@ -122,6 +162,7 @@ async def run_call(
                 "endedReason": ended_reason,
                 "durationSeconds": round(time.monotonic() - started, 1),
                 "messages": transcript,
+                "artifact": {"messages": transcript, "performanceMetrics": performance_metrics(turns)},
             },
         )
         if plan.server_url and call:
@@ -135,7 +176,7 @@ async def _post_end_of_call_report(url: str, call: dict[str, Any]) -> None:
             "type": "end-of-call-report",
             "endedReason": call.get("endedReason"),
             "call": call,
-            "artifact": {"messages": call.get("messages", [])},
+            "artifact": call.get("artifact") or {"messages": call.get("messages", [])},
         }
     }
     try:

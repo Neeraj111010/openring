@@ -236,10 +236,18 @@ async function viewCalls() {
   v.querySelectorAll(".row").forEach(r => { r.onclick = () => showCall(calls.find(c => c.id === r.dataset.id), name); r.onkeydown = e => e.key === "Enter" && r.click(); });
 }
 
+// Time from the caller falling silent to the assistant starting to speak, averaged over the call.
+function latencyText(c) {
+  const pm = c.artifact?.performanceMetrics;
+  if (!pm?.turnLatencyAverage) return "";
+  const parts = `Waiting for silence ${pm.endpointingLatencyAverage} ms, transcription ${pm.transcriberLatencyAverage} ms, model ${pm.modelLatencyAverage} ms, voice ${pm.voiceLatencyAverage} ms`;
+  return `<span title="${esc(parts)}">Response time: ${pm.turnLatencyAverage} ms (average of ${pm.turnLatencies.length} turns)</span>`;
+}
+
 function showCall(c, name) {
   const msgs = c.messages || [];
   $("#view").innerHTML = `<div class="head"><div><h1>${esc(c.customer?.number || "Unknown caller")}</h1></div><button class="btn ghost" id="back">Back to calls</button></div>
-  <div class="editor"><div class="meta"><span>Assistant: ${esc(name(c.assistantId))}</span><span>Started: ${ago(c.startedAt || c.createdAt)}</span><span>Duration: ${c.durationSeconds ? Math.round(c.durationSeconds) + "s" : "—"}</span><span class="status ${esc(c.status)}">${esc(c.status)}</span></div>
+  <div class="editor"><div class="meta"><span>Assistant: ${esc(name(c.assistantId))}</span><span>Started: ${ago(c.startedAt || c.createdAt)}</span><span>Duration: ${c.durationSeconds ? Math.round(c.durationSeconds) + "s" : "—"}</span>${latencyText(c)}<span class="status ${esc(c.status)}">${esc(c.status)}</span></div>
   ${c.endedReason ? `<p class="sub" style="color:var(--muted)">Ended: ${esc(c.endedReason)}</p>` : ""}
   <div class="transcript">${msgs.length ? msgs.map(m => `<div class="bubble ${m.role === "user" ? "user" : "assistant"}">${esc(m.message)}</div>`).join("") : `<p style="color:var(--muted)">No transcript for this call.</p>`}</div></div>`;
   $("#back").onclick = () => go("calls");
