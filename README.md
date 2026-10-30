@@ -27,7 +27,7 @@ mostly a base-URL change.
 One command. It installs everything it needs (including Python), starts the server and opens the dashboard:
 
 ```bash
-npx github:elifalanrocha/openring
+npx openring
 ```
 
 You only need [Node.js](https://nodejs.org) 18+. Settings live in `~/.openring/.env`, created on the first run with a generated API key.
@@ -35,9 +35,9 @@ On the first visit, the dashboard asks you to choose its password. The API key s
 (find it under **Settings**).
 
 Talk to an assistant before buying a phone number: press **Test** next to it in the dashboard and
-speak into your microphone. Add a Deepgram key and a model key (Groq's free tier works, for example
-with `openai/gpt-oss-20b`) to `~/.openring/.env` first. The free Kokoro voice downloads itself on the
-first start (about 120 MB).
+speak into your microphone. First connect a Deepgram key and a model key on the **Providers** page
+(Groq's free tier works, for example with `openai/gpt-oss-20b`); each key is checked with the provider
+before it's saved. The free Kokoro voice downloads itself on the first start (about 120 MB).
 
 ### With Docker
 
@@ -89,7 +89,9 @@ Copy every assistant, tool and Twilio number of an account in one request (or pr
 Assistants page). The key is used once and never stored; importing again updates what came in before.
 
 ```bash
-curl -X POST http://localhost:8000/import   -H "Authorization: Bearer $OPENRING_API_KEY" -H "Content-Type: application/json"   -d '{"baseUrl": "https://api.vapi.ai", "apiKey": "YOUR_VAPI_PRIVATE_KEY"}'
+curl -X POST http://localhost:8000/import \
+  -H "Authorization: Bearer $OPENRING_API_KEY" -H "Content-Type: application/json" \
+  -d '{"baseUrl": "https://api.vapi.ai", "apiKey": "YOUR_VAPI_PRIVATE_KEY"}'
 ```
 
 The answer lists each assistant with anything that keeps it from taking calls here yet (for example a
@@ -146,7 +148,7 @@ Pick which ones with `serverMessages`, as on Vapi. A phone number without an ass
 | Speech-to-text | Deepgram: US$200 credit for new accounts |
 | LLM | `"provider": "omniroute"` (free local gateway to 150+ free providers) or `"provider": "groq"` |
 | Text-to-speech | `"provider": "kokoro"` runs locally on CPU, no key |
-| Telephony | Twilio trial credit |
+| Telephony | Twilio trial account, for testing |
 
 ## Providers
 
@@ -172,6 +174,9 @@ pytest
 python -m openring
 ```
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) to send a change, [ROADMAP.md](ROADMAP.md) for what's next and
+[CHANGELOG.md](CHANGELOG.md) for what shipped.
+
 ## Security
 
 Set `OPENRING_API_KEY` before exposing the server. The dashboard has its own password: the first one can
@@ -180,8 +185,10 @@ who finds your tunnel URL cannot claim it first. Sessions are `HttpOnly`, `SameS
 repeated wrong passwords are slowed down. Forgot it? `openring --reset-password`. Incoming calls need `TWILIO_AUTH_TOKEN`: every
 Twilio webhook is checked against its `X-Twilio-Signature`, and calls are refused while the token is
 missing (`VALIDATE_TWILIO_SIGNATURE=false` turns the check off, for local tests only). Each call
-accepts a single media stream, so a replayed or second connection is dropped.
+accepts a single media stream, so a replayed or second connection is dropped. Found a vulnerability?
+Please report it privately: see [SECURITY.md](SECURITY.md).
 
 ## License
 
-MIT. Not affiliated with Vapi, Retell or Twilio.
+MIT. Not affiliated with Vapi, Retell or Twilio. OpenRing builds on [Pipecat](https://github.com/pipecat-ai/pipecat)
+and other open-source projects, credited in [THIRD_PARTY.md](THIRD_PARTY.md).

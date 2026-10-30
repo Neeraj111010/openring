@@ -24,7 +24,7 @@ assistentes do Vapi: migrar é praticamente trocar a URL.
 Um comando só. Ele instala tudo o que precisa (inclusive o Python), sobe o servidor e abre o painel:
 
 ```bash
-npx github:elifalanrocha/openring
+npx openring
 ```
 
 Basta ter o [Node.js](https://nodejs.org) 18+. As configurações ficam em `~/.openring/.env`, criado na primeira execução com uma chave gerada.
@@ -32,9 +32,9 @@ No primeiro acesso, o painel pede para você criar a senha dele. A chave da API 
 que chamam a API (ela aparece em **Settings**). Esqueceu a senha? `openring --reset-password`.
 
 Converse com um assistente antes de comprar um número: clique em **Test** ao lado dele no painel e
-fale no microfone. Antes, coloque no `~/.openring/.env` uma chave do Deepgram e uma de modelo (o plano
-grátis do Groq serve, por exemplo com `openai/gpt-oss-20b`). A voz grátis Kokoro se baixa sozinha na
-primeira execução (cerca de 120 MB).
+fale no microfone. Antes, conecte na página **Providers** uma chave do Deepgram e uma de modelo (o plano
+grátis do Groq serve, por exemplo com `openai/gpt-oss-20b`); cada chave é conferida com o provedor antes
+de ser salva. A voz grátis Kokoro se baixa sozinha na primeira execução (cerca de 120 MB).
 
 ### Com Docker
 
@@ -77,7 +77,9 @@ em **Import** na página Assistants). A chave é usada uma vez e não fica salva
 o que veio antes.
 
 ```bash
-curl -X POST http://localhost:8000/import   -H "Authorization: Bearer $OPENRING_API_KEY" -H "Content-Type: application/json"   -d '{"baseUrl": "https://api.vapi.ai", "apiKey": "SUA_CHAVE_PRIVADA_DO_VAPI"}'
+curl -X POST http://localhost:8000/import \
+  -H "Authorization: Bearer $OPENRING_API_KEY" -H "Content-Type: application/json" \
+  -d '{"baseUrl": "https://api.vapi.ai", "apiKey": "SUA_CHAVE_PRIVADA_DO_VAPI"}'
 ```
 
 A resposta lista cada assistente com o que ainda o impede de atender aqui (por exemplo, um provedor que o
@@ -100,7 +102,7 @@ termina de falar. Exemplo completo no [README em inglês](README.md#tools).
 | Transcrição | Deepgram: US$ 200 de crédito para contas novas |
 | Modelo | `"provider": "omniroute"` (gateway local grátis) ou `"provider": "groq"` |
 | Voz | `"provider": "kokoro"`, roda local na CPU, sem chave |
-| Telefonia | Crédito de teste do Twilio |
+| Telefonia | Conta de teste (trial) do Twilio |
 
 ### Mensagens para o seu servidor
 
@@ -134,4 +136,6 @@ python -m openring
 
 ## Licença
 
-MIT. Sem vínculo com Vapi, Retell ou Twilio.
+MIT. Sem vínculo com Vapi, Retell ou Twilio. O OpenRing usa o [Pipecat](https://github.com/pipecat-ai/pipecat)
+e outros projetos open source, creditados em [THIRD_PARTY.md](THIRD_PARTY.md). Para contribuir, veja o
+[CONTRIBUTING.md](CONTRIBUTING.md); falhas de segurança, pelo [SECURITY.md](SECURITY.md).
