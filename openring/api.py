@@ -1,0 +1,185 @@
+"""FastAPI app: Vapi-compatible REST API + Twilio voice webhook + media websocket."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket
+from fastapi.responses import Response
+from loguru import logger
+
+from . import __version__
+from .config import Settings, get_settings
+from .providers import ProviderError, resolve_plan
+from .store import Store
+from .twilio import is_valid_signature, say_twiml, stream_twiml
+
+
+def create_app(settings: Settings | None = None, store: Store | None = None) -> FastAPI:
+    settings = settings or get_settings()
+    store = store or Store(settings.db_path)
+    app = FastAPI(title="OpenRing", version=__version__)
+    app.state.settings = settings
+    app.state.store = store
+
+    if not settings.api_key:
+        logger.warning("OPENRING_API_KEY is empty: the REST API is open. Set it before exposing this server.")
+
+    def require_key(authorization: str = Header(default="")) -> None:
+        if not settings.api_key:
+            return
+        token = authorization.removeprefix("Bearer ").strip()
+        if token != settings.api_key:
+            raise HTTPException(status_code=401, detail="invalid or missing API key")
+
+    auth = [Depends(require_key)]
+
+    def _get_or_404(collection: str, item_id: str) -> dict[str, Any]:
+        doc = store.get(collection, item_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"{collection[:-1].replace('_', ' ')} not found")
+        return doc
+
+    def _validate_assistant(doc: dict[str, Any]) -> None:
+        try:
+            resolve_plan(doc, check_keys=False)
+        except ProviderError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok", "version": __version__}
+
+    # ---- Assistants (same JSON shape as Vapi's /assistant) -------------------
+    @app.post("/assistant", status_code=201, dependencies=auth)
+    def create_assistant(body: dict[str, Any]) -> dict[str, Any]:
+        _validate_assistant(body)
+        return store.create("assistants", body)
+
+    @app.get("/assistant", dependencies=auth)
+    def list_assistants(limit: int = 100) -> list[dict[str, Any]]:
+        return store.list("assistants", limit)
+
+    @app.get("/assistant/{assistant_id}", dependencies=auth)
+    def get_assistant(assistant_id: str) -> dict[str, Any]:
+        return _get_or_404("assistants", assistant_id)
+
+    @app.patch("/assistant/{assistant_id}", dependencies=auth)
+    def update_assistant(assistant_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        current = _get_or_404("assistants", assistant_id)
+        _validate_assistant({**current, **body})
+        return store.update("assistants", assistant_id, body)
+
+    @app.delete("/assistant/{assistant_id}", dependencies=auth)
+    def delete_assistant(assistant_id: str) -> dict[str, Any]:
+        _get_or_404("assistants", assistant_id)
+        return store.delete("assistants", assistant_id)
+
+    # ---- Phone numbers --------------------------------------------------------
+    @app.post("/phone-number", status_code=201, dependencies=auth)
+    def create_phone_number(body: dict[str, Any]) -> dict[str, Any]:
+        if not body.get("number"):
+            raise HTTPException(status_code=400, detail="number is required (E.164, e.g. +15551234567)")
+        if body.get("assistantId"):
+            _get_or_404("assistants", body["assistantId"])
+        body.setdefault("provider", "twilio")
+        return store.create("phone_numbers", body)
+
+    @app.get("/phone-number", dependencies=auth)
+    def list_phone_numbers(limit: int = 100) -> list[dict[str, Any]]:
+        return store.list("phone_numbers", limit)
+
+    @app.get("/phone-number/{number_id}", dependencies=auth)
+    def get_phone_number(number_id: str) -> dict[str, Any]:
+        return _get_or_404("phone_numbers", number_id)
+
+    @app.patch("/phone-number/{number_id}", dependencies=auth)
+    def update_phone_number(number_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        _get_or_404("phone_numbers", number_id)
+        if body.get("assistantId"):
+            _get_or_404("assistants", body["assistantId"])
+        return store.update("phone_numbers", number_id, body)
+
+    @app.delete("/phone-number/{number_id}", dependencies=auth)
+    def delete_phone_number(number_id: str) -> dict[str, Any]:
+        _get_or_404("phone_numbers", number_id)
+        return store.delete("phone_numbers", number_id)
+
+    # ---- Calls ------------------------------------------------------------------
+    @app.get("/call", dependencies=auth)
+    def list_calls(limit: int = 100) -> list[dict[str, Any]]:
+        return store.list("calls", limit)
+
+    @app.get("/call/{call_id}", dependencies=auth)
+    def get_call(call_id: str) -> dict[str, Any]:
+        return _get_or_404("calls", call_id)
+
+    @app.post("/call", dependencies=auth)
+    def create_call() -> None:
+        raise HTTPException(status_code=501, detail="outbound calls are on the roadmap; inbound calls work today")
+
+    # ---- Twilio -------------------------------------------------------------------
+    @app.post("/twilio/voice")
+    async def twilio_voice(request: Request) -> Response:
+        form = {k: str(v) for k, v in (await request.form()).items()}
+        if settings.validate_twilio_signature and settings.twilio_auth_token:
+            url = settings.public_url + "/twilio/voice" if settings.public_url else str(request.url)
+            if not is_valid_signature(
+                settings.twilio_auth_token, url, form, request.headers.get("X-Twilio-Signature", "")
+            ):
+                raise HTTPException(status_code=403, detail="invalid Twilio signature")
+
+        if not settings.public_url:
+            logger.error("PUBLIC_URL is not set; Twilio cannot reach the media websocket")
+            return Response(say_twiml("This line is not configured yet."), media_type="application/xml")
+
+        number = store.find_phone_number(form.get("To", ""))
+        assistant_id = (number or {}).get("assistantId") or settings.default_assistant_id
+        if not assistant_id or store.get("assistants", assistant_id) is None:
+            return Response(say_twiml("No assistant is attached to this number."), media_type="application/xml")
+
+        call = store.create(
+            "calls",
+            {
+                "type": "inboundPhoneCall",
+                "status": "queued",
+                "assistantId": assistant_id,
+                "phoneNumberId": (number or {}).get("id"),
+                "customer": {"number": form.get("From")},
+                "phoneCallProviderId": form.get("CallSid"),
+            },
+        )
+        twiml = stream_twiml(
+            settings.public_ws_url + "/ws/twilio",
+            {"assistantId": assistant_id, "callId": call["id"]},
+        )
+        return Response(twiml, media_type="application/xml")
+
+    @app.websocket("/ws/twilio")
+    async def twilio_media(websocket: WebSocket) -> None:
+        from pipecat.runner.utils import parse_telephony_websocket
+
+        from .bot import run_call
+
+        await websocket.accept()
+        _, call_data = await parse_telephony_websocket(websocket)
+        custom = (call_data.get("body") or {})
+        call_id = custom.get("callId")
+        call = store.get("calls", call_id) if call_id else None
+        assistant = store.get("assistants", custom.get("assistantId", "")) if call else None
+        if not call or not assistant:
+            logger.warning("media stream for unknown call {}", call_id)
+            await websocket.close()
+            return
+        try:
+            plan = resolve_plan(assistant)
+        except ProviderError as exc:
+            logger.error("call {} cannot start: {}", call_id, exc)
+            store.update("calls", call_id, {"status": "ended", "endedReason": f"provider-error: {exc}"})
+            await websocket.close()
+            return
+        await run_call(
+            websocket, plan=plan, call_data=dict(call_data), call_id=call_id, store=store, settings=settings
+        )
+
+    return app
