@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, Response
 from loguru import logger
 
-from . import __version__, auth, keys, providers, stats, twilio
+from . import __version__, auth, keys, providers, stats, telnyx, twilio
 from .config import Settings, get_settings
 from .importer import SourceError, import_account
 from .providers import ProviderError, resolve_plan
@@ -206,6 +207,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             "publicUrl": settings.public_url,
             "baseUrl": base,
             "twilioVoiceUrl": base + "/twilio/voice",
+            "telnyxVoiceUrl": base + "/telnyx/voice",
             "envFile": os.environ.get("OPENRING_ENV_FILE", ""),
             "providers": [_with_connect(p) for p in providers.provider_status(settings)],
         }
@@ -227,6 +229,9 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         if provider == "twilio":  # read once at startup, so refresh the live settings too
             settings.twilio_account_sid = values["TWILIO_ACCOUNT_SID"]
             settings.twilio_auth_token = values["TWILIO_AUTH_TOKEN"]
+        if provider == "telnyx":
+            settings.telnyx_api_key = values["TELNYX_API_KEY"]
+            settings.telnyx_public_key = values["TELNYX_PUBLIC_KEY"]
         where = str(keys.env_file()) if saved else None
         return {"connected": bool(all(values.values())), "saved": saved, "envFile": where}
 
@@ -378,6 +383,8 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     async def create_call(body: dict[str, Any]) -> dict[str, Any]:
         """Outbound phone call, Vapi-style: the assistant calls `customer.number` from one of your numbers."""
         number = _get_or_404("phone_numbers", str(body.get("phoneNumberId") or ""))
+        if (number.get("provider") or "twilio") != "twilio":
+            raise HTTPException(status_code=400, detail="outbound calls only go through Twilio numbers for now")
         customer = str((body.get("customer") or {}).get("number") or "")
         if not customer:
             raise HTTPException(status_code=400, detail="customer.number is required (E.164, e.g. +5511999999999)")
@@ -473,6 +480,48 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             raise HTTPException(status_code=403, detail="invalid Twilio signature")
         return form
 
+    async def answer_inbound(
+        caller: str, called: str, provider_call_id: str | None, provider: str
+    ) -> dict[str, Any] | str:
+        """Record an incoming call and pick its assistant. Returns the call, or what to tell the caller."""
+        number = store.find_phone_number(called)
+        assistant_id = (number or {}).get("assistantId")
+        ask = server_of(number) if number and not assistant_id else None
+        assistant_id = assistant_id or (None if ask else settings.default_assistant_id)
+        if not ask and (not assistant_id or store.get("assistants", assistant_id) is None):
+            return "No assistant is attached to this number."
+
+        call = store.create(
+            "calls",
+            {
+                "type": "inboundPhoneCall",
+                "status": "queued",
+                "assistantId": assistant_id,
+                "phoneNumberId": (number or {}).get("id"),
+                "customer": {"number": caller},
+                "phoneCallProvider": provider,
+                "phoneCallProviderId": provider_call_id,
+            },
+        )
+        if ask:
+            try:
+                answer = await request_assistant(ask, call, number)
+                if "assistantId" in answer and store.get("assistants", answer["assistantId"]) is None:
+                    raise AssistantRequestError("assistant-request-returned-unknown-assistant",
+                                                f"assistant {answer['assistantId']} not found")
+                if "assistant" in answer:
+                    _validate_assistant(answer["assistant"])
+            except (AssistantRequestError, HTTPException) as exc:
+                reason = getattr(exc, "ended_reason", "assistant-request-returned-invalid-assistant")
+                logger.warning("call {}: assistant-request to {} failed: {}", call["id"], ask["url"],
+                               getattr(exc, "detail", exc))
+                store.update("calls", call["id"], {"status": "ended", "endedReason": reason, "endedAt": now_iso()})
+                return "Sorry, this line cannot take calls right now."
+            call = store.update("calls", call["id"], answer)
+        logger.info("{} call {} from {} to {}; streaming it to {}", provider, call["id"], caller, called,
+                    call.get("assistantId") or "a transient assistant")
+        return call
+
     @app.post("/twilio/voice")
     async def twilio_voice(request: Request) -> Response:
         form = await twilio_form(request)
@@ -490,44 +539,46 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             params = {"callId": call_id, **({"assistantId": call["assistantId"]} if call.get("assistantId") else {})}
             return Response(stream_twiml(settings.public_ws_url + "/ws/twilio", params), media_type="application/xml")
 
-        number = store.find_phone_number(form.get("To", ""))
-        assistant_id = (number or {}).get("assistantId")
-        ask = server_of(number) if number and not assistant_id else None
-        assistant_id = assistant_id or (None if ask else settings.default_assistant_id)
-        if not ask and (not assistant_id or store.get("assistants", assistant_id) is None):
-            return Response(say_twiml("No assistant is attached to this number."), media_type="application/xml")
-
-        call = store.create(
-            "calls",
-            {
-                "type": "inboundPhoneCall",
-                "status": "queued",
-                "assistantId": assistant_id,
-                "phoneNumberId": (number or {}).get("id"),
-                "customer": {"number": form.get("From")},
-                "phoneCallProviderId": form.get("CallSid"),
-            },
-        )
-        if ask:
-            try:
-                answer = await request_assistant(ask, call, number)
-                if "assistantId" in answer and store.get("assistants", answer["assistantId"]) is None:
-                    raise AssistantRequestError("assistant-request-returned-unknown-assistant",
-                                                f"assistant {answer['assistantId']} not found")
-                if "assistant" in answer:
-                    _validate_assistant(answer["assistant"])
-            except (AssistantRequestError, HTTPException) as exc:
-                reason = getattr(exc, "ended_reason", "assistant-request-returned-invalid-assistant")
-                logger.warning("call {}: assistant-request to {} failed: {}", call["id"], ask["url"],
-                               getattr(exc, "detail", exc))
-                store.update("calls", call["id"], {"status": "ended", "endedReason": reason, "endedAt": now_iso()})
-                return Response(say_twiml("Sorry, this line cannot take calls right now."),
-                                media_type="application/xml")
-            call = store.update("calls", call["id"], answer)
-        logger.info("call {} from {} to {}; streaming it to {}", call["id"], form.get("From"), form.get("To"),
-                    call.get("assistantId") or "a transient assistant")
-        params = {"callId": call["id"], **({"assistantId": call["assistantId"]} if call.get("assistantId") else {})}
+        answer = await answer_inbound(form.get("From", ""), form.get("To", ""), form.get("CallSid"), "twilio")
+        if isinstance(answer, str):
+            return Response(say_twiml(answer), media_type="application/xml")
+        params = {"callId": answer["id"]}
+        if answer.get("assistantId"):
+            params["assistantId"] = answer["assistantId"]
         return Response(stream_twiml(settings.public_ws_url + "/ws/twilio", params), media_type="application/xml")
+
+    async def telnyx_form(request: Request) -> dict[str, str]:
+        """The webhook's fields, once its Ed25519 signature proves it comes from Telnyx."""
+        body = await request.body()
+        if settings.validate_telnyx_signature:
+            if not settings.telnyx_public_key:
+                logger.error("refused a call: set TELNYX_PUBLIC_KEY so OpenRing can check it comes from Telnyx")
+                raise HTTPException(status_code=403,
+                                    detail="TELNYX_PUBLIC_KEY is not set, so the signature cannot be checked")
+            timestamp = request.headers.get("telnyx-timestamp", "")
+            signature = request.headers.get("telnyx-signature-ed25519", "")
+            if not telnyx.is_valid_signature(settings.telnyx_public_key, timestamp, body, signature):
+                logger.warning("refused a request to {}: invalid Telnyx signature", request.url.path)
+                raise HTTPException(status_code=403, detail="invalid Telnyx signature")
+        if request.headers.get("content-type", "").startswith("application/json"):
+            data = json.loads(body or b"{}")
+            return {str(k): str(v) for k, v in (data if isinstance(data, dict) else {}).items()}
+        return {k: str(v) for k, v in (await request.form()).items()}
+
+    @app.post("/telnyx/voice")
+    async def telnyx_voice(request: Request) -> Response:
+        """Voice URL of a Telnyx TeXML Application: connects an incoming call to its assistant."""
+        form = await telnyx_form(request)
+        if not settings.public_url:
+            logger.error("PUBLIC_URL is not set; Telnyx cannot reach the media websocket")
+            return Response(say_twiml("This line is not configured yet."), media_type="application/xml")
+        answer = await answer_inbound(form.get("From", ""), form.get("To", ""),
+                                      form.get("CallSid") or form.get("CallControlId"), "telnyx")
+        if isinstance(answer, str):
+            return Response(say_twiml(answer), media_type="application/xml")
+        # Telnyx's stream start carries no custom parameters, so the call id rides in the websocket URL.
+        url = f"{settings.public_ws_url}/ws/telnyx?callId={answer['id']}"
+        return Response(telnyx.stream_texml(url), media_type="application/xml")
 
     @app.post("/twilio/status", status_code=204)
     async def twilio_status(request: Request) -> Response:
@@ -540,11 +591,10 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             store.claim("calls", request.query_params.get("callId", ""), "queued", patch)
         return Response(status_code=204)
 
-    @app.websocket("/ws/twilio")
-    async def twilio_media(websocket: WebSocket) -> None:
+    async def media_stream(websocket: WebSocket, provider: str) -> None:
         from pipecat.runner.utils import parse_telephony_websocket
 
-        from .bot import PHONE_SAMPLE_RATE, run_call, twilio_transport
+        from .bot import PHONE_SAMPLE_RATE, run_call, telnyx_transport, twilio_transport
 
         await websocket.accept()
         try:
@@ -554,11 +604,14 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             return
         except ValueError:  # closed before the handshake
             return
-        call_id = str((call_data.get("body") or {}).get("callId") or "")
+        if provider == "twilio":
+            call_id = str((call_data.get("body") or {}).get("callId") or "")
+        else:
+            call_id = websocket.query_params.get("callId", "")
         # Claiming moves the call out of "queued" in one step, so each call gets exactly one
         # media stream: a replayed or second connection for the same call is refused.
         call = None
-        if transport == "twilio" and call_id:
+        if transport == provider and call_id:
             call = store.claim("calls", call_id, "queued", {"status": "in-progress", "startedAt": now_iso()})
         if call is None:
             logger.warning("refused media stream for call {}: unknown or already connected", call_id or "?")
@@ -580,19 +633,28 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             return
         transfer = None
         call_sid = call.get("phoneCallProviderId") or call_data.get("call_id")
-        if settings.twilio_account_sid and settings.twilio_auth_token and call_sid:
+        if provider == "twilio" and settings.twilio_account_sid and settings.twilio_auth_token and call_sid:
 
             async def transfer(number: str) -> None:
                 twiml = twilio.dial_twiml(_e164(number))
                 await twilio.redirect_call(settings.twilio_account_sid, settings.twilio_auth_token, call_sid, twiml)
 
+        build = twilio_transport if provider == "twilio" else telnyx_transport
         await run_call(
-            twilio_transport(websocket, dict(call_data), settings),
+            build(websocket, dict(call_data), settings),
             plan=plan,
             call_id=call_id,
             store=store,
             sample_rate=PHONE_SAMPLE_RATE,
             transfer=transfer,
         )
+
+    @app.websocket("/ws/twilio")
+    async def twilio_media(websocket: WebSocket) -> None:
+        await media_stream(websocket, "twilio")
+
+    @app.websocket("/ws/telnyx")
+    async def telnyx_media(websocket: WebSocket) -> None:
+        await media_stream(websocket, "telnyx")
 
     return app

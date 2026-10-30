@@ -51,6 +51,7 @@ Direct dependencies:
 | [httpx](https://github.com/encode/httpx) | 0.28 | BSD-3-Clause |
 | [python-multipart](https://github.com/Kludex/python-multipart) | 0.0.32 | Apache-2.0 |
 | [aiortc](https://github.com/aiortc/aiortc) | 1.15 | BSD-3-Clause |
+| [cryptography](https://github.com/pyca/cryptography) | 50.0 | Apache-2.0 or BSD-3-Clause |
 | [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) (`kokoro` extra) | 0.6 | MIT |
 
 Installed with them (through Pipecat's Deepgram, ElevenLabs, OpenAI, Silero, WebSocket and runner

@@ -6,6 +6,12 @@ All notable changes to OpenRing are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Incoming calls through Telnyx (beta): point a TeXML Application's voice URL at `/telnyx/voice`. Webhooks are
+  checked against the account's Ed25519 public key (`TELNYX_PUBLIC_KEY`); `TELNYX_API_KEY` lets OpenRing
+  hang up. Telnyx can be connected from the Providers page. Outbound calls and transfers still go through Twilio.
+
 ### Changed
 
 - New look: a ring-and-wave logo, an orange palette in light and dark themes, and a quieter dashboard.

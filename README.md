@@ -85,7 +85,8 @@ affiliated with any of them.
 | Works today | Next |
 |---|---|
 | Browser test calls from the dashboard (WebRTC) | Automatic provider fallback and cost routing |
-| Phone calls in and out through Twilio (**beta**: tell us how it goes) | Telnyx and Plivo |
+| Phone calls in and out through Twilio (**beta**: tell us how it goes) | Outbound calls through Telnyx; Plivo |
+| Incoming calls through Telnyx (**beta**, see [Telnyx](#telnyx-beta)) | |
 | Vapi-style `/assistant`, `/phone-number`, `/call` and `/tool` APIs | Cost per call in the dashboard |
 | Vapi tools: `function`, `endCall`, `transferCall` | Outbound campaigns from a list |
 | Vapi webhooks: `status-update`, `conversation-update`, `end-of-call-report`, `assistant-request` | Calls over WhatsApp |
@@ -199,6 +200,14 @@ with `server.headers` and `server.secret` (as `X-Vapi-Secret`):
 Pick which ones with `serverMessages`, as on Vapi. A phone number without an assistant but with its own
 `server.url` asks it on each incoming call (`assistant-request`) and uses the `assistantId` or the transient
 `assistant` it answers. `POST /call` also takes a transient `assistant` instead of an `assistantId`.
+
+### Telnyx (beta)
+
+Incoming calls through Telnyx are new and not yet confirmed on a real Telnyx call. In the Telnyx portal,
+create a **TeXML Application** whose voice URL is `$PUBLIC_URL/telnyx/voice` (HTTP POST) and assign your
+number to it. Add the number in OpenRing with `"provider": "telnyx"`, and set `TELNYX_API_KEY` and
+`TELNYX_PUBLIC_KEY` (Keys & Credentials > Public Key), or connect Telnyx from the Providers page. Every
+webhook is checked against that public key. Outbound calls and transfers go through Twilio for now.
 
 ## 🆓 The free stack
 

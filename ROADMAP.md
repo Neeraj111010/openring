@@ -13,7 +13,8 @@ something, or pick an item and say you're on it. Shipped work moves to the [chan
   same call would have cost on a hosted platform, next to the numbers that matter: time to first word,
   per-turn latency, success rate and how calls ended.
 - **Credit left per provider** on the Providers page, so a call never stops because a balance ran out.
-- **More telephony:** Telnyx and Plivo, usually cheaper than Twilio.
+- **More telephony:** outbound calls through Telnyx (incoming Telnyx calls are in beta), and Plivo; both
+  usually cheaper than Twilio.
 - **Outbound campaigns:** call a list of numbers, in Vapi's format.
 - **Calls over WhatsApp.**
 - **Multilingual preset:** speech recognition and a voice that follow the caller's language.

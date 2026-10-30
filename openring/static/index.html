@@ -685,24 +685,27 @@ async function viewNumbers() {
   const [nums, assistants, info] = await Promise.all([api("/phone-number"), api("/assistant"), api("/dashboard/info")]);
   const name = id => assistants.find(a => a.id === id)?.name || "No assistant";
   const v = $("#view");
-  v.innerHTML = `<section class="panel" style="margin-bottom:18px"><header><h2>Connect a Twilio number</h2></header><div class="body">
-    <p style="margin-top:0">In Twilio, open the number and set <b>A call comes in</b> to this webhook (HTTP POST):</p>
+  v.innerHTML = `<section class="panel" style="margin-bottom:18px"><header><h2>Connect a phone number</h2></header><div class="body">
+    <p style="margin-top:0"><b>Twilio:</b> open the number and set <b>A call comes in</b> to this webhook (HTTP POST):</p>
     <div class="copyline"><code>${esc(info.twilioVoiceUrl)}</code><button class="btn ghost small" data-copy="${esc(info.twilioVoiceUrl)}">${ICON.copy}Copy</button></div>
-    ${info.publicUrl ? "" : `<p class="muted" style="margin-bottom:0">Twilio can't reach <code>localhost</code>. Start a tunnel (<code>cloudflared tunnel --url http://localhost:8000</code>), put its URL in <code>PUBLIC_URL</code> and restart.</p>`}
+    <p><b>Telnyx:</b> create a TeXML Application with this voice URL (HTTP POST) and assign the number to it:</p>
+    <div class="copyline"><code>${esc(info.telnyxVoiceUrl)}</code><button class="btn ghost small" data-copy="${esc(info.telnyxVoiceUrl)}">${ICON.copy}Copy</button></div>
+    ${info.publicUrl ? "" : `<p class="muted" style="margin-bottom:0">Phone providers can't reach <code>localhost</code>. Start a tunnel (<code>cloudflared tunnel --url http://localhost:8000</code>), put its URL in <code>PUBLIC_URL</code> and restart.</p>`}
     <form id="add" style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-top:18px">
       <div class="field" style="margin:0;flex:1;min-width:180px"><label for="num">Number</label><input id="num" name="num" required placeholder="+15551234567"></div>
+      <div class="field" style="margin:0;min-width:120px"><label for="np">Provider</label><select id="np" name="np"><option value="twilio">Twilio</option><option value="telnyx">Telnyx</option></select></div>
       <div class="field" style="margin:0;flex:1;min-width:180px"><label for="as">Answered by</label><select id="as" name="as">${assistants.map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join("")}</select></div>
       <button class="btn">${ICON.plus}Add number</button>
     </form><div class="error" id="err" role="alert"></div></div></section>
   ${nums.length ? `<div class="tiles">${nums.map(n => `<article class="tile">
       <div class="head"><span class="avatar">${ICON.phone}</span><div class="grow"><div class="name">${esc(n.number)}</div><div class="sub">Answered by ${esc(name(n.assistantId))}</div></div><span class="badge">${esc(n.provider || "twilio")}</span></div>
-      <div class="actions"><button class="btn ghost small" data-call="${esc(n.id)}">${ICON.phone}Call a phone</button><span style="flex:1"></span><button class="btn danger small" data-del="${esc(n.id)}">Remove</button></div>
+      <div class="actions">${(n.provider || "twilio") === "twilio" ? `<button class="btn ghost small" data-call="${esc(n.id)}">${ICON.phone}Call a phone</button>` : ""}<span style="flex:1"></span><button class="btn danger small" data-del="${esc(n.id)}">Remove</button></div>
     </article>`).join("")}</div>`
     : `<div class="panel empty">No numbers yet. Add your Twilio number above.</div>`}`;
   copyButtons(v);
   $("#add").onsubmit = async e => {
     e.preventDefault(); const f = new FormData(e.target);
-    try { await api("/phone-number", { method: "POST", body: JSON.stringify({ number: f.get("num"), assistantId: f.get("as") }) }); viewNumbers(); }
+    try { await api("/phone-number", { method: "POST", body: JSON.stringify({ number: f.get("num"), assistantId: f.get("as"), provider: f.get("np") }) }); viewNumbers(); }
     catch (err) { $("#err").textContent = err.message; }
   };
   v.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => { if (confirm("Remove this number from OpenRing?")) { await api("/phone-number/" + b.dataset.del, { method: "DELETE" }); viewNumbers(); } });
@@ -793,7 +796,7 @@ const MONOGRAM = {
   openai: "AI", anthropic: "AN", google: "GE", groq: "GQ", openrouter: "OR", deepseek: "DS", xai: "XA",
   cerebras: "CB", "together-ai": "TG", deepinfra: "DI", "perplexity-ai": "PX", mistral: "MI", fireworks: "FW",
   ollama: "OL", omniroute: "OM", "rime-ai": "RI", neuphonic: "NP", "smallest-ai": "SM", inworld: "IW",
-  kokoro: "KO", twilio: "TW",
+  kokoro: "KO", twilio: "TW", telnyx: "TX",
 };
 // One line on what each provider is for, by "kind:id" because some providers do more than one job.
 const ABOUT = {
@@ -828,6 +831,7 @@ const ABOUT = {
   "voice:inworld": "Expressive voices",
   "voice:kokoro": "Free voice that runs on this computer",
   "telephony:twilio": "Phone numbers and calls",
+  "telephony:telnyx": "Phone numbers and calls, often cheaper",
 };
 const cardKey = p => `${p.kind}:${p.id}`;
 async function viewProviders() {

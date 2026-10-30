@@ -113,6 +113,35 @@ def twilio_transport(websocket: WebSocket, call_data: dict[str, Any], settings: 
     )
 
 
+def telnyx_transport(websocket: WebSocket, call_data: dict[str, Any], settings: Settings) -> Any:
+    """Audio of a phone call, carried by a Telnyx media stream (TeXML <Stream bidirectionalMode="rtp">)."""
+    from pipecat.serializers.telnyx import TelnyxFrameSerializer
+    from pipecat.transports.websocket.fastapi import (
+        FastAPIWebsocketParams,
+        FastAPIWebsocketTransport,
+    )
+
+    # Auto hang-up uses the Telnyx API, so it needs the key and the call's control id.
+    can_hang_up = bool(settings.telnyx_api_key and call_data.get("call_id"))
+    serializer = TelnyxFrameSerializer(
+        stream_id=call_data["stream_id"],
+        call_control_id=call_data.get("call_id"),
+        outbound_encoding=call_data.get("outbound_encoding") or "PCMU",
+        inbound_encoding="PCMU",
+        api_key=settings.telnyx_api_key or None,
+        params=TelnyxFrameSerializer.InputParams(auto_hang_up=can_hang_up),
+    )
+    return FastAPIWebsocketTransport(
+        websocket=websocket,
+        params=FastAPIWebsocketParams(
+            audio_in_enabled=True,
+            audio_out_enabled=True,
+            add_wav_header=False,
+            serializer=serializer,
+        ),
+    )
+
+
 def web_transport(connection: Any) -> Any:
     """Audio of a browser test call, over the WebRTC connection the dashboard opened."""
     from pipecat.transports.base_transport import TransportParams

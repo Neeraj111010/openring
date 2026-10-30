@@ -17,6 +17,8 @@ dependencies = [
   "python-multipart>=0.0.9",
   # WebRTC for browser test calls; pipecat-ai[webrtc] would also pull OpenCV, used only for video.
   "aiortc>=1.14,<2",
+  # Ed25519 signatures on Telnyx webhooks (aiortc already brings it).
+  "cryptography>=42",
 ]
 
 [project.optional-dependencies]

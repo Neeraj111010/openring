@@ -84,7 +84,8 @@ empresa em outubro de 2026; confira antes de decidir. O OpenRing não tem víncu
 | Já funciona | Próximos passos |
 |---|---|
 | Teste no navegador pelo painel (WebRTC) | Troca automática de provedor e roteamento por custo |
-| Ligações recebidas e feitas pelo Twilio (**beta**: conte como foi) | Telnyx e Plivo |
+| Ligações recebidas e feitas pelo Twilio (**beta**: conte como foi) | Ligações de saída pela Telnyx; Plivo |
+| Ligações recebidas pela Telnyx (**beta**) | |
 | APIs `/assistant`, `/phone-number`, `/call` e `/tool` no formato do Vapi | Custo por ligação no painel |
 | Ferramentas do Vapi: `function`, `endCall`, `transferCall` | Campanhas de ligação a partir de uma lista |
 | Webhooks do Vapi: `status-update`, `conversation-update`, `end-of-call-report`, `assistant-request` | Ligações pelo WhatsApp |
@@ -144,6 +145,11 @@ curl -X POST http://localhost:8000/phone-number \
 Ligue para o número. As transcrições ficam em `GET /call` e na página **Calls**. Para o assistente ligar
 para alguém, use o mesmo corpo do `POST /call` do Vapi (ou **Call a phone** no painel). Ligue só para quem
 espera a ligação: ligações automáticas são reguladas (as regras da Anatel no Brasil, a TCPA nos EUA).
+
+**Telnyx (beta, ainda não confirmada numa ligação real):** no portal da Telnyx, crie uma **TeXML Application**
+com a voice URL `$PUBLIC_URL/telnyx/voice` (HTTP POST) e associe o número a ela. Cadastre o número no OpenRing
+com `"provider": "telnyx"` e defina `TELNYX_API_KEY` e `TELNYX_PUBLIC_KEY` (Keys & Credentials > Public Key),
+ou conecte a Telnyx pela página Providers. Ligações de saída e transferências continuam pelo Twilio.
 
 ## 🆓 Stack grátis
 

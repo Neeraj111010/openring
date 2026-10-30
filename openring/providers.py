@@ -206,6 +206,9 @@ def provider_status(settings: Any) -> list[dict[str, Any]]:
     rows.append({"id": "twilio", "name": "Twilio", "kind": "telephony", "env": "TWILIO_AUTH_TOKEN",
                  "ready": bool(settings.twilio_account_sid and settings.twilio_auth_token and settings.public_url),
                  "note": None if settings.public_url else "set PUBLIC_URL so Twilio can reach this server"})
+    rows.append({"id": "telnyx", "name": "Telnyx", "kind": "telephony", "env": "TELNYX_API_KEY",
+                 "ready": bool(settings.telnyx_api_key and settings.telnyx_public_key and settings.public_url),
+                 "note": None if settings.public_url else "set PUBLIC_URL so Telnyx can reach this server"})
     return rows
 
 

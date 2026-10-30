@@ -42,6 +42,7 @@ KEY_PAGES = {
     "smallest-ai": "https://console.smallest.ai/",
     "inworld": "https://platform.inworld.ai/",
     "twilio": "https://console.twilio.com/",
+    "telnyx": "https://portal.telnyx.com/#/api-keys",
 }
 
 
@@ -54,11 +55,14 @@ def _connectors() -> dict[str, dict[str, Any]]:
     found["openrouter"]["oauth"] = True
     found["twilio"] = {"fields": [("TWILIO_ACCOUNT_SID", "Account SID"), ("TWILIO_AUTH_TOKEN", "Auth token")],
                        "keysUrl": KEY_PAGES["twilio"]}
+    # The public key (Keys & Credentials > Public Key) checks that webhooks come from Telnyx.
+    found["telnyx"] = {"fields": [("TELNYX_API_KEY", "API key"), ("TELNYX_PUBLIC_KEY", "Public key")],
+                       "keysUrl": KEY_PAGES["telnyx"]}
     return found
 
 
 CONNECTORS = _connectors()
-NAMES = {**PROVIDER_NAMES, "twilio": "Twilio"}
+NAMES = {**PROVIDER_NAMES, "twilio": "Twilio", "telnyx": "Telnyx"}
 OPENROUTER_EXCHANGE_URL = "https://openrouter.ai/api/v1/auth/keys"
 # Keys are single tokens; anything else (spaces, quotes, line breaks) would break the .env file.
 VALUE_RE = re.compile(r"^[A-Za-z0-9_\-.:+/=]{8,512}$")
@@ -85,6 +89,7 @@ CHECKS = {
     "inworld": ("https://api.inworld.ai/tts/v1/voices", lambda k: {"Authorization": f"Basic {k}"}),
     # Rime has no read-only endpoint; a GET to its speech endpoint only tells a rejected key apart.
     "rime-ai": ("https://users.rime.ai/v1/rime-tts", _bearer),
+    "telnyx": ("https://api.telnyx.com/v2/balance", _bearer),
 }
 ONLY_REJECTIONS = {"rime-ai"}
 # Providers with no endpoint that checks a key; their keys are saved as they are.

@@ -246,7 +246,9 @@ def make_handler(tool: dict[str, Any], controls: CallControls):
             await params.result_callback(f"Unknown destination '{wanted}'. Choose one of the listed numbers.")
             return
         if controls.transfer is None:
-            await params.result_callback("Transfers only work on phone calls. Tell the caller you cannot transfer.")
+            await params.result_callback(
+                "Transfers only work on Twilio phone calls for now. Tell the caller you cannot transfer."
+            )
             return
         await params.result_callback(
             "Transferring the call.", properties=FunctionCallResultProperties(run_llm=False)

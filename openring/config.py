@@ -29,6 +29,14 @@ class Settings:
         default_factory=lambda: _env("VALIDATE_TWILIO_SIGNATURE", "true").lower() != "false"
     )
 
+    # Telnyx: the API key lets OpenRing hang up calls; the public key (Mission Control > Keys & Credentials
+    # > Public Key) proves each webhook comes from Telnyx.
+    telnyx_api_key: str = field(default_factory=lambda: _env("TELNYX_API_KEY"))
+    telnyx_public_key: str = field(default_factory=lambda: _env("TELNYX_PUBLIC_KEY"))
+    validate_telnyx_signature: bool = field(
+        default_factory=lambda: _env("VALIDATE_TELNYX_SIGNATURE", "true").lower() != "false"
+    )
+
     @property
     def public_ws_url(self) -> str:
         if self.public_url.startswith("https://"):
