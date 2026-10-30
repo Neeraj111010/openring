@@ -32,6 +32,27 @@ def _median(values: list[int]) -> int | None:
     return ordered[mid] if len(ordered) % 2 else round((ordered[mid - 1] + ordered[mid]) / 2)
 
 
+def _percentile(values: list[int], pct: int) -> int | None:
+    """The value below which `pct` percent of the values fall (nearest rank)."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    return ordered[max(0, -(-len(ordered) * pct // 100) - 1)]
+
+
+def _usage(window: list[dict[str, Any]]) -> dict[str, Any]:
+    """Tokens, voice characters and transcribed audio: what providers bill by, summed over the calls."""
+    fields = ("llmPromptTokens", "llmCompletionTokens", "ttsCharacters", "transcriberAudioSeconds")
+    rows = [c["costBreakdown"] for c in window if isinstance(c.get("costBreakdown"), dict)]
+    total = {f: sum(float(r.get(f) or 0) for r in rows) for f in fields}
+    tokens = total["llmPromptTokens"] + total["llmCompletionTokens"]
+    return {
+        "calls": len(rows),
+        **{f: round(v, 1) if f == "transcriberAudioSeconds" else int(v) for f, v in total.items()},
+        "tokensPerCall": round(tokens / len(rows)) if rows else None,
+    }
+
+
 def summarize(calls: list[dict[str, Any]], days: int | None = None, now: datetime | None = None) -> dict[str, Any]:
     """Totals for the last `days` days (every call when None), plus one entry per day for the chart."""
     now = now or datetime.now(timezone.utc)
@@ -50,6 +71,12 @@ def summarize(calls: list[dict[str, Any]], days: int | None = None, now: datetim
         if isinstance(t, dict) and t.get("turnLatency")
     ]
     minutes = seconds / 60
+    first_words = [
+        int(fw)
+        for c in window
+        if isinstance(fw := ((c.get("artifact") or {}).get("performanceMetrics") or {}).get("firstWordLatency"), int)
+    ]
+    forwarded = sum(1 for c in ended if c.get("endedReason") == "assistant-forwarded-call")
 
     first = start or min((t.date() for _, t in picked), default=now.date())
     first = max(first, now.date() - timedelta(days=89))  # the chart shows at most 90 days
@@ -83,6 +110,10 @@ def summarize(calls: list[dict[str, Any]], days: int | None = None, now: datetim
         "averageDurationSeconds": round(seconds / len(window)) if window else None,
         "turns": len(turns),
         "latencyMedianMs": _median([t["turnLatency"] for t in turns]),
+        "latencyP95Ms": _percentile([t["turnLatency"] for t in turns], 95),
+        "firstWordMedianMs": _median(first_words),
+        "transferRate": round(100 * forwarded / len(ended)) if ended else None,
+        "usage": _usage(window),
         "latencyAverageMs": round(sum(t["turnLatency"] for t in turns) / len(turns)) if turns else None,
         "latencyParts": {p: round(sum(t.get(p, 0) for t in turns) / len(turns)) if turns else None
                          for p in LATENCY_PARTS},

@@ -28,7 +28,9 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
   transport -> STT -> LLM -> TTS; `twilio_transport` (8 kHz) and `web_transport` (WebRTC) build the
   transport. First message, end-call phrases, saves transcript and per-turn latency
   (`artifact.performanceMetrics`, Vapi's shape, in ms, from Pipecat's `UserBotLatencyObserver`),
-  sends Vapi-style `end-of-call-report` to `server.url`. Services are built in a worker thread.
+  records usage in Vapi's `costBreakdown` fields (`llmPromptTokens`, `llmCompletionTokens`, `ttsCharacters`,
+  plus `transcriberAudioSeconds`) and `performanceMetrics.firstWordLatency`, sends Vapi-style
+  `end-of-call-report` to `server.url`. Services are built in a worker thread.
 - `openring/providers.py` maps the Vapi assistant JSON to a stack using Vapi's provider names (`ALIASES`
   for other spellings). LLM: OpenAI-compatible APIs (`LLM_PROVIDERS`: openai, anthropic, google, groq,
   openrouter, deepseek, xai, cerebras, together-ai, deepinfra, perplexity-ai, mistral, fireworks, ollama,

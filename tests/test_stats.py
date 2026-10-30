@@ -42,3 +42,21 @@ def test_summarize_all_time_and_empty():
     assert every["calls"] == 1 and every["perDay"][0]["date"] == "2026-09-01"
     empty = summarize([], days=30, now=NOW)
     assert empty["successRate"] is None and empty["latencyMedianMs"] is None and len(empty["perDay"]) == 30
+
+
+def test_summarize_usage_first_word_and_transfers():
+    usage = {"llmPromptTokens": 900, "llmCompletionTokens": 100, "ttsCharacters": 300, "transcriberAudioSeconds": 60}
+    calls = [
+        call("2026-10-30T10:00:00Z", costBreakdown=usage,
+             artifact={"performanceMetrics": {"turnLatencies": [], "firstWordLatency": 800}}),
+        call("2026-10-30T11:00:00Z", costBreakdown=usage, endedReason="assistant-forwarded-call",
+             artifact={"performanceMetrics": {"turnLatencies": [], "firstWordLatency": 1200}}),
+        call("2026-10-30T12:00:00Z", artifact=turns(*range(1000, 2000, 50))),  # an older call: no usage recorded
+    ]
+    s = summarize(calls, days=7, now=NOW)
+    assert s["usage"] == {"calls": 2, "llmPromptTokens": 1800, "llmCompletionTokens": 200, "ttsCharacters": 600,
+                          "transcriberAudioSeconds": 120.0, "tokensPerCall": 1000}
+    assert s["firstWordMedianMs"] == 1000 and s["transferRate"] == 33
+    assert s["latencyP95Ms"] == 1900  # 20 turns from 1000 to 1950 ms: the 19th
+    empty = summarize([], days=7, now=NOW)
+    assert empty["usage"]["tokensPerCall"] is None and empty["latencyP95Ms"] is None

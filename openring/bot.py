@@ -40,13 +40,47 @@ def turn_latency(breakdown: Any) -> dict[str, int]:
     return turn
 
 
-def performance_metrics(turns: list[dict[str, int]]) -> dict[str, Any]:
-    """Vapi-style `artifact.performanceMetrics`: every turn and the average of each field."""
+def performance_metrics(turns: list[dict[str, int]], first_word_ms: int | None = None) -> dict[str, Any]:
+    """Vapi-style `artifact.performanceMetrics`: every turn and the average of each field.
+
+    `firstWordLatency` (OpenRing's addition) is how long the caller waited for the assistant's first word.
+    """
     metrics: dict[str, Any] = {"turnLatencies": turns}
+    if first_word_ms is not None:
+        metrics["firstWordLatency"] = first_word_ms
     if turns:
         for name in LATENCY_FIELDS:
             metrics[name + "Average"] = round(sum(t[name] for t in turns) / len(turns))
     return metrics
+
+
+class Usage:
+    """What a call used of each provider, from Pipecat's usage metrics: what providers bill by."""
+
+    def __init__(self) -> None:
+        self.prompt_tokens = self.completion_tokens = self.tts_characters = 0
+        self.audio_seconds = 0.0
+
+    def add(self, data: list[Any]) -> None:
+        from pipecat.metrics.metrics import LLMUsageMetricsData, STTUsageMetricsData, TTSUsageMetricsData
+
+        for item in data:
+            if isinstance(item, LLMUsageMetricsData):
+                self.prompt_tokens += item.value.prompt_tokens
+                self.completion_tokens += item.value.completion_tokens
+            elif isinstance(item, TTSUsageMetricsData):
+                self.tts_characters += item.value
+            elif isinstance(item, STTUsageMetricsData):
+                self.audio_seconds += item.value.audio_seconds
+
+    def cost_breakdown(self) -> dict[str, Any]:
+        """Vapi's `costBreakdown` usage fields, plus the seconds of audio sent to speech-to-text."""
+        return {
+            "llmPromptTokens": self.prompt_tokens,
+            "llmCompletionTokens": self.completion_tokens,
+            "ttsCharacters": self.tts_characters,
+            "transcriberAudioSeconds": round(self.audio_seconds, 1),
+        }
 
 
 def transcript_messages(messages: list[Any]) -> list[dict[str, Any]]:
@@ -169,6 +203,7 @@ async def run_call(
         BotStoppedSpeakingFrame,
         EndFrame,
         LLMRunFrame,
+        MetricsFrame,
         TTSSpeakFrame,
     )
     from pipecat.observers.base_observer import BaseObserver
@@ -186,6 +221,8 @@ async def run_call(
     ended_reason = "customer-ended-call"
     context = None
     turns: list[dict[str, int]] = []
+    usage = Usage()
+    first_word: dict[str, float | None] = {"connected": None, "spoke": None}
     outbox = server_messages.Outbox(plan.assistant, lambda: store.get("calls", call_id))
     # The setup runs inside the try as well, so the call record ends however the call does: a caller
     # who hangs up while the services are still being built, or a provider that fails to start.
@@ -257,8 +294,12 @@ async def run_call(
             async def on_push_frame(self, data):
                 if isinstance(data.frame, BotStartedSpeakingFrame):
                     speech["speaking"] = True
+                    if first_word["connected"] and not first_word["spoke"]:
+                        first_word["spoke"] = time.monotonic()
                 elif isinstance(data.frame, BotStoppedSpeakingFrame):
                     speech.update(speaking=False, last_stop=time.monotonic())
+                elif isinstance(data.frame, MetricsFrame):
+                    usage.add(data.frame.data)
 
         @latency.event_handler("on_latency_breakdown")
         async def _on_latency(_observer, breakdown):
@@ -269,12 +310,13 @@ async def run_call(
         rates = {"audio_in_sample_rate": sample_rate, "audio_out_sample_rate": sample_rate} if sample_rate else {}
         task = PipelineTask(
             pipeline,
-            params=PipelineParams(enable_metrics=True, **rates),
+            params=PipelineParams(enable_metrics=True, enable_usage_metrics=True, **rates),
             observers=[latency, SpeechObserver(observe_every_push=False)],
         )
 
         @transport.event_handler("on_client_connected")
         async def _on_connected(_transport, _client):
+            first_word["connected"] = time.monotonic()
             outbox.send("status-update", status="in-progress")
             if plan.first_message:
                 # In the context (and transcript) right away, even if the voice fails to say it.
@@ -309,6 +351,8 @@ async def run_call(
         ended_reason = f"pipeline-error: {exc}"
     finally:
         transcript = transcript_messages(context.get_messages()) if context is not None else []
+        spoke, connected = first_word["spoke"], first_word["connected"]
+        first_word_ms = round((spoke - connected) * 1000) if spoke and connected else None
         call = store.update(
             "calls",
             call_id,
@@ -318,7 +362,8 @@ async def run_call(
                 "endedReason": ended_reason,
                 "durationSeconds": round(time.monotonic() - started, 1),
                 "messages": transcript,
-                "artifact": {"messages": transcript, "performanceMetrics": performance_metrics(turns)},
+                "artifact": {"messages": transcript, "performanceMetrics": performance_metrics(turns, first_word_ms)},
+                "costBreakdown": usage.cost_breakdown(),
             },
         )
         if call:

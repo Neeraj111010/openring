@@ -99,7 +99,9 @@ def test_call_lifecycle(monkeypatch):
     assert call["status"] == "ended"
     assert call["messages"][0] == {"role": "assistant", "message": ASSISTANT["firstMessage"]}
     assert call["artifact"]["messages"] == call["messages"]
-    assert call["artifact"]["performanceMetrics"] == {"turnLatencies": []}  # nobody spoke
+    assert call["artifact"]["performanceMetrics"]["turnLatencies"] == []  # nobody spoke
+    assert set(call["costBreakdown"]) == {"llmPromptTokens", "llmCompletionTokens", "ttsCharacters",
+                                          "transcriberAudioSeconds"}
 
 
 def test_media_stream_is_single_use(monkeypatch, fake_bot):

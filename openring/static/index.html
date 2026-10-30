@@ -113,6 +113,8 @@ main { padding: 28px 32px 48px; max-width: 1320px; width: 100%; margin: 0 auto; 
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 15px 17px 16px; box-shadow: var(--shadow); min-width: 0; }
 .card .label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; font-weight: 500; }
 .card .label svg.i { width: 16px; height: 16px; }
+/* Traffic light on a metric: a word and a color, so it never relies on color alone */
+.card .label .light { margin-left: auto; font-size: 11.5px; padding: 1px 8px; }
 .card .value { font-family: "IBM Plex Sans", system-ui, sans-serif; font-size: 30px; font-weight: 600; line-height: 1.15; margin-top: 10px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .card .value small { font-size: 15px; font-weight: 500; color: var(--muted); margin-left: 3px; }
 .card .sub { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
@@ -432,7 +434,21 @@ const ICON = {
   plus: '<svg class="i" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
   refresh: '<svg class="i" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>',
 };
-const card = (label, icon, value, cls, sub = "", kind = "") => `<div class="card ${kind}"><div class="label">${ICON[icon]}${label}</div><div class="value ${cls}">${value}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+// Traffic lights from what callers and the voice-agent market expect: a reply within about a second feels
+// natural and past 2 s the conversation breaks down; a greeting should start within 1.5 s of answering;
+// fewer than 9 in 10 calls ending normally needs a look, fewer than 7 is a problem.
+const LIGHTS = {
+  successRate: { good: 90, fair: 70, higher: true, rule: "Good at 90% or more, fair from 70%, poor below 70%" },
+  latency: { good: 1200, fair: 2000, rule: "Good up to 1.2 s, fair up to 2 s, poor above 2 s" },
+  firstWord: { good: 1500, fair: 3000, rule: "Good up to 1.5 s, fair up to 3 s, poor above 3 s" },
+};
+const light = (kind, v) => {
+  if (v == null) return null;
+  const t = LIGHTS[kind], ok = t.higher ? v >= t.good : v <= t.good, fair = t.higher ? v >= t.fair : v <= t.fair;
+  return ok ? { cls: "ok", word: "Good", rule: t.rule } : fair ? { cls: "warn", word: "Fair", rule: t.rule } : { cls: "bad", word: "Poor", rule: t.rule };
+};
+const tone = l => l && l.cls !== "ok" ? l.cls : "";
+const card = (label, icon, value, cls, sub = "", kind = "", lit = null) => `<div class="card ${kind}"><div class="label">${ICON[icon]}${label}${lit ? `<span class="badge ${lit.cls} light" title="${esc(lit.rule)}">${lit.word}</span>` : ""}</div><div class="value ${cls}">${value}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
 const tabs = (items, current, attr = "tab") => `<div class="tabs" role="tablist">${items.map(([k, label, count]) => `<button role="tab" data-${attr}="${k}" aria-selected="${k === current}">${label}${count != null ? `<span class="count">${count}</span>` : ""}</button>`).join("")}</div>`;
 function copyButtons(root) {
   root.querySelectorAll("[data-copy]").forEach(b => b.onclick = async () => {
@@ -523,8 +539,10 @@ async function viewHome() {
     ${card("Fees avoided", "coin", "$" + s.platformFeeSaved.toFixed(2), "brand", '<span title="Hosted voice platforms charge about US$0.05 per minute for orchestration alone.">vs $0.05/min platforms</span>', "hero")}
     ${card("Calls", "phone", num(s.calls), "", s.inProgress ? `${s.inProgress} live now` : `${num(s.byType.inboundPhoneCall || 0)} in · ${num(s.byType.outboundPhoneCall || 0)} out · ${num(s.byType.webCall || 0)} browser`)}
     ${card("Minutes", "clock", num(s.minutes), "", s.averageDurationSeconds ? `${dur(s.averageDurationSeconds)} per call` : "")}
-    ${card("Success rate", "check", s.successRate == null ? "—" : s.successRate + '<small>%</small>', s.successRate != null && s.successRate < 90 ? "bad" : "", s.failed ? `${s.failed} failed` : "No failures")}
-    ${card("Response time", "bolt", ms(s.latencyMedianMs), s.latencyMedianMs > 1200 ? "warn" : "", s.turns ? `median of ${num(s.turns)} turns` : "No turns yet")}
+    ${card("Success rate", "check", s.successRate == null ? "—" : s.successRate + '<small>%</small>', tone(light("successRate", s.successRate)), [s.failed ? `${s.failed} failed` : "No failures", s.transferRate ? `${s.transferRate}% transferred` : ""].filter(Boolean).join(" · "), "", light("successRate", s.successRate))}
+    ${card("Response time", "bolt", ms(s.latencyMedianMs), tone(light("latency", s.latencyMedianMs)), s.turns ? `median of ${num(s.turns)} turns · p95 ${ms(s.latencyP95Ms)}` : "No turns yet", "", light("latency", s.latencyMedianMs))}
+    ${card("First word", "timer", ms(s.firstWordMedianMs), tone(light("firstWord", s.firstWordMedianMs)), s.firstWordMedianMs == null ? "No answered calls yet" : "median wait for the greeting", "", light("firstWord", s.firstWordMedianMs))}
+    ${card("Tokens", "hash", num(s.usage.llmPromptTokens + s.usage.llmCompletionTokens), "", s.usage.calls ? `${num(s.usage.tokensPerCall)} per call · ${num(s.usage.ttsCharacters)} voice characters` : "Counted from this version on")}
     ${card("Assistants", "bot", num(assistants.length), "", `${num(numbers.length)} phone number${numbers.length === 1 ? "" : "s"}`)}
   </div>
   <div class="grid2">
@@ -774,8 +792,10 @@ async function viewCall(id) {
   v.innerHTML = `<div class="toolbar"><a class="btn ghost" href="#calls">← All calls</a><span class="spacer"></span>${statusBadge(c)}</div>
   <div class="cards">
     ${card("Duration", "clock", dur(c.durationSeconds), "")}
-    ${card("Response time", "bolt", ms(pm.turnLatencyAverage), pm.turnLatencyAverage > 1200 ? "warn" : "", turns.length ? `average of ${turns.length} turns` : "")}
-    ${card("Messages", "hash", num(msgs.filter(m => m.role === "user" || m.role === "assistant").length), "", msgs.some(m => m.role === "tool_calls") ? `${msgs.filter(m => m.role === "tool_calls").length} tool calls` : "")}
+    ${card("Response time", "bolt", ms(pm.turnLatencyAverage), tone(light("latency", pm.turnLatencyAverage)), turns.length ? `average of ${turns.length} turns` : "", "", light("latency", pm.turnLatencyAverage))}
+    ${card("First word", "timer", ms(pm.firstWordLatency), tone(light("firstWord", pm.firstWordLatency)), pm.firstWordLatency == null ? "" : "wait for the greeting", "", light("firstWord", pm.firstWordLatency))}
+    ${c.costBreakdown ? card("Tokens", "hash", num((c.costBreakdown.llmPromptTokens || 0) + (c.costBreakdown.llmCompletionTokens || 0)), "", `${num(c.costBreakdown.llmPromptTokens)} in · ${num(c.costBreakdown.llmCompletionTokens)} out · ${num(c.costBreakdown.ttsCharacters)} voice characters`) : ""}
+    ${card("Messages", "bot", num(msgs.filter(m => m.role === "user" || m.role === "assistant").length), "", msgs.some(m => m.role === "tool_calls") ? `${msgs.filter(m => m.role === "tool_calls").length} tool calls` : "")}
     ${card("Type", "phone", esc(TYPE[c.type] || c.type), "", c.endedReason ? esc(c.endedReason) : "")}
   </div>
   <div class="toolbar">${tabs([["transcript", "Transcript"], ["latency", "Response time"], ["json", "JSON"]], callTab)}</div>

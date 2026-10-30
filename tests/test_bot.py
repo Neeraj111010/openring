@@ -4,7 +4,7 @@ from pipecat.observers.user_bot_latency_observer import (
     MeasuredFrom,
 )
 
-from openring.bot import performance_metrics, turn_latency
+from openring.bot import Usage, performance_metrics, turn_latency
 
 
 def _breakdown(total, **parts):
@@ -37,3 +37,26 @@ def test_performance_metrics_averages_each_field():
     assert metrics["turnLatencies"] == turns
     assert metrics["turnLatencyAverage"] == 1000 and metrics["modelLatencyAverage"] == 400
     assert performance_metrics([]) == {"turnLatencies": []}
+
+
+def test_performance_metrics_keep_the_wait_for_the_first_word():
+    assert performance_metrics([], first_word_ms=850) == {"turnLatencies": [], "firstWordLatency": 850}
+
+
+def test_usage_adds_up_what_providers_bill_by():
+    from pipecat.metrics.metrics import (
+        LLMTokenUsage,
+        LLMUsageMetricsData,
+        STTUsage,
+        STTUsageMetricsData,
+        TTFBMetricsData,
+        TTSUsageMetricsData,
+    )
+
+    usage = Usage()
+    tokens = LLMTokenUsage(prompt_tokens=120, completion_tokens=30, total_tokens=150)
+    usage.add([LLMUsageMetricsData(processor="llm", value=tokens), TTSUsageMetricsData(processor="tts", value=42)])
+    usage.add([LLMUsageMetricsData(processor="llm", value=tokens), TTFBMetricsData(processor="llm", value=0.2),
+               STTUsageMetricsData(processor="stt", value=STTUsage(audio_seconds=12.34))])
+    assert usage.cost_breakdown() == {"llmPromptTokens": 240, "llmCompletionTokens": 60, "ttsCharacters": 42,
+                                      "transcriberAudioSeconds": 12.3}

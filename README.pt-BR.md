@@ -86,12 +86,13 @@ empresa em outubro de 2026; confira antes de decidir. O OpenRing não tem víncu
 | Teste no navegador pelo painel (WebRTC) | Troca automática de provedor e roteamento por custo |
 | Ligações recebidas e feitas pelo Twilio (**beta**: conte como foi) | Ligações de saída pela Telnyx; Plivo |
 | Ligações recebidas pela Telnyx (**beta**) | |
-| APIs `/assistant`, `/phone-number`, `/call` e `/tool` no formato do Vapi | Custo por ligação no painel |
+| APIs `/assistant`, `/phone-number`, `/call` e `/tool` no formato do Vapi | Custo por ligação em dólares |
 | Ferramentas do Vapi: `function`, `endCall`, `transferCall` | Campanhas de ligação a partir de uma lista |
 | Webhooks do Vapi: `status-update`, `conversation-update`, `end-of-call-report`, `assistant-request` | Ligações pelo WhatsApp |
 | Importação de assistentes, ferramentas e números de uma conta do Vapi | |
 | 16 modelos, 6 transcrições e 9 vozes, com os nomes do Vapi | |
-| Latência por turno, histórico com transcrição, tema claro e escuro | |
+| Latência por turno, tempo até a primeira palavra, tokens e caracteres de voz por ligação, com farol | |
+| Histórico com transcrição, tema claro e escuro | |
 
 ## 🔁 Migrar do Vapi
 

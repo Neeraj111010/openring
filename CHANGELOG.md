@@ -8,6 +8,13 @@ All notable changes to OpenRing are listed here. The format follows
 
 ### Added
 
+- What each call used, in Vapi's `costBreakdown` fields: `llmPromptTokens`, `llmCompletionTokens` and
+  `ttsCharacters`, plus `transcriberAudioSeconds`. `performanceMetrics.firstWordLatency` is how long the
+  caller waited for the greeting.
+- The overview shows the wait for the first word, tokens per call, the 95th-percentile response time and
+  how many calls were transferred. Success rate, response time and first word get a traffic light (good,
+  fair, poor) based on what callers expect, for example 90% or more of calls ending normally and replies
+  within 1.2 s.
 - Requests to OpenRouter carry OpenRing's name (`HTTP-Referer` and `X-Title`), so OpenRouter can list
   OpenRing among the apps that use it. Nothing else is sent; `OPENRING_ATTRIBUTION=false` turns it off.
 - Incoming calls through Telnyx (beta): point a TeXML Application's voice URL at `/telnyx/voice`. Webhooks are

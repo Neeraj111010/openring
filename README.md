@@ -87,12 +87,13 @@ affiliated with any of them.
 | Browser test calls from the dashboard (WebRTC) | Automatic provider fallback and cost routing |
 | Phone calls in and out through Twilio (**beta**: tell us how it goes) | Outbound calls through Telnyx; Plivo |
 | Incoming calls through Telnyx (**beta**, see [Telnyx](#telnyx-beta)) | |
-| Vapi-style `/assistant`, `/phone-number`, `/call` and `/tool` APIs | Cost per call in the dashboard |
+| Vapi-style `/assistant`, `/phone-number`, `/call` and `/tool` APIs | Cost per call in dollars |
 | Vapi tools: `function`, `endCall`, `transferCall` | Outbound campaigns from a list |
 | Vapi webhooks: `status-update`, `conversation-update`, `end-of-call-report`, `assistant-request` | Calls over WhatsApp |
 | Import assistants, tools and numbers from a Vapi account | |
 | 16 models, 6 speech-to-text and 9 voice providers, with Vapi's names | |
-| Per-turn latency, call history with transcripts, light and dark themes | |
+| Per-turn latency, time to first word, tokens and voice characters per call, with traffic lights | |
+| Call history with transcripts, light and dark themes | |
 
 The full plan is in the [roadmap](ROADMAP.md).
 

@@ -9,9 +9,9 @@ something, or pick an item and say you're on it. Shipped work moves to the [chan
   to the next one mid-call, and route by cost.
 - **100% local, free stack.** Local speech-to-text (Whisper or Moonshine), models through Ollama and the
   Kokoro voice: no per-minute cost at all apart from telephony.
-- **Cost per call.** What each provider charged for a call (minutes, tokens, characters), and what the
-  same call would have cost on a hosted platform, next to the numbers that matter: time to first word,
-  per-turn latency, success rate and how calls ended.
+- **Cost per call in dollars.** Calls already record their tokens, voice characters and transcribed
+  seconds; next is turning them into what each provider charged, and what the same call would have cost
+  on a hosted platform.
 - **Credit left per provider** on the Providers page, so a call never stops because a balance ran out.
 - **More telephony:** outbound calls through Telnyx (incoming Telnyx calls are in beta), and Plivo; both
   usually cheaper than Twilio.
