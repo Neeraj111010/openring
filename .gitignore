@@ -36,3 +36,6 @@ Thumbs.db
 # Local design-tool output and hooks
 .impeccable/
 .codex/
+
+# Model caches written here when HOME is empty (CI-like test runs)
+.cache/

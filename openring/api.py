@@ -80,6 +80,8 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         dialer.resume()
+        for assistant in store.list("assistants", limit=10_000):  # their local models load in the background
+            providers.prepare_local(assistant)
         yield
         await dialer.close()
 
@@ -299,6 +301,20 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             raise HTTPException(status_code=400, detail=f"{keys.NAMES[provider]} is not connected")
         return {"balance": await keys.balance(provider, values)}
 
+    @app.get("/providers/ollama/models", include_in_schema=False, dependencies=[Depends(require_session)])
+    async def ollama_models() -> dict[str, Any]:
+        """The models pulled into the local Ollama, or `running: false` when it isn't up."""
+        base = (providers.LLM_PROVIDERS["ollama"][0] or "").rstrip("/").removesuffix("/v1")
+        try:
+            async with httpx.AsyncClient(timeout=2) as client:
+                res = await client.get(base + "/api/tags")
+                res.raise_for_status()
+                found = res.json().get("models") or []
+        except (httpx.HTTPError, ValueError, AttributeError):
+            return {"running": False, "models": [], "url": base}
+        return {"running": True, "models": [m["name"] for m in found if isinstance(m, dict) and m.get("name")],
+                "url": base}
+
     @app.delete("/providers/{provider}/connect", include_in_schema=False, dependencies=[Depends(require_session)])
     def disconnect_provider(provider: str) -> dict[str, Any]:
         if provider not in keys.CONNECTORS:
@@ -326,6 +342,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     @app.post("/assistant", status_code=201, dependencies=auth_deps)
     def create_assistant(body: dict[str, Any]) -> dict[str, Any]:
         _validate_assistant(body)
+        providers.prepare_local(body)
         return store.create("assistants", body)
 
     @app.get("/assistant", dependencies=auth_deps)
@@ -340,6 +357,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     def update_assistant(assistant_id: str, body: dict[str, Any]) -> dict[str, Any]:
         current = _get_or_404("assistants", assistant_id)
         _validate_assistant({**current, **body})
+        providers.prepare_local({**current, **body})
         return store.update("assistants", assistant_id, body)
 
     @app.delete("/assistant/{assistant_id}", dependencies=auth_deps)

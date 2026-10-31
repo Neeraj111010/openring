@@ -8,6 +8,13 @@ All notable changes to OpenRing are listed here. The format follows
 
 ### Added
 
+- A 100% local, free stack: the new `whisper` transcriber (faster-whisper) runs on your computer, with
+  Ollama for the model and Kokoro for the voice, so nothing is billed per minute and the audio stays on the
+  machine. **Use the free local stack** in the assistant editor sets all three; the editor offers the models
+  pulled into Ollama, and the Providers page says whether Ollama is running. Whisper's model (`tiny` to
+  `large-v3-turbo`, `base` by default) downloads once in the background when an assistant uses it, is shared
+  by every call, runs on a GPU when there is one, and gets phone audio at the 16 kHz it expects.
+  `npx openring` now installs it.
 - Genesys Cloud (beta): an assistant takes calls inside your Architect flows through Genesys's Audio Connector
   (`/ws/genesys`, the AudioHook protocol). Each connection must carry the API key and Genesys's HMAC
   signature made with the client secret, which the Providers page can generate. The flow picks the assistant

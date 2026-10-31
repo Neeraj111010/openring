@@ -32,7 +32,7 @@ jobs:
           echo "tag=$tag pyproject=$py __init__=$init package.json=$npm"
           [ "$tag" = "$py" ] && [ "$tag" = "$init" ] && [ "$tag" = "$npm" ]
           echo "version=$tag" >> "$GITHUB_OUTPUT"
-      - run: pip install -e ".[dev,kokoro]"
+      - run: pip install -e ".[dev,kokoro,whisper]"
       - run: pytest -q
 
   pypi:

@@ -19,14 +19,15 @@ def test_every_version_number_matches():
 def test_launcher_installs_its_own_version_from_pypi():
     launcher = (ROOT / "bin" / "openring.js").read_text(encoding="utf-8")
     assert 'require("../package.json").version' in launcher
-    assert re.search(r"openring\[kokoro\]==\$\{VERSION\}", launcher)
+    assert re.search(r"openring\[kokoro,whisper\]==\$\{VERSION\}", launcher)
     assert "OPENRING_SOURCE" in launcher  # a local checkout can still be run
 
 
 def test_third_party_lists_every_direct_dependency():
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     notices = (ROOT / "THIRD_PARTY.md").read_text(encoding="utf-8").lower()
-    deps = project["dependencies"] + project["optional-dependencies"]["kokoro"]
+    extras = project["optional-dependencies"]
+    deps = project["dependencies"] + extras["kokoro"] + extras["whisper"]
     names = {re.match(r"[A-Za-z0-9_.-]+", d)[0].lower() for d in deps}
     assert {n for n in names if f"[{n}]" not in notices} == set()
 

@@ -36,12 +36,17 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
   for other spellings). LLM: OpenAI-compatible APIs (`LLM_PROVIDERS`: openai, anthropic, google, groq,
   openrouter, deepseek, xai, cerebras, together-ai, deepinfra, perplexity-ai, mistral, fireworks, ollama,
   omniroute) + `custom-llm` with `model.url`. STT (`STT_SERVICES`): deepgram, assembly-ai, gladia, soniox,
-  cartesia, 11labs. TTS (`TTS_SERVICES`): 11labs, kokoro (free, local, default), cartesia, deepgram (Vapi
+  cartesia, 11labs, and whisper (local, `openring/whisper.py`). TTS (`TTS_SERVICES`): 11labs, kokoro (free, local, default), cartesia, deepgram (Vapi
   short voice names -> `aura-2-<name>-en`), openai, rime-ai, neuphonic, smallest-ai, inworld. Defaults
   (nova-3, af_heart) apply only to their own provider. Kokoro uses the
   int8 model (~120 MB with voices) in `~/.cache/pipecat/kokoro-onnx`: `warm_up()` at startup
   downloads it if missing (atomic `.part` rename) and loads it once; Pipecat's per-service model
   load is patched to share that instance. Calls refuse Kokoro with a progress message until ready.
+- `openring/whisper.py` (`whisper` extra, faster-whisper): `prepare(model)` downloads and loads a model in a
+  background thread (from the app lifespan and on assistant save, via `providers.prepare_local`); calls
+  refuse with a progress message until it is loaded; Pipecat's `WhisperModel` is patched to the shared,
+  greedy-decoding instance; `LocalWhisper` upsamples phone audio to 16 kHz (Pipecat doesn't). CUDA when
+  available, else CPU int8. `GET /providers/ollama/models` lists Ollama's pulled models.
 - `"language": "multi"` appends `FOLLOW_LANGUAGE` (answer in the caller's language) to the system messages;
   a voice outside `MULTILINGUAL_VOICES` (11labs, openai) adds a plan warning.
 - Fallbacks (`openring/fallback.py`): Vapi's `transcriber.fallbackPlan.transcribers`, `model.fallbackModels`
@@ -85,7 +90,7 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
 - `openring/__main__.py` `openring` command: first run creates `~/.openring/.env` with a generated
   `OPENRING_API_KEY`, DB at `~/.openring/openring.db`, binds 127.0.0.1:8000.
 - `bin/openring.js` + `package.json` npm launcher: installs uv if missing, runs
-  `uv tool run --python 3.12 --from "openring[kokoro]==<package.json version>" openring` (the PyPI release
+  `uv tool run --python 3.12 --from "openring[kokoro,whisper]==<package.json version>" openring` (the PyPI release
   matching the launcher), opens the browser. `OPENRING_SOURCE` (e.g. `file:///C:/openring` or a git URL)
   runs that source instead. Until the first PyPI release, `npx` needs `OPENRING_SOURCE`.
 - Releases (`docs/releasing.md`): tag `vX.Y.Z` -> `.github/workflows/release.yml` checks the tag matches
@@ -98,7 +103,7 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
 ## Commands
 
 ```bash
-pip install -e ".[dev,kokoro]"   # dev install
+pip install -e ".[dev,kokoro,whisper]"   # dev install
 pytest                           # incl. a simulated Twilio call and a real local WebRTC call
 python -m openring               # run server (reads ./.env and ~/.openring/.env)
 npx openring                     # one-command run, once released on npm and PyPI

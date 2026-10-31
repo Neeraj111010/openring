@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import whisper
+
 
 class ProviderError(ValueError):
     """Raised when an assistant asks for a provider we cannot build."""
@@ -49,6 +51,7 @@ LLM_HEADERS = {
 }
 STT_PROVIDERS = {
     "deepgram": "DEEPGRAM_API_KEY",
+    "whisper": None,  # free, runs on this computer (see whisper.py)
     "assembly-ai": "ASSEMBLYAI_API_KEY",
     "gladia": "GLADIA_API_KEY",
     "soniox": "SONIOX_API_KEY",
@@ -69,7 +72,8 @@ TTS_PROVIDERS = {
 }
 # Other spellings of the same provider.
 ALIASES = {"deep-seek": "deepseek", "elevenlabs": "11labs", "gemini": "google", "assemblyai": "assembly-ai",
-           "rime": "rime-ai", "smallest": "smallest-ai", "together": "together-ai", "perplexity": "perplexity-ai"}
+           "rime": "rime-ai", "smallest": "smallest-ai", "together": "together-ai", "perplexity": "perplexity-ai",
+           "faster-whisper": "whisper"}
 PROVIDER_NAMES = {
     "openai": "OpenAI", "anthropic": "Anthropic", "google": "Google Gemini", "groq": "Groq", "openrouter": "OpenRouter",
     "deepseek": "DeepSeek", "xai": "xAI Grok", "cerebras": "Cerebras", "together-ai": "Together AI",
@@ -77,6 +81,7 @@ PROVIDER_NAMES = {
     "ollama": "Ollama", "omniroute": "OmniRoute", "deepgram": "Deepgram", "assembly-ai": "AssemblyAI",
     "gladia": "Gladia", "soniox": "Soniox", "cartesia": "Cartesia", "11labs": "ElevenLabs", "kokoro": "Kokoro",
     "rime-ai": "Rime", "neuphonic": "Neuphonic", "smallest-ai": "Smallest AI", "inworld": "Inworld",
+    "whisper": "Whisper",
 }
 
 
@@ -182,13 +187,42 @@ def kokoro_status() -> str:
     return f"the free Kokoro voice is still downloading ({mb} of about 120 MB, one time only); try again in a minute"
 
 
+def prepare_local(assistant: dict[str, Any]) -> None:
+    """Start getting the local models an assistant uses (Whisper's, its fallbacks' too), so its first call
+    doesn't wait for a download."""
+    if not whisper.installed():
+        return
+    for transcriber in [assistant.get("transcriber") or {}, *fallback_layers(assistant)["transcriber"]]:
+        if _canonical(transcriber.get("provider")) == "whisper":
+            try:
+                whisper.prepare(transcriber.get("model") or whisper.DEFAULT)
+            except ValueError:
+                pass  # an unknown model is reported when the assistant is saved
+
+
+def _whisper_row() -> dict[str, Any]:
+    # Ready once a model is loaded; None ("local") while installed but not needed yet, like Ollama.
+    loaded = any(whisper.ready(m) for m in whisper.MODELS)
+    row: dict[str, Any] = {"id": "whisper", "name": "Whisper", "kind": "transcriber", "env": None, "free": True,
+                           "ready": True if loaded else None if whisper.installed() else False}
+    loading = whisper.loading()
+    if not whisper.installed():
+        row["note"] = "not installed: pip install 'openring[whisper]'"
+    elif loading:
+        row["note"] = f"getting the {loading[0]} model (about {whisper.MODELS[loading[0]][1]}, one time)"
+    elif not loaded:
+        row["note"] = (f"free, on this computer: downloads its model the first time an assistant uses it "
+                       f"({whisper.DEFAULT}: about {whisper.MODELS[whisper.DEFAULT][1]})")
+    return row
+
+
 def provider_status(settings: Any) -> list[dict[str, Any]]:
     """Each provider the dashboard lists, and whether it is ready to use. Keys are never returned."""
     def has(env: str | None) -> bool:
         return bool(env and os.environ.get(env, "").strip())
 
     rows = [{"id": pid, "name": PROVIDER_NAMES.get(pid, pid), "kind": "transcriber", "env": env, "ready": has(env)}
-            for pid, env in STT_PROVIDERS.items()]
+            if pid != "whisper" else _whisper_row() for pid, env in STT_PROVIDERS.items()]
     for pid, (base_url, env) in LLM_PROVIDERS.items():
         row = {"id": pid, "name": PROVIDER_NAMES.get(pid, pid), "kind": "model", "env": env, "ready": has(env)}
         if pid in LOCAL_LLMS:  # a local server that works without a key, when it is running
@@ -309,6 +343,13 @@ def resolve_plan(assistant: dict[str, Any], *, check_keys: bool = True, with_fal
     stt_provider = _canonical(transcriber["provider"])
     if stt_provider not in STT_PROVIDERS:
         raise ProviderError(f"transcriber provider '{stt_provider}' not supported yet: {_supported(STT_PROVIDERS)}")
+    stt_model = transcriber.get("model")
+    if stt_provider == "whisper":
+        stt_model = stt_model or whisper.DEFAULT
+        try:
+            whisper.model_id(stt_model)
+        except ValueError as exc:
+            raise ProviderError(f"transcriber.model: {exc}") from exc
 
     llm_provider = _canonical(model["provider"])
     llm_api_key = None
@@ -336,6 +377,11 @@ def resolve_plan(assistant: dict[str, Any], *, check_keys: bool = True, with_fal
         _require_key(TTS_PROVIDERS[tts_provider], f"voice provider '{tts_provider}'")
         if tts_provider == "kokoro" and not kokoro_ready():
             raise ProviderError(kokoro_status())
+        if stt_provider == "whisper":
+            if not whisper.installed():
+                raise ProviderError("transcriber 'whisper' needs: pip install 'openring[whisper]'")
+            if not whisper.ready(stt_model):
+                raise ProviderError(whisper.status(stt_model))
 
     messages = [
         {"role": m["role"], "content": m["content"]}
@@ -351,7 +397,7 @@ def resolve_plan(assistant: dict[str, Any], *, check_keys: bool = True, with_fal
     server = assistant.get("server") or {}
     plan = StackPlan(
         stt_provider=stt_provider,
-        stt_model=transcriber.get("model"),
+        stt_model=stt_model,
         stt_language=transcriber.get("language"),
         llm_provider=llm_provider,
         llm_model=model["model"],
@@ -427,6 +473,8 @@ def _service_class(module: str, name: str, provider: str):
 
 def _build_stt(plan: StackPlan):
     lang = _language(plan.stt_language)
+    if plan.stt_provider == "whisper":  # free, runs locally; without a language, it detects the caller's
+        return whisper.stt_service(plan.stt_model or whisper.DEFAULT, None if lang == "multi" else lang)
     if plan.stt_provider == "deepgram":
         from pipecat.services.deepgram.stt import DeepgramSTTService
 

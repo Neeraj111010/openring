@@ -11,7 +11,7 @@ const http = require("http");
 // The PyPI release with this launcher's own version; OPENRING_SOURCE runs a checkout or a git URL instead.
 const VERSION = require("../package.json").version;
 const SOURCE = process.env.OPENRING_SOURCE;
-const PACKAGE = SOURCE ? `openring[kokoro] @ ${SOURCE}` : `openring[kokoro]==${VERSION}`;
+const PACKAGE = SOURCE ? `openring[kokoro,whisper] @ ${SOURCE}` : `openring[kokoro,whisper]==${VERSION}`;
 // Flags such as `--port 8001` go on to `openring`; the launcher reads the port to open the browser.
 const userArgs = process.argv.slice(2);
 const portArg = userArgs.find((_, i) => userArgs[i - 1] === "--port") || (userArgs.find((a) => a.startsWith("--port=")) || "").slice(7);

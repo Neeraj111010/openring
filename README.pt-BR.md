@@ -84,6 +84,7 @@ empresa em outubro de 2026; confira antes de decidir. O OpenRing não tem víncu
 | Já funciona | Próximos passos |
 |---|---|
 | Teste no navegador pelo painel (WebRTC) | Troca quando um provedor fica lento; roteamento por custo |
+| Stack 100% local e grátis: Whisper, Ollama e Kokoro, com um clique no editor | |
 | Provedor reserva no formato do Vapi, inclusive de outro provedor (**beta**) | |
 | Quem liga em qualquer idioma: o assistente responde no idioma dele (`"language": "multi"`) | |
 | Ligações recebidas e feitas pelo Twilio (**beta**: conte como foi) | Ligações de saída pela Telnyx e pelo Genesys; Plivo |
@@ -206,10 +207,25 @@ reguladas (as regras da Anatel no Brasil, a TCPA nos EUA). O painel pede essa co
 
 | Camada | Opção grátis |
 |---|---|
-| Transcrição | Deepgram: US$ 200 de crédito para contas novas |
-| Modelo | `"provider": "groq"` (plano grátis), `"provider": "omniroute"` (gateway local grátis) ou `"provider": "ollama"` (local) |
+| Transcrição | `"provider": "whisper"`: roda no seu computador, sem chave; ou o crédito de US$ 200 do Deepgram para contas novas |
+| Modelo | `"provider": "ollama"` (local), `"provider": "groq"` (plano grátis) ou `"provider": "omniroute"` (gateway local grátis) |
 | Voz | `"provider": "kokoro"`: roda na sua CPU, sem chave |
 | Linha telefônica | Conta de teste (trial) do Twilio |
+
+**100% local.** Whisper, Ollama e Kokoro juntos não custam nada por minuto, e o áudio da ligação não sai do
+seu computador. No editor do assistente, clique em **Use the free local stack**, ou:
+
+```json
+"transcriber": {"provider": "whisper", "model": "base", "language": "pt-BR"},
+"model": {"provider": "ollama", "model": "llama3.2"},
+"voice": {"provider": "kokoro", "voiceId": "pf_dora"}
+```
+
+Antes, instale o [Ollama](https://ollama.com) e rode `ollama pull llama3.2`; a página Providers mostra se ele
+está rodando e quais modelos tem. O Whisper baixa o modelo uma vez, quando um assistente o usa pela primeira
+vez (`tiny` 75 MB, `base` 145 MB, `small` 480 MB; também `medium`, `large-v3` e `large-v3-turbo`). Usa a GPU
+NVIDIA quando existe, senão a CPU: num notebook de 2018, uma frase de quatro segundos leva cerca de 0,6 s com
+`tiny` e 1,2 s com `base`, e o dobro com `"language": "multi"`; escolha o idioma quando souber qual é.
 
 ## 🔌 Provedores
 
@@ -219,7 +235,7 @@ um pela página **Providers** do painel, ou coloque a chave no `~/.openring/.env
 - **Modelo:** `openai`, `anthropic`, `google` (Gemini), `groq`, `openrouter`, `deepseek`, `xai`, `cerebras`,
   `together-ai`, `deepinfra`, `perplexity-ai`, `mistral`, `fireworks`; locais e sem chave: `ollama`,
   `omniroute` ou `custom-llm` com `model.url`.
-- **Transcrição:** `deepgram`, `assembly-ai`, `gladia`, `soniox`, `cartesia`, `11labs`.
+- **Transcrição:** `deepgram`, `assembly-ai`, `gladia`, `soniox`, `cartesia`, `11labs`; local e grátis: `whisper`.
 - **Voz:** `11labs`, `cartesia`, `deepgram` (Aura), `openai`, `rime-ai`, `neuphonic`, `smallest-ai`,
   `inworld`; local e grátis: `kokoro`.
 
@@ -248,7 +264,7 @@ e como decidimos o que construir, está no [PRINCIPLES.md](PRINCIPLES.md) (em in
 
 ```bash
 git clone https://github.com/elifalanrocha/openring && cd openring
-pip install -e ".[dev,kokoro]"
+pip install -e ".[dev,kokoro,whisper]"
 pytest                 # uns 20 s, sem precisar de serviço pago
 python -m openring
 ```

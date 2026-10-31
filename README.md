@@ -58,7 +58,7 @@ flowchart LR
   line <--> openring
   subgraph openring["OpenRing, on your server"]
     direction LR
-    stt["Speech-to-text<br/>Deepgram, AssemblyAI, ..."] --> llm["Model<br/>OpenAI, Groq, Ollama, ..."] --> tts["Voice<br/>ElevenLabs, Kokoro, ..."]
+    stt["Speech-to-text<br/>Deepgram, Whisper, ..."] --> llm["Model<br/>OpenAI, Groq, Ollama, ..."] --> tts["Voice<br/>ElevenLabs, Kokoro, ..."]
   end
   llm <-->|"tools and webhooks, in Vapi's format"| app["Your app"]
 ```
@@ -85,6 +85,7 @@ affiliated with any of them.
 | Works today | Next |
 |---|---|
 | Browser test calls from the dashboard (WebRTC) | Switching when a provider gets slow; routing by cost |
+| A 100% local, free stack: Whisper, Ollama and Kokoro, one click in the editor | |
 | Provider fallback in Vapi's format, across providers (**beta**) | |
 | Callers in any language: the assistant answers in theirs (`"language": "multi"`) | |
 | Phone calls in and out through Twilio (**beta**: tell us how it goes) | Outbound calls through Telnyx and Genesys; Plivo |
@@ -284,10 +285,27 @@ is refused. Transcripts, latency and webhooks work as for any other call.
 
 | Layer | Free option |
 |---|---|
-| Speech-to-text | Deepgram: US$200 credit for new accounts |
-| Model | `"provider": "groq"` (free tier), `"provider": "omniroute"` (free local gateway to 150+ free providers) or `"provider": "ollama"` (local) |
+| Speech-to-text | `"provider": "whisper"`: runs on your computer, no key; or Deepgram's US$200 credit for new accounts |
+| Model | `"provider": "ollama"` (local), `"provider": "groq"` (free tier) or `"provider": "omniroute"` (free local gateway to 150+ free providers) |
 | Voice | `"provider": "kokoro"`: runs on your CPU, no key |
 | Phone line | A Twilio trial account, for testing |
+
+**100% local.** Whisper, Ollama and Kokoro together cost nothing per minute, and the call's audio never
+leaves your computer. In the assistant editor, press **Use the free local stack**, or:
+
+```json
+"transcriber": {"provider": "whisper", "model": "base", "language": "en"},
+"model": {"provider": "ollama", "model": "llama3.2"},
+"voice": {"provider": "kokoro", "voiceId": "af_heart"}
+```
+
+Install [Ollama](https://ollama.com) and run `ollama pull llama3.2` first; the Providers page shows whether
+it is running and which models it has. Whisper downloads its model once, when an assistant first uses it
+(`tiny` 75 MB, `base` 145 MB, `small` 480 MB; also `medium`, `large-v3` and `large-v3-turbo`, or any
+faster-whisper repo on Hugging Face). It runs on an NVIDIA GPU when there is one, otherwise on the CPU: on a
+2018 laptop a four-second sentence takes about 0.6 s with `tiny` and 1.2 s with `base`, about twice that with
+`"language": "multi"`, so pick the language when you know it. A local model on a laptop also answers slower
+than a cloud one; a desktop GPU makes the whole stack quick.
 
 ## 🔌 Providers
 
@@ -299,6 +317,7 @@ dashboard's **Providers** page, or put its key in `~/.openring/.env`.
 | Model | `openai`, `anthropic`, `google` (Gemini), `groq`, `openrouter`, `deepseek` / `deep-seek`, `xai`, `cerebras`, `together-ai`, `deepinfra`, `perplexity-ai`, `mistral`, `fireworks` | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`, ... (the provider's name) |
 | Model, local | `ollama`, `omniroute`, or `custom-llm` with `model.url` (any OpenAI-compatible endpoint) | none |
 | Speech-to-text | `deepgram`, `assembly-ai`, `gladia`, `soniox`, `cartesia`, `11labs` | `DEEPGRAM_API_KEY`, `ASSEMBLYAI_API_KEY`, `GLADIA_API_KEY`, `SONIOX_API_KEY`, `CARTESIA_API_KEY`, `ELEVENLABS_API_KEY` |
+| Speech-to-text, local | `whisper` (free; `model`: `tiny`, `base`, `small`, `medium`, `large-v3`, `large-v3-turbo`) | none |
 | Voice | `11labs` / `elevenlabs`, `cartesia`, `deepgram` (Aura), `openai`, `rime-ai`, `neuphonic`, `smallest-ai`, `inworld` | the provider's key (`RIME_API_KEY`, `NEUPHONIC_API_KEY`, `SMALLEST_API_KEY`, `INWORLD_API_KEY`, ...) |
 | Voice, local | `kokoro` (free, runs on CPU) | none |
 
@@ -330,7 +349,7 @@ decide what to build, is in [PRINCIPLES.md](PRINCIPLES.md).
 
 ```bash
 git clone https://github.com/elifalanrocha/openring && cd openring
-pip install -e ".[dev,kokoro]"
+pip install -e ".[dev,kokoro,whisper]"
 pytest                 # about 20 s, no paid services needed
 python -m openring
 ```

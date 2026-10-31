@@ -17,7 +17,7 @@ git clone https://github.com/elifalanrocha/openring
 cd openring
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -e ".[dev,kokoro]"
+pip install -e ".[dev,kokoro,whisper]"
 pytest                             # about 20 s; includes a simulated Twilio call and a local WebRTC call
 python -m openring                 # dashboard at http://localhost:8000
 ```

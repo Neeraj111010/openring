@@ -43,7 +43,7 @@ jobs:
           python-version: ${{ matrix.python }}
           cache: pip
           cache-dependency-path: pyproject.toml
-      - run: pip install -e ".[dev,kokoro]"
+      - run: pip install -e ".[dev,kokoro,whisper]"
       - run: pytest -q
 
   docker:

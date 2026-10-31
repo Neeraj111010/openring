@@ -84,7 +84,7 @@ def test_every_voice_builds_its_service(keys, name):
 
 
 def test_every_claimed_provider_is_tested():
-    assert set(STT_PROVIDERS) == set(STT_CLASSES)
+    assert set(STT_PROVIDERS) - {"whisper"} == set(STT_CLASSES)  # whisper has its own tests
     assert set(TTS_PROVIDERS) - {"elevenlabs", "kokoro"} == set(TTS_CLASSES)  # kokoro has its own tests
 
 

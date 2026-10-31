@@ -33,6 +33,7 @@ component, install `openring` without the `kokoro` extra and use a cloud voice s
 | --- | --- | --- |
 | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) by hexgrad (int8 ONNX export and voices from [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx/releases)) | Apache-2.0 | Downloaded on first start to `~/.cache/pipecat/kokoro-onnx` |
 | [Silero VAD](https://github.com/snakers4/silero-vad) | MIT | Detects when the caller speaks; ships inside Pipecat |
+| [Whisper](https://github.com/openai/whisper) by OpenAI, as CTranslate2 conversions by [Systran](https://huggingface.co/Systran) (and [deepdml](https://huggingface.co/deepdml/faster-whisper-large-v3-turbo-ct2) for large-v3-turbo) | MIT | Only when an assistant uses the `whisper` transcriber: downloaded from Hugging Face to `~/.cache/huggingface` |
 
 ## Fonts
 
@@ -53,25 +54,27 @@ Direct dependencies:
 | [aiortc](https://github.com/aiortc/aiortc) | 1.15 | BSD-3-Clause |
 | [cryptography](https://github.com/pyca/cryptography) | 50.0 | Apache-2.0 or BSD-3-Clause |
 | [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) (`kokoro` extra) | 0.6 | MIT |
+| [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (`whisper` extra, through Pipecat's) | 1.2 | MIT |
 
-Installed with them (through Pipecat's Deepgram, ElevenLabs, OpenAI, Silero, WebSocket and runner
+Installed with them (through Pipecat's Deepgram, ElevenLabs, OpenAI, Silero, WebSocket, runner and Whisper
 extras, and aiortc):
 
 | License | Packages |
 | --- | --- |
-| MIT | agent-detector, annotated-doc, annotated-types, anyio, attrs, charset-normalizer, deepgram-sdk, dlinfo, docopt, docstring-parser, fastapi-cli, fastapi-cloud-cli, fastar, h11, h2, hpack, httptools, hyperframe, ifaddr, jiter, loguru, loudness, markdown-it-py, mdurl, onnxruntime, pydantic, pydantic-core, pydantic-extra-types, pydantic-settings, pyee, PyYAML, rich, rich-toolkit, rignore, sentencex, sentry-sdk, truststore, typer, typing-inspection, urllib3, watchfiles, win32-setctime |
+| MIT | agent-detector, annotated-doc, annotated-types, anyio, attrs, charset-normalizer, ctranslate2, deepgram-sdk, dlinfo, docopt, docstring-parser, fastapi-cli, fastapi-cloud-cli, fastar, filelock, h11, h2, hpack, httptools, hyperframe, ifaddr, jiter, loguru, loudness, markdown-it-py, mdurl, onnxruntime, pydantic, pydantic-core, pydantic-extra-types, pydantic-settings, pyee, PyYAML, rich, rich-toolkit, rignore, sentencex, sentry-sdk, truststore, typer, typing-inspection, urllib3, watchfiles, win32-setctime |
 | MIT-0 | cffi |
 | MIT-CMU | pillow |
 | BSD-2-Clause | pipecat-ai-prebuilt, Pygments |
-| BSD-3-Clause | aioice, av, click, cloudpickle, colorama, httpcore, httpcore2, httpx2, idna, itsdangerous, Jinja2, joblib, Markdown, MarkupSafe, numba, protobuf, pycparser, pylibsrtp, python-dotenv, soundfile, starlette, websockets |
+| BSD-3-Clause | aioice, av, click, cloudpickle, colorama, fsspec, httpcore, httpcore2, httpx2, idna, itsdangerous, Jinja2, joblib, Markdown, MarkupSafe, numba, protobuf, pycparser, pylibsrtp, python-dotenv, soundfile, starlette, websockets |
 | BSD-3-Clause and others | numpy (BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0) |
 | BSD-2-Clause and Apache-2.0 with LLVM exception | llvmlite |
-| Apache-2.0 | aiofiles, aiosignal, flatbuffers, frozenlist, google-crc32c, googleapis-common-protos, multidict, openai, opentelemetry-api, opentelemetry-exporter-http-transport, opentelemetry-exporter-otlp-common, opentelemetry-exporter-otlp-proto-common, opentelemetry-exporter-otlp-proto-http, opentelemetry-proto, opentelemetry-sdk, opentelemetry-semantic-conventions, propcache, pyOpenSSL, requests, yarl |
+| Apache-2.0 | aiofiles, aiosignal, flatbuffers, frozenlist, google-crc32c, googleapis-common-protos, hf-xet, huggingface-hub, multidict, openai, opentelemetry-api, opentelemetry-exporter-http-transport, opentelemetry-exporter-otlp-common, opentelemetry-exporter-otlp-proto-common, opentelemetry-exporter-otlp-proto-http, opentelemetry-proto, opentelemetry-sdk, opentelemetry-semantic-conventions, propcache, pyOpenSSL, requests, tokenizers, yarl |
 | Apache-2.0 and MIT | aiohttp, sniffio |
 | Apache-2.0 or BSD | cryptography, packaging |
 | ISC | dnspython, resampy, shellingham |
 | PSF-2.0 | aiohappyeyeballs, typing-extensions |
 | MPL-2.0 | certifi |
+| MPL-2.0 and MIT | tqdm |
 | Unlicense | email-validator |
 | 0BSD | detect-installer |
 

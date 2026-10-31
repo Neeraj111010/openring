@@ -23,6 +23,8 @@ dependencies = [
 
 [project.optional-dependencies]
 kokoro = ["pipecat-ai[kokoro]>=1.15,<2"]
+# Free speech-to-text on this computer (faster-whisper).
+whisper = ["pipecat-ai[whisper]>=1.15,<2"]
 dev = ["pytest>=8", "ruff>=0.13"]
 
 [project.scripts]

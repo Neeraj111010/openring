@@ -7,8 +7,8 @@ something, or pick an item and say you're on it. Shipped work moves to the [chan
 
 - **Smarter provider fallback.** Fallback on failure is in (beta); next is switching when a provider gets
   slow, and routing by cost.
-- **100% local, free stack.** Local speech-to-text (Whisper or Moonshine), models through Ollama and the
-  Kokoro voice: no per-minute cost at all apart from telephony.
+- **Faster local speech-to-text on a CPU:** streaming Moonshine for the languages it covers. The 100% local
+  stack itself (Whisper, Ollama, Kokoro) is in.
 - **Cost per call in dollars.** Calls already record their tokens, voice characters and transcribed
   seconds; next is turning them into what each provider charged, and what the same call would have cost
   on a hosted platform.
