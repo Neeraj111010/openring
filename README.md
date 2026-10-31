@@ -87,9 +87,10 @@ affiliated with any of them.
 | Browser test calls from the dashboard (WebRTC) | Switching when a provider gets slow; routing by cost |
 | Provider fallback in Vapi's format, across providers (**beta**) | |
 | Callers in any language: the assistant answers in theirs (`"language": "multi"`) | |
-| Phone calls in and out through Twilio (**beta**: tell us how it goes) | Outbound calls through Telnyx; Genesys Cloud; Plivo |
+| Phone calls in and out through Twilio (**beta**: tell us how it goes) | Outbound calls through Telnyx and Genesys; Plivo |
 | Campaigns: one assistant calls a list or CSV, a few at a time, greeting each person by name (**beta**) | |
 | Incoming calls through Telnyx (**beta**, see [Telnyx](#telnyx-beta)) | |
+| Genesys Cloud calls through its Audio Connector, inside your Architect flows (**beta**, see [Genesys](#genesys-cloud-beta)) | |
 | Vapi-style `/assistant`, `/phone-number`, `/call`, `/campaign` and `/tool` APIs | Cost per call in dollars |
 | Vapi tools: `function`, `endCall`, `transferCall` | |
 | Vapi webhooks: `status-update`, `conversation-update`, `end-of-call-report`, `assistant-request` | Calls over WhatsApp |
@@ -258,6 +259,26 @@ create a **TeXML Application** whose voice URL is `$PUBLIC_URL/telnyx/voice` (HT
 number to it. Add the number in OpenRing with `"provider": "telnyx"`, and set `TELNYX_API_KEY` and
 `TELNYX_PUBLIC_KEY` (Keys & Credentials > Public Key), or connect Telnyx from the Providers page. Every
 webhook is checked against that public key. Outbound calls and transfers go through Twilio for now.
+
+### Genesys Cloud (beta)
+
+If your contact center runs on Genesys Cloud, an assistant can take calls inside your Architect flows,
+through Genesys's **Audio Connector** (the AudioHook protocol). Not yet confirmed on a real Genesys call.
+
+1. On the **Providers** page, connect **Genesys Cloud**: press **Generate** for an API key and a client
+   secret, copy both, and save. (Or set `GENESYS_API_KEY` and `GENESYS_CLIENT_SECRET`; the secret is base64.)
+2. In Genesys, add an **Audio Connector** integration with the base connection URI
+   `wss://YOUR_PUBLIC_HOST/ws/genesys` (shown on the **Phone numbers** page) and those two credentials.
+3. In Architect, add a **Call Audio Connector** action. Pass the assistant as the input variable
+   `assistantId`, or add the called number in OpenRing with `"provider": "genesys"` and its assistant. Every
+   other input variable fills the assistant's `{{variables}}` (`{{accountId}}`, say); the caller's name
+   fills `{{customer.name}}`.
+4. After the action, the output variable `action` says what happened: `finished`, or `transfer` with the
+   number in `transferTo` (from a `transferCall` tool), so the flow can route the call. `callId` points to
+   the call in OpenRing.
+
+Every connection must carry the API key and Genesys's signature made with the client secret; anything else
+is refused. Transcripts, latency and webhooks work as for any other call.
 
 ## 🆓 The free stack
 

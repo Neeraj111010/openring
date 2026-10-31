@@ -176,6 +176,27 @@ def telnyx_transport(websocket: WebSocket, call_data: dict[str, Any], settings: 
     )
 
 
+def genesys_transport(websocket: WebSocket, serializer: Any) -> Any:
+    """Audio of a Genesys Cloud call, carried by its Audio Connector. The serializer has already answered the
+    session's `open`, so it knows the caller and Architect's variables."""
+    from pipecat.transports.websocket.fastapi import (
+        FastAPIWebsocketParams,
+        FastAPIWebsocketTransport,
+    )
+
+    return FastAPIWebsocketTransport(
+        websocket=websocket,
+        params=FastAPIWebsocketParams(
+            audio_in_enabled=True,
+            audio_out_enabled=True,
+            add_wav_header=False,
+            serializer=serializer,
+            # 200 ms of PCMU per message: Genesys rate-limits (HTTP 429) a stream of small packets.
+            fixed_audio_packet_size=1600,
+        ),
+    )
+
+
 def web_transport(connection: Any) -> Any:
     """Audio of a browser test call, over the WebRTC connection the dashboard opened."""
     from pipecat.transports.base_transport import TransportParams

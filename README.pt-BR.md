@@ -86,9 +86,10 @@ empresa em outubro de 2026; confira antes de decidir. O OpenRing não tem víncu
 | Teste no navegador pelo painel (WebRTC) | Troca quando um provedor fica lento; roteamento por custo |
 | Provedor reserva no formato do Vapi, inclusive de outro provedor (**beta**) | |
 | Quem liga em qualquer idioma: o assistente responde no idioma dele (`"language": "multi"`) | |
-| Ligações recebidas e feitas pelo Twilio (**beta**: conte como foi) | Ligações de saída pela Telnyx; Genesys Cloud; Plivo |
+| Ligações recebidas e feitas pelo Twilio (**beta**: conte como foi) | Ligações de saída pela Telnyx e pelo Genesys; Plivo |
 | Campanhas: um assistente liga para uma lista ou CSV, algumas ligações por vez, chamando cada pessoa pelo nome (**beta**) | |
 | Ligações recebidas pela Telnyx (**beta**) | |
+| Ligações do Genesys Cloud pelo Audio Connector, dentro dos seus fluxos do Architect (**beta**) | |
 | APIs `/assistant`, `/phone-number`, `/call`, `/campaign` e `/tool` no formato do Vapi | Custo por ligação em dólares |
 | Ferramentas do Vapi: `function`, `endCall`, `transferCall` | |
 | Webhooks do Vapi: `status-update`, `conversation-update`, `end-of-call-report`, `assistant-request` | Ligações pelo WhatsApp |
@@ -164,6 +165,16 @@ espera a ligação: ligações automáticas são reguladas (as regras da Anatel 
 com a voice URL `$PUBLIC_URL/telnyx/voice` (HTTP POST) e associe o número a ela. Cadastre o número no OpenRing
 com `"provider": "telnyx"` e defina `TELNYX_API_KEY` e `TELNYX_PUBLIC_KEY` (Keys & Credentials > Public Key),
 ou conecte a Telnyx pela página Providers. Ligações de saída e transferências continuam pelo Twilio.
+
+**Genesys Cloud (beta, ainda não confirmado numa ligação real):** o assistente atende dentro dos fluxos do
+Architect, pelo **Audio Connector** do Genesys. Na página Providers, conecte **Genesys Cloud** (o botão
+**Generate** cria a API key e o client secret; copie os dois antes de salvar). No Genesys, crie uma integração
+Audio Connector com a URI `wss://SEU_HOST_PUBLICO/ws/genesys` (aparece na página Phone numbers) e essas duas
+credenciais. No Architect, a ação **Call Audio Connector** escolhe o assistente pela variável de entrada
+`assistantId`, ou cadastre o número discado no OpenRing com `"provider": "genesys"`. As outras variáveis de
+entrada preenchem as `{{variáveis}}` do assistente. Na saída, `action` vale `finished` ou `transfer` (com o
+número em `transferTo`), para o fluxo rotear a ligação. Conexão sem a API key e a assinatura do Genesys é
+recusada.
 
 ### Campanhas (beta)
 

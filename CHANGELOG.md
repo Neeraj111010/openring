@@ -8,6 +8,12 @@ All notable changes to OpenRing are listed here. The format follows
 
 ### Added
 
+- Genesys Cloud (beta): an assistant takes calls inside your Architect flows through Genesys's Audio Connector
+  (`/ws/genesys`, the AudioHook protocol). Each connection must carry the API key and Genesys's HMAC
+  signature made with the client secret, which the Providers page can generate. The flow picks the assistant
+  with an `assistantId` input variable (or the called number does); other input variables fill the
+  assistant's `{{variables}}`. Output variables hand the call back: `action` is `finished`, or `transfer`
+  with `transferTo`.
 - Campaigns (beta), with Vapi's `/campaign` API: one assistant calls a list of people from a Twilio number,
   `maxConcurrency` at a time, between `schedulePlan.earliestAt` and `latestAt`, with Vapi's counters and
   `PATCH {"status": "cancelled"}` to stop. A restarted server picks its campaigns back up without calling

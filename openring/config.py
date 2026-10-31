@@ -37,6 +37,11 @@ class Settings:
         default_factory=lambda: _env("VALIDATE_TELNYX_SIGNATURE", "true").lower() != "false"
     )
 
+    # Genesys Cloud: the API key and client secret of its Audio Connector integration. Genesys sends the key
+    # and signs every connection with the secret.
+    genesys_api_key: str = field(default_factory=lambda: _env("GENESYS_API_KEY"))
+    genesys_client_secret: str = field(default_factory=lambda: _env("GENESYS_CLIENT_SECRET"))
+
     @property
     def public_ws_url(self) -> str:
         if self.public_url.startswith("https://"):

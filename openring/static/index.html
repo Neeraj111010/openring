@@ -537,7 +537,7 @@ async function signOut() { await api("/auth/logout", { method: "POST" }).catch((
 const PAGES = {
   home: ["Home", "How your voice agents are doing"],
   assistants: ["Assistants", "Each assistant answers with its own instructions, model and voice"],
-  numbers: ["Phone numbers", "Your Twilio numbers and who answers them"],
+  numbers: ["Phone numbers", "Your phone numbers and who answers them"],
   calls: ["Calls", "Every call with its transcript and response time"],
   campaigns: ["Campaigns", "Call a list of people with one assistant, a few at a time"],
   providers: ["Providers", "Speech, model and voice services this server can use"],
@@ -756,10 +756,12 @@ async function viewNumbers() {
     <div class="copyline"><code>${esc(info.twilioVoiceUrl)}</code><button class="btn ghost small" data-copy="${esc(info.twilioVoiceUrl)}">${ICON.copy}Copy</button></div>
     <p><b>Telnyx:</b> create a TeXML Application with this voice URL (HTTP POST) and assign the number to it:</p>
     <div class="copyline"><code>${esc(info.telnyxVoiceUrl)}</code><button class="btn ghost small" data-copy="${esc(info.telnyxVoiceUrl)}">${ICON.copy}Copy</button></div>
+    <p><b>Genesys Cloud:</b> create an <b>Audio Connector</b> integration with this base connection URI and the API key and client secret you set on the <a href="#providers">Providers</a> page. In Architect, the <b>Call Audio Connector</b> action picks the assistant with an <code>assistantId</code> input variable, or add the called number below with provider Genesys. Afterwards, the output variable <code>action</code> is <code>finished</code> or <code>transfer</code>, with the number in <code>transferTo</code>.</p>
+    <div class="copyline"><code>${esc(info.genesysUrl)}</code><button class="btn ghost small" data-copy="${esc(info.genesysUrl)}">${ICON.copy}Copy</button></div>
     ${info.publicUrl ? "" : `<p class="muted" style="margin-bottom:0">Phone providers can't reach <code>localhost</code>. Start a tunnel (<code>cloudflared tunnel --url http://localhost:8000</code>), put its URL in <code>PUBLIC_URL</code> and restart.</p>`}
     <form id="add" style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-top:18px">
       <div class="field" style="margin:0;flex:1;min-width:180px"><label for="num">Number</label><input id="num" name="num" required placeholder="+15551234567"></div>
-      <div class="field" style="margin:0;min-width:120px"><label for="np">Provider</label><select id="np" name="np"><option value="twilio">Twilio</option><option value="telnyx">Telnyx</option></select></div>
+      <div class="field" style="margin:0;min-width:120px"><label for="np">Provider</label><select id="np" name="np"><option value="twilio">Twilio</option><option value="telnyx">Telnyx</option><option value="genesys">Genesys</option></select></div>
       <div class="field" style="margin:0;flex:1;min-width:180px"><label for="as">Answered by</label><select id="as" name="as">${assistants.map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join("")}</select></div>
       <button class="btn">${ICON.plus}Add number</button>
     </form><div class="error" id="err" role="alert"></div></div></section>
@@ -1033,7 +1035,7 @@ const MONOGRAM = {
   openai: "AI", anthropic: "AN", google: "GE", groq: "GQ", openrouter: "OR", deepseek: "DS", xai: "XA",
   cerebras: "CB", "together-ai": "TG", deepinfra: "DI", "perplexity-ai": "PX", mistral: "MI", fireworks: "FW",
   ollama: "OL", omniroute: "OM", "rime-ai": "RI", neuphonic: "NP", "smallest-ai": "SM", inworld: "IW",
-  kokoro: "KO", twilio: "TW", telnyx: "TX",
+  kokoro: "KO", twilio: "TW", telnyx: "TX", genesys: "GC",
 };
 // One line on what each provider is for, by "kind:id" because some providers do more than one job.
 const ABOUT = {
@@ -1069,6 +1071,7 @@ const ABOUT = {
   "voice:kokoro": "Free voice that runs on this computer",
   "telephony:twilio": "Phone numbers and calls",
   "telephony:telnyx": "Phone numbers and calls, often cheaper",
+  "telephony:genesys": "Contact center calls, through Audio Connector",
 };
 const cardKey = p => `${p.kind}:${p.id}`;
 async function viewProviders() {
@@ -1162,14 +1165,26 @@ function openConnect(p) {
   const host = new URL(p.connect.keysUrl).hostname.replace(/^www\./, "");
   $("#keyTitle").textContent = `Connect ${p.name}`;
   const oauth = p.connect.oauth && crypto.subtle;
-  $("#keyHelp").innerHTML = (oauth ? `<button type="button" class="btn wide" id="keyOauth">Sign in with ${esc(p.name)}</button><span class="or">or paste a key</span>` : "")
-    + `Get ${p.connect.fields.length > 1 ? "them" : "a key"} at <a href="${esc(p.connect.keysUrl)}" target="_blank" rel="noopener">${esc(host)} ↗</a> and paste ${p.connect.fields.length > 1 ? "them" : "it"} here.`;
+  // Some providers take values you choose (Genesys's Audio Connector credentials): offer to generate them.
+  const gen = p.connect.generate;
+  $("#keyHelp").innerHTML = gen
+    ? `You choose these, then paste the same values into your ${esc(p.name)} integration (<a href="${esc(p.connect.keysUrl)}" target="_blank" rel="noopener">how ↗</a>). <b>Generate</b> makes strong ones. Copy them before saving: this page never shows them again.`
+    : (oauth ? `<button type="button" class="btn wide" id="keyOauth">Sign in with ${esc(p.name)}</button><span class="or">or paste a key</span>` : "")
+      + `Get ${p.connect.fields.length > 1 ? "them" : "a key"} at <a href="${esc(p.connect.keysUrl)}" target="_blank" rel="noopener">${esc(host)} ↗</a> and paste ${p.connect.fields.length > 1 ? "them" : "it"} here.`;
   if (oauth) $("#keyOauth").onclick = () => { d.close(); signInOpenRouter(); };
-  $("#keyFields").innerHTML = p.connect.fields.map((f, i) => `<div class="field"><label for="kf${i}">${esc(f.label)}</label><input id="kf${i}" name="${esc(f.env)}" type="password" required autocomplete="off" spellcheck="false"></div>`).join("");
+  $("#keyFields").innerHTML = p.connect.fields.map((f, i) => `<div class="field"><label for="kf${i}">${esc(f.label)}</label><input id="kf${i}" name="${esc(f.env)}" type="${gen ? "text" : "password"}" required autocomplete="off" spellcheck="false">${gen ? `<div class="row-actions" style="margin-top:6px"><button type="button" class="btn ghost small" data-gen="${i}">Generate</button><button type="button" class="btn ghost small" data-copyfield="${i}">${ICON.copy}Copy</button></div>` : ""}</div>`).join("");
+  $("#keyFields").querySelectorAll("[data-gen]").forEach(b => b.onclick = () => {
+    const input = $("#kf" + b.dataset.gen), bytes = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
+    // A client secret is base64, as Genesys expects; a key just needs to be long and URL-safe.
+    input.value = /SECRET/.test(input.name) ? bytes : bytes.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  });
+  $("#keyFields").querySelectorAll("[data-copyfield]").forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText($("#kf" + b.dataset.copyfield).value); const t = b.innerHTML; b.textContent = "Copied"; setTimeout(() => b.innerHTML = t, 1200); } catch {}
+  });
   $("#keyErr").textContent = "";
   const save = $("#keySave");
   save.disabled = false;
-  save.textContent = "Check and save";
+  save.textContent = gen ? "Save" : "Check and save";
   $("#keyForm").onsubmit = async e => {
     if (e.submitter?.value === "cancel") return;
     e.preventDefault();
@@ -1179,7 +1194,8 @@ function openConnect(p) {
     $("#keyErr").textContent = "";
     try {
       const r = await api(`/providers/${p.id}/connect`, { method: "POST", body: JSON.stringify({ values }) });
-      if (!r.checked) providerNotice = { key: cardKey(p), text: `Saved. ${p.name} can't be checked in advance; your first call will tell.` };
+      if (!r.checked && !gen) providerNotice = { key: cardKey(p), text: `Saved. ${p.name} can't be checked in advance; your first call will tell.` };
+      if (gen) providerNotice = { key: cardKey(p), text: `Saved. Paste the same values into ${p.name}; the Phone numbers page has the connection URI.` };
       d.close();
       viewProviders();
     }

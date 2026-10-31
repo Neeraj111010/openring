@@ -6,17 +6,19 @@ import asyncio
 import hmac
 import json
 import os
+import re
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from loguru import logger
 
-from . import __version__, auth, campaigns, keys, overrides, providers, stats, telnyx, twilio
+from . import __version__, auth, campaigns, genesys, keys, overrides, providers, stats, telnyx, twilio
 from .config import Settings, get_settings
 from .importer import SourceError, import_account
 from .providers import ProviderError, resolve_plan
@@ -232,6 +234,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             "baseUrl": base,
             "twilioVoiceUrl": base + "/twilio/voice",
             "telnyxVoiceUrl": base + "/telnyx/voice",
+            "genesysUrl": re.sub(r"^http", "ws", base) + "/ws/genesys",
             "envFile": os.environ.get("OPENRING_ENV_FILE", ""),
             "providers": [_with_connect(p) for p in providers.provider_status(settings)],
         }
@@ -245,6 +248,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
                 "fields": [{"env": env, "label": label, "set": bool(set_now[env])} for env, label in spec["fields"]],
                 "keysUrl": spec["keysUrl"],
                 "oauth": bool(spec.get("oauth")),
+                "generate": bool(spec.get("generate")),
                 "balance": row["id"] in keys.BALANCES,
             }
         return row
@@ -257,6 +261,9 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         if provider == "telnyx":
             settings.telnyx_api_key = values["TELNYX_API_KEY"]
             settings.telnyx_public_key = values["TELNYX_PUBLIC_KEY"]
+        if provider == "genesys":
+            settings.genesys_api_key = values["GENESYS_API_KEY"]
+            settings.genesys_client_secret = values["GENESYS_CLIENT_SECRET"]
         where = str(keys.env_file()) if saved else None
         return {"connected": bool(all(values.values())), "saved": saved, "envFile": where}
 
@@ -791,10 +798,39 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             store.claim("calls", request.query_params.get("callId", ""), "queued", patch)
         return Response(status_code=204)
 
+    async def run_phone_call(
+        call: dict[str, Any],
+        refuse: Callable[[str], Awaitable[None]],
+        build: Callable[[], Any],
+        transfer: Callable[[str], Awaitable[None]] | None = None,
+    ) -> None:
+        """Run a claimed phone call with its assistant. `refuse(why)` hangs up when the call can't start."""
+        from .bot import PHONE_SAMPLE_RATE, run_call
+
+        call_id = call["id"]
+        logger.info("call {} media stream connected", call_id)
+        # The assistant comes from the call record, never from the stream's parameters.
+        assistant = call.get("assistant") or store.get("assistants", call.get("assistantId") or "")
+        if assistant is None:
+            store.update("calls", call_id, {"status": "ended", "endedReason": "assistant-not-found"})
+            await refuse("the call's assistant was deleted")
+            return
+        # This call's overrides and variables: a campaign's `{{customer.name}}`, an assistant-request's changes.
+        assistant = overrides.apply(assistant, call.get("assistantOverrides"), call.get("customer"))
+        try:
+            plan = resolve_plan(assistant)
+        except ProviderError as exc:
+            logger.error("call {} cannot start: {}", call_id, exc)
+            store.update("calls", call_id, {"status": "ended", "endedReason": f"provider-error: {exc}"})
+            await refuse(str(exc))
+            return
+        await run_call(build(), plan=plan, call_id=call_id, store=store, sample_rate=PHONE_SAMPLE_RATE,
+                       transfer=transfer)
+
     async def media_stream(websocket: WebSocket, provider: str) -> None:
         from pipecat.runner.utils import parse_telephony_websocket
 
-        from .bot import PHONE_SAMPLE_RATE, run_call, telnyx_transport, twilio_transport
+        from .bot import telnyx_transport, twilio_transport
 
         await websocket.accept()
         try:
@@ -817,22 +853,6 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             logger.warning("refused media stream for call {}: unknown or already connected", call_id or "?")
             await websocket.close(code=1008)
             return
-        logger.info("call {} media stream connected", call_id)
-        # The assistant comes from the call record, never from the stream's parameters.
-        assistant = call.get("assistant") or store.get("assistants", call.get("assistantId") or "")
-        if assistant is None:
-            store.update("calls", call_id, {"status": "ended", "endedReason": "assistant-not-found"})
-            await websocket.close()
-            return
-        # This call's overrides and variables: a campaign's `{{customer.name}}`, an assistant-request's changes.
-        assistant = overrides.apply(assistant, call.get("assistantOverrides"), call.get("customer"))
-        try:
-            plan = resolve_plan(assistant)
-        except ProviderError as exc:
-            logger.error("call {} cannot start: {}", call_id, exc)
-            store.update("calls", call_id, {"status": "ended", "endedReason": f"provider-error: {exc}"})
-            await websocket.close()
-            return
         transfer = None
         call_sid = call.get("phoneCallProviderId") or call_data.get("call_id")
         if provider == "twilio" and settings.twilio_account_sid and settings.twilio_auth_token and call_sid:
@@ -841,15 +861,11 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
                 twiml = twilio.dial_twiml(_e164(number))
                 await twilio.redirect_call(settings.twilio_account_sid, settings.twilio_auth_token, call_sid, twiml)
 
+        async def hang_up(_why: str) -> None:
+            await websocket.close()
+
         build = twilio_transport if provider == "twilio" else telnyx_transport
-        await run_call(
-            build(websocket, dict(call_data), settings),
-            plan=plan,
-            call_id=call_id,
-            store=store,
-            sample_rate=PHONE_SAMPLE_RATE,
-            transfer=transfer,
-        )
+        await run_phone_call(call, hang_up, lambda: build(websocket, dict(call_data), settings), transfer)
 
     @app.websocket("/ws/twilio")
     async def twilio_media(websocket: WebSocket) -> None:
@@ -858,5 +874,93 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     @app.websocket("/ws/telnyx")
     async def telnyx_media(websocket: WebSocket) -> None:
         await media_stream(websocket, "telnyx")
+
+    # ---- Genesys Cloud (Audio Connector, AudioHook protocol) ------------------------
+    def genesys_refusal(websocket: WebSocket) -> str | None:
+        """Why this connection is not Genesys with our Audio Connector credentials, or None when it is."""
+        if not (settings.genesys_api_key and settings.genesys_client_secret):
+            return "set GENESYS_API_KEY and GENESYS_CLIENT_SECRET (Providers > Genesys Cloud)"
+        given = websocket.headers.get("x-api-key", "")
+        if not hmac.compare_digest(given.encode(), settings.genesys_api_key.encode()):
+            return "wrong X-API-KEY"
+        target = websocket.url.path + (f"?{websocket.url.query}" if websocket.url.query else "")
+        authority = urlsplit(settings.public_url).netloc or websocket.headers.get("host", "")
+        return genesys.check_signature(dict(websocket.headers.items()), target, authority,
+                                       api_key=settings.genesys_api_key, client_secret=settings.genesys_client_secret)
+
+    @app.websocket("/ws/genesys")
+    async def genesys_media(websocket: WebSocket) -> None:
+        """A Genesys Cloud call. The Architect flow picks the assistant with an `assistantId` input variable, or
+        the called number does; other input variables fill the assistant's {{variables}}. Back in Architect,
+        output variables say what happened: `action` is "finished" or "transfer" (with `transferTo`)."""
+        from pipecat.serializers.genesys import GenesysAudioHookSerializer
+
+        from .bot import genesys_transport
+
+        if problem := genesys_refusal(websocket):
+            logger.warning("refused a Genesys connection: {}", problem)
+            await websocket.close(code=1008)
+            return
+        await websocket.accept()
+        try:
+            first = await asyncio.wait_for(websocket.receive_text(), HANDSHAKE_TIMEOUT)
+            opening = json.loads(first)
+        except WebSocketDisconnect:
+            return
+        except (TimeoutError, ValueError, KeyError):  # silence, or not JSON text
+            await websocket.close(code=1008)
+            return
+        if not isinstance(opening, dict) or opening.get("type") != "open":
+            await websocket.close(code=1008)
+            return
+        serializer = GenesysAudioHookSerializer()
+        opened = await serializer.deserialize(first)  # also keeps the session's caller and variables
+        await websocket.send_text(json.dumps(opened.message))
+
+        async def refuse(why: str) -> None:
+            """Ends the session with an error, so the Architect flow takes its failure path."""
+            logger.warning("Genesys call {} refused: {}", serializer.conversation_id, why)
+            message = serializer.create_disconnect_message(reason="error", action="finished", info=why)
+            await websocket.send_text(json.dumps(message))
+            await websocket.close()
+
+        participant = serializer.participant or {}
+        inputs = dict(serializer.input_variables or {})
+        caller, called = genesys.number(participant.get("ani")), genesys.number(participant.get("dnis"))
+        if wanted := str(inputs.pop("assistantId", "") or ""):
+            if store.get("assistants", wanted) is None:
+                await refuse(f"assistant {wanted} not found")
+                return
+            number = store.find_phone_number(called) if called else None
+            call: dict[str, Any] | str = store.create("calls", {
+                "type": "inboundPhoneCall", "status": "queued", "assistantId": wanted,
+                "phoneNumberId": (number or {}).get("id"), "customer": {"number": caller},
+                "phoneCallProvider": "genesys", "phoneCallProviderId": serializer.conversation_id,
+            })
+        else:
+            call = await answer_inbound(caller, called, serializer.conversation_id, "genesys")
+        if isinstance(call, str):
+            await refuse(call)
+            return
+        customer = dict(call.get("customer") or {})
+        if participant.get("aniName"):
+            customer["name"] = participant["aniName"]
+        patch: dict[str, Any] = {"customer": customer, "status": "in-progress", "startedAt": now_iso()}
+        if inputs:
+            patch["assistantOverrides"] = overrides.combine({"variableValues": inputs}, call.get("assistantOverrides"))
+        claimed = store.claim("calls", call["id"], "queued", patch)
+        if claimed is None:
+            await refuse("the call is already connected")
+            return
+        serializer.set_output_variables({"action": "finished", "callId": claimed["id"]})
+
+        async def transfer(number: str) -> None:
+            """Genesys moves the call: the Architect flow reads `action` and `transferTo` when the connector ends."""
+            serializer.set_output_variables({"action": "transfer", "transferTo": number, "callId": claimed["id"]})
+            message = serializer.create_disconnect_message(reason="completed",
+                                                           output_variables=serializer.output_variables)
+            await websocket.send_text(json.dumps(message))
+
+        await run_phone_call(claimed, refuse, lambda: genesys_transport(websocket, serializer), transfer)
 
     return app

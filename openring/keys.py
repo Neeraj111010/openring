@@ -7,6 +7,8 @@ restart, and are never sent back to the browser.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import os
 import re
 from datetime import datetime, timezone
@@ -44,6 +46,7 @@ KEY_PAGES = {
     "inworld": "https://platform.inworld.ai/",
     "twilio": "https://console.twilio.com/",
     "telnyx": "https://portal.telnyx.com/#/api-keys",
+    "genesys": "https://help.mypurecloud.com/articles/configure-audio-connector/",
 }
 
 
@@ -59,11 +62,14 @@ def _connectors() -> dict[str, dict[str, Any]]:
     # The public key (Keys & Credentials > Public Key) checks that webhooks come from Telnyx.
     found["telnyx"] = {"fields": [("TELNYX_API_KEY", "API key"), ("TELNYX_PUBLIC_KEY", "Public key")],
                        "keysUrl": KEY_PAGES["telnyx"]}
+    # You choose both (the dashboard can generate them) and paste the same into Genesys's Audio Connector.
+    found["genesys"] = {"fields": [("GENESYS_API_KEY", "API key"), ("GENESYS_CLIENT_SECRET", "Client secret")],
+                        "keysUrl": KEY_PAGES["genesys"], "generate": True}
     return found
 
 
 CONNECTORS = _connectors()
-NAMES = {**PROVIDER_NAMES, "twilio": "Twilio", "telnyx": "Telnyx"}
+NAMES = {**PROVIDER_NAMES, "twilio": "Twilio", "telnyx": "Telnyx", "genesys": "Genesys Cloud"}
 OPENROUTER_EXCHANGE_URL = "https://openrouter.ai/api/v1/auth/keys"
 # Keys are single tokens; anything else (spaces, quotes, line breaks) would break the .env file.
 VALUE_RE = re.compile(r"^[A-Za-z0-9_\-.:+/=]{8,512}$")
@@ -94,7 +100,7 @@ CHECKS = {
 }
 ONLY_REJECTIONS = {"rime-ai"}
 # Providers with no endpoint that checks a key; their keys are saved as they are.
-UNCHECKED = {"smallest-ai"}
+UNCHECKED = {"smallest-ai", "genesys"}
 
 
 class ConnectError(ValueError):
@@ -112,6 +118,11 @@ def clean_values(provider: str, values: dict[str, Any]) -> dict[str, str]:
         if not VALUE_RE.match(value):
             raise ConnectError(f"that doesn't look like a {NAMES[provider]} {label.lower()}; paste it again")
         cleaned[env] = value
+    if provider == "genesys":
+        try:
+            base64.b64decode(cleaned["GENESYS_CLIENT_SECRET"], validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ConnectError("the client secret must be base64, as Genesys expects; press Generate") from exc
     return cleaned
 
 

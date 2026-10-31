@@ -213,6 +213,9 @@ def provider_status(settings: Any) -> list[dict[str, Any]]:
     rows.append({"id": "telnyx", "name": "Telnyx", "kind": "telephony", "env": "TELNYX_API_KEY",
                  "ready": bool(settings.telnyx_api_key and settings.telnyx_public_key and settings.public_url),
                  "note": None if settings.public_url else "set PUBLIC_URL so Telnyx can reach this server"})
+    rows.append({"id": "genesys", "name": "Genesys Cloud", "kind": "telephony", "env": "GENESYS_API_KEY",
+                 "ready": bool(settings.genesys_api_key and settings.genesys_client_secret and settings.public_url),
+                 "note": None if settings.public_url else "set PUBLIC_URL so Genesys can reach this server"})
     return rows
 
 

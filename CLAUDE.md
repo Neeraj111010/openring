@@ -10,7 +10,7 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
 - `openring/api.py` FastAPI app: Vapi-style REST (`/assistant`, `/phone-number`, `/call`), Twilio
   voice webhook (`POST /twilio/voice`, validates `X-Twilio-Signature`, refuses calls while
   `TWILIO_AUTH_TOKEN` is unset unless `VALIDATE_TWILIO_SIGNATURE=false`), media websocket
-  (`/ws/twilio`: one connection per call, it atomically claims the queued call via `Store.claim`;
+  (`/ws/twilio` and `/ws/telnyx`: one connection per call, it atomically claims the queued call via `Store.claim`;
   the assistant comes from the call record, never from stream parameters), `POST /call/web`
   (browser test call: answers the dashboard's WebRTC offer with Pipecat's `SmallWebRTCConnection`
   and runs the call as a background task; non-trickle ICE), `POST /call` (outbound, Vapi body:
@@ -51,6 +51,13 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
   A model switch queues an `LLMRunFrame` so the new model answers; switches land in `providerFallbacks`.
 - Groq's catalog changed in 2026: Llama 3.x is gone; use `openai/gpt-oss-20b` (fast) or
   `openai/gpt-oss-120b`. Groq's Cloudflare returns 403 to Python's default urllib User-Agent.
+- Genesys Cloud (`openring/genesys.py` + `/ws/genesys`, beta): Audio Connector over AudioHook. Refused unless
+  `X-API-KEY` = `GENESYS_API_KEY` and the HTTP message signature (HMAC-SHA256, key = base64-decoded
+  `GENESYS_CLIENT_SECRET`, `@authority` from PUBLIC_URL, required components and 30 s max age as in Genesys's
+  reference server) verifies. The `open` message is read before the pipeline, fed to Pipecat's
+  `GenesysAudioHookSerializer` (it answers `opened`, pings, `close`), and picks the assistant: input variable
+  `assistantId`, else the dnis number (`answer_inbound`). Other input variables become `variableValues`.
+  Output variables: `action` finished/transfer, `transferTo`, `callId`; a transfer sends `disconnect`.
 - `openring/campaigns.py` + `/campaign` (Vapi's shape; the list is `{results, metadata}`): `Dialer` runs one
   asyncio task per live campaign (started on create, resumed from the app lifespan), dials through the same
   `dial()` as `POST /call` with `campaignId`, keeps `calls` (callId -> customer, status, endedReason) and
