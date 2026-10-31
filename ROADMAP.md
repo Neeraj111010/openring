@@ -12,9 +12,10 @@ something, or pick an item and say you're on it. Shipped work moves to the [chan
 - **Cost per call in dollars.** Calls already record their tokens, voice characters and transcribed
   seconds; next is turning them into what each provider charged, and what the same call would have cost
   on a hosted platform.
-- **More telephony:** outbound calls through Telnyx (incoming Telnyx calls are in beta), and Plivo; both
-  usually cheaper than Twilio.
-- **Outbound campaigns:** call a list of numbers, in Vapi's format.
+- **More telephony:** outbound calls through Telnyx (incoming Telnyx calls are in beta), Genesys Cloud
+  through its Audio Connector, and Plivo.
+- **Campaigns, next steps:** retrying busy and unanswered numbers, calling hours per time zone, and Vapi's
+  campaign webhooks. Campaigns themselves are in (beta).
 - **Calls over WhatsApp.**
 - **Deploy in one click:** a published Docker image and templates for Railway and Render.
 

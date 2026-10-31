@@ -51,6 +51,13 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
   A model switch queues an `LLMRunFrame` so the new model answers; switches land in `providerFallbacks`.
 - Groq's catalog changed in 2026: Llama 3.x is gone; use `openai/gpt-oss-20b` (fast) or
   `openai/gpt-oss-120b`. Groq's Cloudflare returns 403 to Python's default urllib User-Agent.
+- `openring/campaigns.py` + `/campaign` (Vapi's shape; the list is `{results, metadata}`): `Dialer` runs one
+  asyncio task per live campaign (started on create, resumed from the app lifespan), dials through the same
+  `dial()` as `POST /call` with `campaignId`, keeps `calls` (callId -> customer, status, endedReason) and
+  Vapi's `callsCounter*`, saves after every dial so a restart never calls anyone twice, and ends calls cut off
+  by a restart (`worker-shutdown`). Cancel claims the status atomically (`Store.update` is atomic too).
+- `openring/overrides.py`: Vapi's `assistantOverrides` (deep merge) and `{{variables}}` (`customer.*`,
+  `variableValues`) in `firstMessage` and `model.messages`, applied per call in `media_stream`.
 - `openring/tools.py` Vapi tools: `function` (POSTs Vapi's `tool-calls` message to `tool.server.url` or the
   assistant's `server.url`, reads `{"results": [{"toolCallId", "result"|"error"}]}`), `endCall`
   (endedReason `assistant-ended-call`), `transferCall` (waits until the bot stops speaking, keeps Pipecat's
@@ -62,11 +69,12 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
   any Vapi-compatible API (pages back with `createdAtLt`), drops source-owned fields and secrets, remaps
   `model.toolIds`, marks docs with `importedFrom` so a re-import updates them; reports per-assistant problems
   (unsupported providers/tools) without refusing the import. Dashboard: **Import** on the Assistants page.
-- `openring/store.py` SQLite document store (JSON docs) for assistants, phone_numbers, calls, tools.
+- `openring/store.py` SQLite document store (JSON docs) for assistants, phone_numbers, calls, tools, campaigns.
 - `openring/static/index.html` single-file dashboard (vanilla JS, no build step), styled after OmniRoute:
   sidebar with sections, dark/light theme, big-number cards, tabs. Pages: Home (overview + get started),
   Assistants (tiles; editor with Setup/JSON tabs), Phone numbers, Calls (filters; detail with transcript,
-  per-turn latency, JSON), Providers, Settings (API access, password).
+  per-turn latency, JSON), Campaigns (list/CSV, consent checkbox, progress), Providers, Settings (API
+  access, password).
 - `openring/__main__.py` `openring` command: first run creates `~/.openring/.env` with a generated
   `OPENRING_API_KEY`, DB at `~/.openring/openring.db`, binds 127.0.0.1:8000.
 - `bin/openring.js` + `package.json` npm launcher: installs uv if missing, runs

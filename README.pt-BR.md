@@ -86,10 +86,11 @@ empresa em outubro de 2026; confira antes de decidir. O OpenRing não tem víncu
 | Teste no navegador pelo painel (WebRTC) | Troca quando um provedor fica lento; roteamento por custo |
 | Provedor reserva no formato do Vapi, inclusive de outro provedor (**beta**) | |
 | Quem liga em qualquer idioma: o assistente responde no idioma dele (`"language": "multi"`) | |
-| Ligações recebidas e feitas pelo Twilio (**beta**: conte como foi) | Ligações de saída pela Telnyx; Plivo |
+| Ligações recebidas e feitas pelo Twilio (**beta**: conte como foi) | Ligações de saída pela Telnyx; Genesys Cloud; Plivo |
+| Campanhas: um assistente liga para uma lista ou CSV, algumas ligações por vez, chamando cada pessoa pelo nome (**beta**) | |
 | Ligações recebidas pela Telnyx (**beta**) | |
-| APIs `/assistant`, `/phone-number`, `/call` e `/tool` no formato do Vapi | Custo por ligação em dólares |
-| Ferramentas do Vapi: `function`, `endCall`, `transferCall` | Campanhas de ligação a partir de uma lista |
+| APIs `/assistant`, `/phone-number`, `/call`, `/campaign` e `/tool` no formato do Vapi | Custo por ligação em dólares |
+| Ferramentas do Vapi: `function`, `endCall`, `transferCall` | |
 | Webhooks do Vapi: `status-update`, `conversation-update`, `end-of-call-report`, `assistant-request` | Ligações pelo WhatsApp |
 | Importação de assistentes, ferramentas e números de uma conta do Vapi | |
 | 16 modelos, 6 transcrições e 9 vozes, com os nomes do Vapi | |
@@ -163,6 +164,32 @@ espera a ligação: ligações automáticas são reguladas (as regras da Anatel 
 com a voice URL `$PUBLIC_URL/telnyx/voice` (HTTP POST) e associe o número a ela. Cadastre o número no OpenRing
 com `"provider": "telnyx"` e defina `TELNYX_API_KEY` e `TELNYX_PUBLIC_KEY` (Keys & Credentials > Public Key),
 ou conecte a Telnyx pela página Providers. Ligações de saída e transferências continuam pelo Twilio.
+
+### Campanhas (beta)
+
+Um assistente liga para uma lista de pessoas, algumas por vez, com o mesmo corpo do `POST /campaign` do Vapi.
+Cada pessoa recebe uma ligação de saída comum, com o `campaignId`, então transcrição e webhooks funcionam como
+em qualquer ligação. No painel, **Campaigns > New campaign** aceita uma lista colada ou um CSV; as outras
+colunas do CSV viram variáveis.
+
+```bash
+curl -X POST http://localhost:8000/campaign \
+  -H "Authorization: Bearer $OPENRING_API_KEY" -H "Content-Type: application/json" \
+  -d '{"name": "Lembrete de consulta", "phoneNumberId": "ID_DO_NUMERO", "assistantId": "ID_DO_ASSISTENTE",
+       "maxConcurrency": 3,
+       "schedulePlan": {"earliestAt": "2026-11-03T12:00:00Z", "latestAt": "2026-11-03T20:00:00Z"},
+       "customers": [{"number": "+5511912345678", "name": "Maria",
+                      "assistantOverrides": {"variableValues": {"horario": "15h"}}}]}'
+```
+
+A primeira mensagem e as instruções do assistente aceitam `{{customer.name}}`, `{{customer.number}}` e qualquer
+chave de `variableValues`: `"firstMessage": "Oi {{customer.name}}, estou ligando para confirmar sua consulta
+das {{horario}}."`. As ligações começam em `earliestAt` (ou na hora) e nenhuma nova começa depois de
+`latestAt`. `PATCH /campaign/{id}` com `{"status": "cancelled"}` para a campanha. Se o servidor reiniciar, ele
+retoma as campanhas sem ligar duas vezes para ninguém.
+
+Ligue só para quem aceitou receber a ligação, no horário que a lei permite: ligações automáticas são
+reguladas (as regras da Anatel no Brasil, a TCPA nos EUA). O painel pede essa confirmação em cada campanha.
 
 ## 🆓 Stack grátis
 

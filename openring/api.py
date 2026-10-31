@@ -6,6 +6,7 @@ import asyncio
 import hmac
 import json
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -15,7 +16,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, Response
 from loguru import logger
 
-from . import __version__, auth, keys, providers, stats, telnyx, twilio
+from . import __version__, auth, campaigns, keys, overrides, providers, stats, telnyx, twilio
 from .config import Settings, get_settings
 from .importer import SourceError, import_account
 from .providers import ProviderError, resolve_plan
@@ -54,10 +55,33 @@ def _e164(number: str) -> str:
     return "+" + "".join(ch for ch in number if ch.isdigit())
 
 
+class Refused(Exception):
+    """The phone provider would not place a call; the call is already recorded as ended."""
+
+    def __init__(self, call: dict[str, Any], detail: str):
+        super().__init__(detail)
+        self.call = call
+        self.detail = detail
+
+
+# Campaign fields the server keeps up to date; a client's copy of them is ignored.
+CAMPAIGN_OWNED = {"id", "orgId", "createdAt", "updatedAt", "status", "endedReason", "endedAt", "error", "calls",
+                  "callsCounterScheduled", "callsCounterQueued", "callsCounterInProgress",
+                  "callsCounterEndedVoicemail", "callsCounterEnded"}
+CAMPAIGN_UNSUPPORTED = ("workflowId", "squadId", "squadOverrides", "predialPlan", "duplicateFromCampaignId")
+
+
 def create_app(settings: Settings | None = None, store: Store | None = None) -> FastAPI:
     settings = settings or get_settings()
     store = store or Store(settings.db_path)
-    app = FastAPI(title="OpenRing", version=__version__)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        dialer.resume()
+        yield
+        await dialer.close()
+
+    app = FastAPI(title="OpenRing", version=__version__, lifespan=lifespan)
     app.state.settings = settings
     app.state.store = store
 
@@ -390,21 +414,25 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     def get_call(call_id: str) -> dict[str, Any]:
         return _get_or_404("calls", call_id)
 
-    @app.post("/call", status_code=201, dependencies=auth_deps)
-    async def create_call(body: dict[str, Any]) -> dict[str, Any]:
-        """Outbound phone call, Vapi-style: the assistant calls `customer.number` from one of your numbers."""
-        number = _get_or_404("phone_numbers", str(body.get("phoneNumberId") or ""))
+    def _outbound_number(number_id: str) -> dict[str, Any]:
+        number = _get_or_404("phone_numbers", number_id)
         if (number.get("provider") or "twilio") != "twilio":
             raise HTTPException(status_code=400, detail="outbound calls only go through Twilio numbers for now")
-        customer = str((body.get("customer") or {}).get("number") or "")
-        if not customer:
-            raise HTTPException(status_code=400, detail="customer.number is required (E.164, e.g. +5511999999999)")
-        transient = body.get("assistant") if isinstance(body.get("assistant"), dict) else None
-        if transient is not None:
-            _validate_assistant(transient)
-            assistant = transient
-        else:
-            assistant = _get_or_404("assistants", str(body.get("assistantId") or number.get("assistantId") or ""))
+        return number
+
+    def _customer(value: Any, where: str) -> dict[str, Any]:
+        """A Vapi customer with its number in E.164. Its `assistantOverrides` go to the call, not the record."""
+        customer = dict(value) if isinstance(value, dict) else {}
+        if customer.get("sipUri") and not customer.get("number"):
+            raise HTTPException(status_code=400, detail=f"{where}.sipUri: SIP calls are not supported yet; use number")
+        if not any(ch.isdigit() for ch in str(customer.get("number") or "")):
+            raise HTTPException(status_code=400, detail=f"{where}.number is required (E.164, e.g. +5511999999999)")
+        customer["number"] = _e164(str(customer["number"]))
+        return customer
+
+    def _check_outbound(assistant: dict[str, Any]) -> None:
+        """Everything an outbound call needs before Twilio dials: a working assistant, Twilio, a public URL."""
+        _validate_assistant(assistant)
         try:
             resolve_plan(assistant)
         except ProviderError as exc:
@@ -414,30 +442,187 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         if not settings.public_url:
             raise HTTPException(status_code=400, detail="outbound calls need PUBLIC_URL (where Twilio reaches you)")
 
-        call = store.create(
-            "calls",
-            {
-                "type": "outboundPhoneCall",
-                "status": "queued",
-                # A transient assistant lives in the call record, as on Vapi.
-                **({"assistant": transient} if transient is not None else {"assistantId": assistant["id"]}),
-                "phoneNumberId": number["id"],
-                "customer": {"number": _e164(customer)},
-            },
-        )
+    async def dial(number: dict[str, Any], customer: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
+        """Has Twilio call `customer` from `number`. `record` names the assistant (and overrides) for the call."""
+        person = {k: v for k, v in customer.items() if k != "assistantOverrides"}
+        call = store.create("calls", {"type": "outboundPhoneCall", "status": "queued", **record,
+                                      "phoneNumberId": number["id"], "customer": person})
         try:
             sid = await twilio.create_call(
                 settings.twilio_account_sid,
                 settings.twilio_auth_token,
-                to=_e164(customer),
+                to=person["number"],
                 from_=_e164(number["number"]),
                 url=f"{settings.public_url}/twilio/voice?callId={call['id']}",
                 status_callback=f"{settings.public_url}/twilio/status?callId={call['id']}",
             )
         except (TwilioError, httpx.HTTPError) as exc:
-            store.update("calls", call["id"], {"status": "ended", "endedReason": "twilio-failed-to-connect-call"})
-            raise HTTPException(status_code=400, detail=f"Twilio did not place the call: {exc}") from exc
+            patch = {"status": "ended", "endedReason": "twilio-failed-to-connect-call", "endedAt": now_iso()}
+            raise Refused(store.update("calls", call["id"], patch), str(exc)) from exc
         return store.update("calls", call["id"], {"phoneCallProviderId": sid})
+
+    @app.post("/call", status_code=201, dependencies=auth_deps)
+    async def create_call(body: dict[str, Any]) -> dict[str, Any]:
+        """Outbound phone call, Vapi-style: the assistant calls `customer.number` from one of your numbers."""
+        number = _outbound_number(str(body.get("phoneNumberId") or ""))
+        customer = _customer(body.get("customer"), "customer")
+        transient = body.get("assistant") if isinstance(body.get("assistant"), dict) else None
+        if transient is not None:
+            _validate_assistant(transient)
+            assistant = transient
+        else:
+            assistant = _get_or_404("assistants", str(body.get("assistantId") or number.get("assistantId") or ""))
+        extra = overrides.combine(customer.get("assistantOverrides"), body.get("assistantOverrides"))
+        _check_outbound(overrides.apply(assistant, extra, customer))
+        # A transient assistant lives in the call record, as on Vapi.
+        record: dict[str, Any] = {"assistant": transient} if transient is not None else {"assistantId": assistant["id"]}
+        if extra:
+            record["assistantOverrides"] = extra
+        try:
+            return await dial(number, customer, record)
+        except Refused as exc:
+            raise HTTPException(status_code=400, detail=f"Twilio did not place the call: {exc.detail}") from exc
+
+    # ---- Campaigns (Vapi's /campaign): one assistant calls a list of people --------------
+    def _campaign_doc(body: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
+        """The campaign as stored: checked the way a run would trip on it, numbers in E.164."""
+        doc = {k: v for k, v in {**(current or {}), **body}.items() if k not in CAMPAIGN_OWNED}
+        if not str(doc.get("name") or "").strip():
+            raise HTTPException(status_code=400, detail="name is required")
+        for key in CAMPAIGN_UNSUPPORTED:
+            if doc.get(key):
+                raise HTTPException(status_code=400, detail=f"{key} is not supported yet")
+        if doc.get("dialPlan"):
+            if doc.get("phoneNumberId") or doc.get("customers"):
+                raise HTTPException(status_code=400, detail="use phoneNumberId with customers, or dialPlan, not both")
+            if not isinstance(doc["dialPlan"], list):
+                raise HTTPException(status_code=400, detail="dialPlan must be a list of {phoneNumberId, customers}")
+            entries = [e if isinstance(e, dict) else {} for e in doc["dialPlan"]]
+            doc["dialPlan"] = [
+                {**entry, "phoneNumberId": str(entry.get("phoneNumberId") or ""),
+                 "customers": [_customer(c, f"dialPlan[{i}].customers[{j}]")
+                               for j, c in enumerate(entry.get("customers") or [])]}
+                for i, entry in enumerate(entries)
+            ]
+        else:
+            if not doc.get("phoneNumberId"):
+                raise HTTPException(status_code=400, detail="phoneNumberId is required: the number that calls")
+            if not isinstance(doc.get("customers"), list) or not doc["customers"]:
+                raise HTTPException(status_code=400,
+                                    detail='customers is required: who to call, e.g. [{"number": "+5511912345678"}]')
+            doc["customers"] = [_customer(c, f"customers[{i}]") for i, c in enumerate(doc["customers"])]
+        planned = campaigns.dials(doc)
+        if not planned:
+            raise HTTPException(status_code=400, detail="the campaign has nobody to call")
+        if len(planned) > campaigns.MAX_CUSTOMERS:
+            raise HTTPException(status_code=400, detail=f"a campaign calls at most {campaigns.MAX_CUSTOMERS:,} people")
+        try:
+            concurrency = int(doc.get("maxConcurrency") or campaigns.DEFAULT_CONCURRENCY)
+        except (TypeError, ValueError):
+            concurrency = 0
+        if not 1 <= concurrency <= campaigns.MAX_CONCURRENCY:
+            raise HTTPException(status_code=400, detail=f"maxConcurrency goes from 1 to {campaigns.MAX_CONCURRENCY}")
+        doc["maxConcurrency"] = concurrency
+        if (schedule := doc.get("schedulePlan")) is not None:
+            if not isinstance(schedule, dict) or not schedule.get("earliestAt"):
+                raise HTTPException(status_code=400, detail="schedulePlan.earliestAt is required")
+            try:
+                earliest = campaigns.parse_time(schedule["earliestAt"])
+                latest = campaigns.parse_time(schedule.get("latestAt"))
+            except ValueError as exc:
+                raise HTTPException(status_code=400,
+                                    detail="schedulePlan times are ISO 8601, e.g. 2026-11-03T13:00:00Z") from exc
+            if latest and earliest and latest <= earliest:
+                raise HTTPException(status_code=400, detail="schedulePlan.latestAt must come after earliestAt")
+        base = doc.get("assistantOverrides")
+        checked: set[str] = set()
+        for number_id, customer in planned:
+            number = _outbound_number(number_id)
+            assistant_id = doc.get("assistantId") or number.get("assistantId")
+            if not assistant_id:
+                raise HTTPException(status_code=400,
+                                    detail=f"assistantId is required: {number['number']} has no assistant attached")
+            assistant = _get_or_404("assistants", str(assistant_id))
+            if number_id not in checked:
+                _check_outbound(overrides.apply(assistant, base))
+                checked.add(number_id)
+            if overrides.changes_assistant(customer.get("assistantOverrides")):
+                _check_outbound(overrides.apply(assistant, overrides.combine(base, customer["assistantOverrides"]),
+                                                customer))
+        return doc
+
+    async def dial_for_campaign(campaign: dict[str, Any], number_id: str, customer: dict[str, Any]) -> dict[str, Any]:
+        try:
+            number = _outbound_number(number_id)
+            assistant = _get_or_404("assistants", str(campaign.get("assistantId") or number.get("assistantId") or ""))
+            extra = overrides.combine(campaign.get("assistantOverrides"), customer.get("assistantOverrides"))
+            _check_outbound(overrides.apply(assistant, extra, customer))
+        except HTTPException as exc:
+            raise campaigns.Stop(str(exc.detail)) from exc
+        record = {"assistantId": assistant["id"], "campaignId": campaign["id"],
+                  **({"assistantOverrides": extra} if extra else {})}
+        try:
+            return await dial(number, customer, record)
+        except Refused as exc:
+            logger.warning("campaign {}: Twilio did not call {}: {}", campaign["id"], customer["number"], exc.detail)
+            return exc.call
+
+    dialer = campaigns.Dialer(store, dial_for_campaign)
+    app.state.dialer = dialer
+
+    @app.post("/campaign", status_code=201, dependencies=auth_deps)
+    async def create_campaign(body: dict[str, Any]) -> dict[str, Any]:
+        doc = _campaign_doc(body)
+        campaign = store.create("campaigns", {**doc, "status": "scheduled", "calls": {},
+                                              **campaigns.counters({**doc, "calls": {}})})
+        dialer.start(campaign["id"])
+        return campaign
+
+    @app.get("/campaign", dependencies=auth_deps)
+    def list_campaigns(limit: int = 100, status: str | None = None) -> dict[str, Any]:
+        """Paginated like Vapi's: `{results, metadata}`."""
+        found = [c for c in store.list("campaigns", limit=campaigns.MAX_CUSTOMERS)
+                 if not status or c.get("status") == status]
+        results = found[:max(limit, 0)]
+        meta = {"itemsPerPage": len(results), "totalItems": len(found), "currentPage": 1}
+        return {"results": results, "metadata": meta}
+
+    @app.get("/campaign/{campaign_id}", dependencies=auth_deps)
+    def get_campaign(campaign_id: str) -> dict[str, Any]:
+        return _get_or_404("campaigns", campaign_id)
+
+    @app.patch("/campaign/{campaign_id}", dependencies=auth_deps)
+    async def update_campaign(campaign_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Rename it, set `status` to "cancelled" (or "ended", Vapi's older word) to stop it, or change it before
+        it starts."""
+        current = _get_or_404("campaigns", campaign_id)
+        changes = {k: v for k, v in body.items() if k not in CAMPAIGN_OWNED}
+        if set(changes) - {"name"}:
+            if current.get("status") != "scheduled":
+                raise HTTPException(status_code=400, detail="a campaign that started can only be renamed or cancelled")
+            changes = _campaign_doc(changes, current)
+        elif "name" in changes and not str(changes["name"] or "").strip():
+            raise HTTPException(status_code=400, detail="name is required")
+        if "status" not in body:
+            return store.update("campaigns", campaign_id, changes)
+        if body["status"] not in ("cancelled", "ended"):
+            raise HTTPException(status_code=400, detail='status: set "cancelled" to stop the campaign')
+        # The dialer may start the campaign meanwhile, so the stop is claimed from the status it has now.
+        for _ in range(2):
+            status = (store.get("campaigns", campaign_id) or {}).get("status")
+            if status not in campaigns.LIVE:
+                raise HTTPException(status_code=400, detail=f"the campaign is already {status}")
+            reason = f"campaign.{status}.ended-by-user"
+            stop = {**changes, "status": "cancelled", "endedReason": reason, "endedAt": now_iso()}
+            if stopped := store.claim("campaigns", campaign_id, status, stop):
+                return stopped
+        raise HTTPException(status_code=409, detail="the campaign changed while stopping it; try again")
+
+    @app.delete("/campaign/{campaign_id}", dependencies=auth_deps)
+    def delete_campaign(campaign_id: str) -> dict[str, Any]:
+        """Deletes the campaign; it calls nobody else, and calls already going finish."""
+        _get_or_404("campaigns", campaign_id)
+        return store.delete("campaigns", campaign_id)
 
     # Browser calls outlive the request that starts them; holding the tasks keeps them from being collected.
     web_calls: set[asyncio.Task] = set()
@@ -452,6 +637,10 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         assistant = _get_or_404("assistants", str(body.get("assistantId") or ""))
         if not body.get("sdp"):
             raise HTTPException(status_code=400, detail="sdp is required: the browser's WebRTC offer")
+        # Variables have no caller to fill them here; they say nothing rather than "{{customer.name}}".
+        assistant = overrides.apply(assistant, body.get("assistantOverrides"))
+        if overrides.changes_assistant(body.get("assistantOverrides")):
+            _validate_assistant(assistant)
         try:
             plan = resolve_plan(assistant)
         except ProviderError as exc:
@@ -635,6 +824,8 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             store.update("calls", call_id, {"status": "ended", "endedReason": "assistant-not-found"})
             await websocket.close()
             return
+        # This call's overrides and variables: a campaign's `{{customer.name}}`, an assistant-request's changes.
+        assistant = overrides.apply(assistant, call.get("assistantOverrides"), call.get("customer"))
         try:
             plan = resolve_plan(assistant)
         except ProviderError as exc:

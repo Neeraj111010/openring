@@ -118,6 +118,16 @@ def test_media_stream_uses_the_calls_assistant(monkeypatch, fake_bot):
     assert fake_bot[0][1].first_message == ASSISTANT["firstMessage"]
 
 
+def test_media_stream_fills_the_calls_variables(monkeypatch, fake_bot):
+    client, store, params = _answered_call(monkeypatch)
+    client.patch(f"/assistant/{params['assistantId']}", json={"firstMessage": "Oi {{customer.name}}, {{motivo}}."},
+                 headers=AUTH)
+    store.update("calls", params["callId"], {"customer": {"number": "+5511", "name": "Maria"}, "assistantOverrides": {
+        "variableValues": {"motivo": "sua consulta é amanhã"}}})
+    _close_code(client, params)
+    assert fake_bot[0][1].first_message == "Oi Maria, sua consulta é amanhã."
+
+
 def test_media_stream_refuses_unknown_call_and_silence(monkeypatch, fake_bot):
     client, _, params = _answered_call(monkeypatch)
     assert _close_code(client, {**params, "callId": "made-up"}) == 1008

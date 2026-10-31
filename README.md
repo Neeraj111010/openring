@@ -87,10 +87,11 @@ affiliated with any of them.
 | Browser test calls from the dashboard (WebRTC) | Switching when a provider gets slow; routing by cost |
 | Provider fallback in Vapi's format, across providers (**beta**) | |
 | Callers in any language: the assistant answers in theirs (`"language": "multi"`) | |
-| Phone calls in and out through Twilio (**beta**: tell us how it goes) | Outbound calls through Telnyx; Plivo |
+| Phone calls in and out through Twilio (**beta**: tell us how it goes) | Outbound calls through Telnyx; Genesys Cloud; Plivo |
+| Campaigns: one assistant calls a list or CSV, a few at a time, greeting each person by name (**beta**) | |
 | Incoming calls through Telnyx (**beta**, see [Telnyx](#telnyx-beta)) | |
-| Vapi-style `/assistant`, `/phone-number`, `/call` and `/tool` APIs | Cost per call in dollars |
-| Vapi tools: `function`, `endCall`, `transferCall` | Outbound campaigns from a list |
+| Vapi-style `/assistant`, `/phone-number`, `/call`, `/campaign` and `/tool` APIs | Cost per call in dollars |
+| Vapi tools: `function`, `endCall`, `transferCall` | |
 | Vapi webhooks: `status-update`, `conversation-update`, `end-of-call-report`, `assistant-request` | Calls over WhatsApp |
 | Import assistants, tools and numbers from a Vapi account | |
 | 16 models, 6 speech-to-text and 9 voice providers, with Vapi's names | |
@@ -161,6 +162,34 @@ curl -X POST http://localhost:8000/call \
   -H "Authorization: Bearer $OPENRING_API_KEY" -H "Content-Type: application/json" \
   -d '{"phoneNumberId": "PHONE_NUMBER_ID", "customer": {"number": "+5511912345678"}}'
 ```
+
+### Campaigns (beta)
+
+A campaign has one assistant call a list of people, a few at a time, with the body of Vapi's `POST /campaign`.
+Each person gets an ordinary outbound call that carries the `campaignId`, so transcripts and webhooks work as
+for any call. In the dashboard, **Campaigns > New campaign** takes a pasted list or a CSV; the CSV's other
+columns become variables.
+
+```bash
+curl -X POST http://localhost:8000/campaign \
+  -H "Authorization: Bearer $OPENRING_API_KEY" -H "Content-Type: application/json" \
+  -d '{"name": "Appointment reminders", "phoneNumberId": "PHONE_NUMBER_ID", "assistantId": "ASSISTANT_ID",
+       "maxConcurrency": 3,
+       "schedulePlan": {"earliestAt": "2026-11-03T12:00:00Z", "latestAt": "2026-11-03T20:00:00Z"},
+       "customers": [{"number": "+5511912345678", "name": "Maria",
+                      "assistantOverrides": {"variableValues": {"time": "3 pm"}}}]}'
+```
+
+The assistant's first message and instructions can use `{{customer.name}}`, `{{customer.number}}` and any key
+of `variableValues`: `"firstMessage": "Hi {{customer.name}}, I'm calling to confirm your {{time}} visit."`.
+`POST /call` takes `assistantOverrides` too. Calling starts at `earliestAt` (or right away), and no new call
+starts after `latestAt`. `GET /campaign/{id}` has Vapi's counters (`callsCounterScheduled`,
+`callsCounterEnded`, ...) and each call; `PATCH` with `{"status": "cancelled"}` stops it. A restarted server
+picks its campaigns back up without calling anyone twice. Workflows, squads and campaign webhooks are not
+supported yet.
+
+Only call people who agreed to get the call, at hours the law allows: automated calls are regulated (the
+TCPA in the US, Anatel's rules in Brazil). The dashboard asks you to confirm that for every campaign.
 
 ### Tools
 

@@ -224,6 +224,15 @@ dialog .muted a { color: var(--accent); }
 textarea.code { font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace; font-size: 13px; min-height: 420px; white-space: pre; }
 .row-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; align-items: center; }
 .row-actions .spacer { flex: 1; }
+.field-row { display: flex; flex-wrap: wrap; gap: 0 14px; }
+.field-row .field { flex: 1; min-width: 160px; margin-top: 16px; }
+.field-row .field.narrow { flex: 0 1 120px; min-width: 110px; }
+.consent { display: flex; gap: 10px; align-items: flex-start; margin-top: 18px; font-size: 13.5px; line-height: 1.45; }
+.consent input { margin-top: 3px; accent-color: var(--accent); }
+.progress { display: flex; align-items: center; gap: 10px; min-width: 120px; }
+.progress .track { flex: 1; height: 6px; border-radius: 999px; background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--line); overflow: hidden; }
+.progress .track span { display: block; height: 100%; background: var(--accent); }
+.progress small { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .copyline { display: flex; gap: 8px; align-items: center; }
 .copyline code { flex: 1; padding: 8px 10px; display: block; min-width: 0; }
 
@@ -319,6 +328,7 @@ dialog::backdrop { background: rgba(5,8,12,.6); }
       <a href="#numbers" data-view="numbers"><svg class="i" viewBox="0 0 24 24"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>Phone numbers</a>
       <div class="group">Activity</div>
       <a href="#calls" data-view="calls"><svg class="i" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Calls</a>
+      <a href="#campaigns" data-view="campaigns"><svg class="i" viewBox="0 0 24 24"><path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6l-5 4H4a1 1 0 0 0-1 1zM15 9a3 3 0 0 1 0 6M18 6a7 7 0 0 1 0 12"/></svg>Campaigns</a>
       <div class="group">System</div>
       <a href="#providers" data-view="providers"><svg class="i" viewBox="0 0 24 24"><path d="M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0zM12 16v5"/></svg>Providers</a>
       <a href="#settings" data-view="settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1"/></svg>Settings</a>
@@ -383,6 +393,31 @@ dialog::backdrop { background: rgba(5,8,12,.6); }
   </form>
 </dialog>
 
+<dialog id="campaignDialog" aria-labelledby="campaignTitle" style="width:min(620px,92vw)">
+  <form method="dialog" id="campaignForm">
+    <h2 id="campaignTitle">New campaign</h2>
+    <p class="muted">One assistant calls everyone on the list from one of your Twilio numbers, a few at a time. Each call shows up on the Calls page with its transcript.</p>
+    <div class="field"><label for="cmpName">Name</label><input id="cmpName" required placeholder="Appointment reminders, Nov 3"></div>
+    <div class="field-row">
+      <div class="field"><label for="cmpFrom">Calls from</label><select id="cmpFrom" required></select></div>
+      <div class="field"><label for="cmpAssistant">Assistant</label><select id="cmpAssistant" required></select></div>
+    </div>
+    <div class="field"><label for="cmpPeople">People to call</label>
+      <p class="hint">One per line, number with country code, then name. A CSV with a header row works too: its other columns become variables, like <code>{{customer.name}}</code>, for the first message and instructions.</p>
+      <textarea id="cmpPeople" required spellcheck="false" placeholder="+5511912345678, Maria&#10;+5511987654321, João"></textarea>
+      <div class="row-actions" style="margin-top:8px"><label class="btn ghost small" for="cmpCsv" tabindex="0">Load CSV</label><input id="cmpCsv" type="file" accept=".csv,text/csv,text/plain" hidden><span class="muted" id="cmpCount" role="status"></span></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label for="cmpStart">Start</label><p class="hint">Empty starts now.</p><input id="cmpStart" type="datetime-local"></div>
+      <div class="field"><label for="cmpEnd">Stop calling at</label><p class="hint">Optional.</p><input id="cmpEnd" type="datetime-local"></div>
+      <div class="field narrow"><label for="cmpLines">At a time</label><p class="hint">Calls at once.</p><input id="cmpLines" type="number" min="1" max="500" value="3" required></div>
+    </div>
+    <label class="consent"><input type="checkbox" id="cmpConsent" required><span>Everyone on this list agreed to get this call from an automated assistant. Automated calls are regulated (the TCPA in the US, Anatel's rules in Brazil), including the hours you may call.</span></label>
+    <div class="error" id="cmpErr" role="alert"></div>
+    <div class="row-actions"><span class="spacer"></span><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn" value="start" id="cmpGo">Start campaign</button></div>
+  </form>
+</dialog>
+
 <script>
 const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -408,7 +443,7 @@ const ms = n => n == null ? "—" : n >= 1000 ? (n / 1000).toFixed(2) + " s" : n
 const dur = s => { if (!s) return "—"; s = Math.round(s); return s < 60 ? s + "s" : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`; };
 const when = iso => { if (!iso) return ""; const d = new Date(iso), today = new Date().toDateString() === d.toDateString(); return today ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); };
 const initials = s => (s || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase();
-const caller = c => c.type === "webCall" ? "Browser test" : c.type === "outboundPhoneCall" ? `Call to ${c.customer?.number || "?"}` : c.customer?.number || "Unknown caller";
+const caller = c => c.type === "webCall" ? "Browser test" : c.type === "outboundPhoneCall" ? `Call to ${c.customer?.name || c.customer?.number || "?"}` : c.customer?.number || "Unknown caller";
 // Who answered a call: a saved assistant, or a transient one that lives in the call record.
 const assistantOf = (c, assistants) => c.assistant?.name || assistants.find(a => a.id === c.assistantId)?.name || (c.assistant ? "Transient assistant" : "Deleted assistant");
 const TYPE = { webCall: "Browser", inboundPhoneCall: "Inbound", outboundPhoneCall: "Outbound" };
@@ -504,6 +539,7 @@ const PAGES = {
   assistants: ["Assistants", "Each assistant answers with its own instructions, model and voice"],
   numbers: ["Phone numbers", "Your Twilio numbers and who answers them"],
   calls: ["Calls", "Every call with its transcript and response time"],
+  campaigns: ["Campaigns", "Call a list of people with one assistant, a few at a time"],
   providers: ["Providers", "Speech, model and voice services this server can use"],
   settings: ["Settings", "API access, webhooks and your password"],
 };
@@ -778,6 +814,173 @@ async function viewCalls() {
   $("#refresh").onclick = viewCalls;
   v.querySelectorAll("[data-filter]").forEach(b => b.onclick = () => { store.set("openring-calls-filter", b.dataset.filter); viewCalls(); });
   v.querySelectorAll("tr.link").forEach(r => { r.onclick = () => go("calls/" + r.dataset.id); r.onkeydown = e => e.key === "Enter" && r.click(); });
+}
+
+// ---- Campaigns: one assistant calls a list of people (Vapi's /campaign) ----------------------
+const CAMPAIGN_BADGE = { scheduled: ["warn", "Scheduled"], "in-progress": ["live", "Calling"], ended: ["ok", "Done"], cancelled: ["", "Stopped"] };
+function campaignBadge(c) {
+  if (c.error) return `<span class="badge bad" title="${esc(c.error)}">Failed</span>`;
+  const [cls, word] = CAMPAIGN_BADGE[c.status] || ["", c.status];
+  return `<span class="badge ${cls}">${esc(word)}</span>`;
+}
+const campaignPeople = c => c.dialPlan ? c.dialPlan.flatMap(e => e.customers || []) : c.customers || [];
+function progressBar(c) {
+  const total = campaignPeople(c).length, called = Object.keys(c.calls || {}).length;
+  return `<div class="progress" title="${called} of ${total} called"><div class="track"><span style="width:${total ? called / total * 100 : 0}%"></span></div><small>${num(called)} / ${num(total)}</small></div>`;
+}
+// The number's assistant answers for a campaign that names none.
+const campaignAssistant = (c, assistants, nums) => assistants.find(a => a.id === (c.assistantId || nums.find(n => n.id === c.phoneNumberId)?.assistantId))?.name || "Deleted assistant";
+
+async function viewCampaigns() {
+  setPage("campaigns");
+  const [list, assistants, nums] = await Promise.all([api("/campaign?limit=200"), api("/assistant"), api("/phone-number")]);
+  const rows = list.results;
+  const v = $("#view");
+  v.innerHTML = `<div class="toolbar"><span class="spacer"></span><button class="btn ghost" id="refresh">${ICON.refresh}Refresh</button><button class="btn" data-new>${ICON.plus}New campaign</button></div>
+  <section class="panel">${rows.length ? `<div class="scroll"><table class="table"><thead><tr><th>Campaign</th><th class="hide-sm">Assistant</th><th>Called</th><th>Status</th><th class="num hide-sm">Start</th></tr></thead><tbody>
+    ${rows.map(c => `<tr class="link" tabindex="0" data-id="${esc(c.id)}"><td><b>${esc(c.name)}</b></td><td class="hide-sm">${esc(campaignAssistant(c, assistants, nums))}</td><td>${progressBar(c)}</td><td>${campaignBadge(c)}</td><td class="num hide-sm muted">${when(c.schedulePlan?.earliestAt || c.createdAt)}</td></tr>`).join("")}
+  </tbody></table></div>` : `<div class="empty">No campaigns yet. A campaign has one assistant call a list of people: reminders, confirmations, follow-ups.<br><button class="btn" data-new>${ICON.plus}New campaign</button></div>`}</section>`;
+  $("#refresh").onclick = viewCampaigns;
+  v.querySelectorAll("[data-new]").forEach(b => b.onclick = () => newCampaign(assistants, nums));
+  v.querySelectorAll("tr.link").forEach(r => { r.onclick = () => go("campaigns/" + r.dataset.id); r.onkeydown = e => e.key === "Enter" && r.click(); });
+}
+
+// A pasted list or CSV to Vapi customers. A header row is optional; without one, it's number then name.
+// Extra header columns ride along as variables ({{amount}}), duplicates are dropped. A number needs its
+// country code (+55…, 0055… or 12+ digits): "11 91234-5678" alone could be dialed as a US number.
+const NUMBER_COLS = ["number", "phone", "phone number", "mobile", "telefone", "celular", "whatsapp", "numero"];
+const NAME_COLS = ["name", "nome", "full name", "first name"];
+const plain = s => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+function csvCells(line, sep) {
+  const out = [];
+  let cell = "", quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quoted) {
+      if (ch === '"' && line[i + 1] === '"') { cell += '"'; i++; }
+      else if (ch === '"') quoted = false;
+      else cell += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === sep) { out.push(cell.trim()); cell = ""; }
+    else cell += ch;
+  }
+  out.push(cell.trim());
+  return out;
+}
+function intlNumber(raw) {
+  const s = String(raw || "").trim(), digits = s.replace(/\D/g, "");
+  if (s.startsWith("+")) return digits.length >= 8 ? "+" + digits : null;
+  if (s.startsWith("00")) return digits.length >= 10 ? "+" + digits.slice(2) : null;
+  return digits.length >= 12 ? "+" + digits : null;
+}
+function parsePeople(text) {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const out = { people: [], dupes: 0, bad: 0, vars: [] };
+  if (!lines.length) return out;
+  const sep = [";", "\t", ","].find(s => lines[0].includes(s)) || ",";
+  const cells = l => csvCells(l, sep);
+  const header = !/\d{6}/.test(lines[0].replace(/[\s()+.-]/g, ""));
+  const cols = header ? cells(lines[0]).map(plain) : ["number", "name"];
+  const find = names => cols.findIndex(h => names.includes(h));
+  const ni = Math.max(find(NUMBER_COLS), 0), mi = header ? find(NAME_COLS) : 1, ei = cols.indexOf("email");
+  const vars = header ? cols.map((h, j) => [j, h.replace(/\W+/g, "_").replace(/^_|_$/g, "")]).filter(([j, k]) => k && ![ni, mi, ei].includes(j)) : [];
+  out.vars = vars.map(([, k]) => k);
+  const seen = new Set();
+  for (const line of header ? lines.slice(1) : lines) {
+    const row = cells(line), number = intlNumber(row[ni]);
+    if (!number) { out.bad++; continue; }
+    if (seen.has(number)) { out.dupes++; continue; }
+    seen.add(number);
+    const p = { number };
+    if (mi >= 0 && row[mi]) p.name = row[mi];
+    if (ei >= 0 && row[ei]) p.email = row[ei];
+    const values = Object.fromEntries(vars.filter(([j]) => row[j]).map(([j, k]) => [k, row[j]]));
+    if (Object.keys(values).length) p.assistantOverrides = { variableValues: values };
+    out.people.push(p);
+  }
+  return out;
+}
+
+function newCampaign(assistants, nums) {
+  const phones = nums.filter(n => (n.provider || "twilio") === "twilio");
+  const d = $("#campaignDialog"), f = $("#campaignForm");
+  f.reset();
+  $("#cmpErr").textContent = phones.length ? "" : "Campaigns call from a Twilio number. Add one on the Phone numbers page first.";
+  $("#cmpGo").disabled = !phones.length || !assistants.length;
+  $("#cmpFrom").innerHTML = phones.map(n => `<option value="${esc(n.id)}">${esc(n.number)}</option>`).join("");
+  $("#cmpAssistant").innerHTML = assistants.map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join("");
+  const pickAssistant = () => { const n = phones.find(x => x.id === $("#cmpFrom").value); if (n?.assistantId && assistants.some(a => a.id === n.assistantId)) $("#cmpAssistant").value = n.assistantId; };
+  pickAssistant();
+  $("#cmpFrom").onchange = pickAssistant;
+  const count = () => {
+    const r = parsePeople($("#cmpPeople").value);
+    $("#cmpCount").textContent = [r.people.length ? `${num(r.people.length)} ${r.people.length === 1 ? "person" : "people"}` : "",
+      r.dupes ? `${num(r.dupes)} repeated left out` : "", r.bad ? `${num(r.bad)} left out: no number with country code` : "",
+      r.vars.length ? "variables " + r.vars.map(k => `{{${k}}}`).join(", ") : ""].filter(Boolean).join(" · ");
+    return r;
+  };
+  $("#cmpPeople").oninput = count;
+  count();
+  $("#cmpCsv").onchange = async () => { const file = $("#cmpCsv").files[0]; if (file) { $("#cmpPeople").value = await file.text(); count(); } };
+  f.querySelector('label[for="cmpCsv"]').onkeydown = e => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), $("#cmpCsv").click());
+  $("#cmpStart").oninput = () => $("#cmpGo").textContent = $("#cmpStart").value && new Date($("#cmpStart").value) > new Date() ? "Schedule campaign" : "Start campaign";
+  d.showModal();
+  f.onsubmit = async e => {
+    if (e.submitter?.value !== "start") return;  // Cancel just closes
+    e.preventDefault();
+    const { people } = count();
+    if (!people.length) return $("#cmpErr").textContent = "Add at least one phone number, with its country code.";
+    const body = { name: $("#cmpName").value.trim(), phoneNumberId: $("#cmpFrom").value, assistantId: $("#cmpAssistant").value, customers: people, maxConcurrency: Number($("#cmpLines").value) || 3 };
+    const start = $("#cmpStart").value, end = $("#cmpEnd").value;
+    if (start || end) body.schedulePlan = { earliestAt: new Date(start || Date.now()).toISOString(), ...(end ? { latestAt: new Date(end).toISOString() } : {}) };
+    try {
+      const c = await api("/campaign", { method: "POST", body: JSON.stringify(body) });
+      d.close();
+      go("campaigns/" + c.id);
+    } catch (err) { $("#cmpErr").textContent = err.message; }
+  };
+}
+
+const UNREACHED = /^(customer-busy|customer-did-not-answer|twilio-failed)/;
+let campaignTab = "calls";
+async function viewCampaign(id) {
+  const [c, assistants, nums] = await Promise.all([api("/campaign/" + id), api("/assistant"), api("/phone-number")]);
+  if (location.hash !== "#campaigns/" + id) return;
+  const live = c.status === "scheduled" || c.status === "in-progress";
+  const start = c.schedulePlan?.earliestAt;
+  setPage("campaigns", c.name, `${campaignAssistant(c, assistants, nums)} · ${c.status === "scheduled" && start ? "starts " + when(start) : "created " + when(c.createdAt)}`);
+  const people = campaignPeople(c), calls = Object.entries(c.calls || {});
+  const waiting = people.slice(calls.length);
+  const answered = calls.filter(([, e]) => e.status === "ended" && !UNREACHED.test(e.endedReason || "")).length;
+  const person = p => p?.name ? `<b>${esc(p.name)}</b> <span class="muted">${esc(p.number)}</span>` : `<b>${esc(p?.number || "?")}</b>`;
+  const panes = {
+    calls: () => calls.length ? `<div class="scroll"><table class="table"><thead><tr><th>Person</th><th>Status</th><th class="hide-sm">How it ended</th></tr></thead><tbody>
+      ${calls.map(([callId, e]) => `<tr class="link" tabindex="0" data-call="${esc(callId)}"><td>${person(e.customer)}</td><td>${statusBadge(e)}</td><td class="hide-sm muted">${e.endedReason ? esc(endedLabel(e.endedReason)) : ""}</td></tr>`).join("")}
+    </tbody></table></div>` : `<div class="empty">${c.status === "scheduled" ? `Nobody called yet. Calling starts ${start ? when(start) : "in a moment"}.` : "No calls were made."}</div>`,
+    waiting: () => waiting.length ? `<div class="scroll"><table class="table"><thead><tr><th>Person</th></tr></thead><tbody>${waiting.map(p => `<tr><td>${person(p)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">Everyone was called.</div>`,
+    json: () => `<div class="body"><pre class="json">${esc(JSON.stringify(c, null, 2))}</pre></div>`,
+  };
+  const v = $("#view");
+  v.innerHTML = `<div class="toolbar"><a class="btn ghost" href="#campaigns">← All campaigns</a><span class="spacer"></span>${campaignBadge(c)}${live ? `<button class="btn danger small" id="stopCampaign">Stop campaign</button>` : ""}</div>
+  ${c.error ? `<p class="error" role="alert">${esc(c.error)}</p>` : ""}
+  <div class="cards">
+    ${card("Called", "phone", `${num(calls.length)} <small class="muted">/ ${num(people.length)}</small>`, "")}
+    ${card("On a call now", "mic", num((c.callsCounterQueued || 0) + (c.callsCounterInProgress || 0)), "", `${num(c.maxConcurrency)} at a time`)}
+    ${card("Answered", "check", num(answered), "", calls.length ? `${Math.round(answered / calls.length * 100)}% of calls` : "")}
+    ${card("Not called yet", "clock", num(waiting.length), "", !live && waiting.length ? "the campaign is over" : "")}
+  </div>
+  <div class="toolbar">${tabs([["calls", "Calls", calls.length], ["waiting", "Not called", waiting.length], ["json", "JSON"]], campaignTab)}</div>
+  <section class="panel">${panes[campaignTab]()}</section>`;
+  v.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { campaignTab = b.dataset.tab; viewCampaign(id); });
+  v.querySelectorAll("tr[data-call]").forEach(r => { r.onclick = () => go("calls/" + r.dataset.call); r.onkeydown = e => e.key === "Enter" && r.click(); });
+  if ($("#stopCampaign")) $("#stopCampaign").onclick = async () => {
+    if (!confirm("Stop this campaign? Nobody else gets called; calls already going finish.")) return;
+    try { await api("/campaign/" + id, { method: "PATCH", body: JSON.stringify({ status: "cancelled" }) }); }
+    catch (err) { alert(err.message); }
+    viewCampaign(id);
+  };
+  // Follow a running campaign while it is on screen.
+  if (live) setTimeout(() => location.hash === "#campaigns/" + id && viewCampaign(id).catch(() => {}), 2000);
 }
 
 // One line of a call's transcript: a bubble per side, a quiet row for each tool call and its result.
@@ -1156,7 +1359,7 @@ async function openCall(id) {
 $("#talkDialog").addEventListener("close", () => endTalk());
 
 // ---- Routing and shell ------------------------------------------------------------------
-const views = { home: viewHome, assistants: viewAssistants, numbers: viewNumbers, calls: viewCalls, providers: viewProviders, settings: viewSettings };
+const views = { home: viewHome, assistants: viewAssistants, numbers: viewNumbers, calls: viewCalls, campaigns: viewCampaigns, providers: viewProviders, settings: viewSettings };
 function go(name) { location.hash = name; }
 async function route() {
   if ($("#app").hidden) return;
@@ -1164,6 +1367,7 @@ async function route() {
   const [name, id] = (location.hash.slice(1) || "home").split("/");
   try {
     if (name === "calls" && id) await viewCall(id);
+    else if (name === "campaigns" && id) await viewCampaign(id);
     else if (name === "assistants" && id) await viewAssistant(id);
     else await (views[name] || viewHome)();
   } catch (err) { $("#view").innerHTML = `<div class="panel empty">${esc(err.message)}</div>`; }

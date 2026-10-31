@@ -8,6 +8,13 @@ All notable changes to OpenRing are listed here. The format follows
 
 ### Added
 
+- Campaigns (beta), with Vapi's `/campaign` API: one assistant calls a list of people from a Twilio number,
+  `maxConcurrency` at a time, between `schedulePlan.earliestAt` and `latestAt`, with Vapi's counters and
+  `PATCH {"status": "cancelled"}` to stop. A restarted server picks its campaigns back up without calling
+  anyone twice. The new **Campaigns** page takes a pasted list or a CSV (its extra columns become variables),
+  shows who was called and how each call ended, and asks you to confirm that everyone agreed to be called.
+- Variables and `assistantOverrides`, as on Vapi: the first message and instructions can use
+  `{{customer.name}}`, `{{customer.number}}` and any key of `variableValues`, on campaigns and `POST /call`.
 - Callers in any language: with `"language": "multi"` the model is told to answer in the caller's language and
   to switch when they do. The assistant editor offers it as **Follow the caller**, next to common languages,
   and warns when the chosen voice speaks only one language (Kokoro, Deepgram); ElevenLabs and OpenAI voices

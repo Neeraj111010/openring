@@ -1,4 +1,4 @@
-"""Tiny SQLite document store for assistants, phone numbers and calls.
+"""Tiny SQLite document store for assistants, phone numbers, calls, tools and campaigns.
 
 Each record is stored as a JSON document so the API can stay schema-compatible
 with Vapi without a migration for every new field.
@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-COLLECTIONS = ("assistants", "phone_numbers", "calls", "tools")
+COLLECTIONS = ("assistants", "phone_numbers", "calls", "tools", "campaigns")
 PROTECTED = {"id", "createdAt"}
 
 
@@ -116,12 +116,14 @@ class Store:
         return [json.loads(r[0]) for r in rows]
 
     def update(self, collection: str, item_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
+        """Merge `patch` into the document. Reading and writing under one lock keeps two writers (a campaign's
+        dialer and someone cancelling it) from undoing each other's change."""
         self._check(collection)
-        current = self.get(collection, item_id)
-        if current is None:
-            return None
-        doc = _merge(current, patch)
         with self._lock:
+            row = self._db.execute(f"SELECT doc FROM {collection} WHERE id = ?", (item_id,)).fetchone()
+            if row is None:
+                return None
+            doc = _merge(json.loads(row[0]), patch)
             self._db.execute(
                 f"UPDATE {collection} SET doc = ? WHERE id = ?", (json.dumps(doc), item_id)
             )
