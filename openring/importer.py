@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 
 from .providers import ProviderError, resolve_plan
-from .store import Store
+from .store import Store, is_phone_number
 from .tools import ToolError, check_tool
 
 PAGE = 100
@@ -132,6 +132,9 @@ async def import_account(
     for number in numbers:
         provider = str(number.get("provider") or "")
         label = number.get("number") or number.get("sipUri") or number.get("name") or number.get("id")
+        if provider == "twilio" and not is_phone_number(number.get("number")):
+            report["phoneNumbers"].append({"number": label, "skipped": "not a phone number with its country code"})
+            continue
         if provider != "twilio" or not number.get("number"):
             reason = f"{provider or 'these'} numbers are not supported yet"
             report["phoneNumbers"].append({"number": label, "skipped": reason})

@@ -23,7 +23,7 @@ from .config import Settings, get_settings, is_placeholder_key
 from .importer import SourceError, import_account
 from .providers import ProviderError, resolve_plan
 from .server_messages import AssistantRequestError, request_assistant, server_of
-from .store import Store, now_iso
+from .store import Store, is_phone_number, now_iso
 from .tools import ToolError, check_tool
 from .twilio import TwilioError, is_valid_signature, say_twiml, stream_twiml
 
@@ -475,8 +475,9 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     # ---- Phone numbers --------------------------------------------------------
     @app.post("/phone-number", status_code=201, dependencies=auth_deps)
     def create_phone_number(body: dict[str, Any]) -> dict[str, Any]:
-        if not body.get("number"):
-            raise HTTPException(status_code=400, detail="number is required (E.164, e.g. +15551234567)")
+        if not is_phone_number(body.get("number")):
+            raise HTTPException(status_code=400, detail="number must be a phone number with its country code "
+                                                        "(E.164, e.g. +15551234567)")
         if body.get("assistantId"):
             _get_or_404("assistants", body["assistantId"])
         body.setdefault("provider", "twilio")
@@ -493,6 +494,9 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     @app.patch("/phone-number/{number_id}", dependencies=auth_deps)
     def update_phone_number(number_id: str, body: dict[str, Any]) -> dict[str, Any]:
         _get_or_404("phone_numbers", number_id)
+        if "number" in body and not is_phone_number(body["number"]):
+            raise HTTPException(status_code=400, detail="number must be a phone number with its country code "
+                                                        "(E.164, e.g. +15551234567)")
         if body.get("assistantId"):
             _get_or_404("assistants", body["assistantId"])
         return store.update("phone_numbers", number_id, body)

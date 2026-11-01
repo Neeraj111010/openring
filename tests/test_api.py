@@ -310,3 +310,24 @@ def test_without_an_api_key_the_dashboard_session_still_works():
     client = make_client(api_key="", password="correct horse")
     assert client.post("/auth/login", json={"password": "correct horse"}).status_code == 200
     assert client.get("/assistant", headers=DASH).status_code == 200
+
+
+def test_phone_numbers_must_look_like_phone_numbers():
+    client = make_client()
+    for bad in ("abc", "+1", "", "<img src=x onerror=alert(1)>", "+1234567890123456"):
+        r = client.post("/phone-number", json={"number": bad}, headers=AUTH)
+        assert r.status_code == 400 and "country code" in r.json()["detail"], bad
+    ok = client.post("/phone-number", json={"number": "+1 (555) 123-4567"}, headers=AUTH)
+    assert ok.status_code == 201
+    r = client.patch(f"/phone-number/{ok.json()['id']}", json={"number": "call me"}, headers=AUTH)
+    assert r.status_code == 400
+    assert client.patch(f"/phone-number/{ok.json()['id']}", json={"number": "+15557654321"},
+                        headers=AUTH).status_code == 200
+
+
+def test_a_caller_without_digits_never_matches_a_number():
+    # Saved before validation existed: a number with no digits must not answer an anonymous caller.
+    store = Store(":memory:")
+    store.create("phone_numbers", {"number": "unknown"})
+    assert store.find_phone_number("anonymous") is None
+    assert store.find_phone_number("") is None

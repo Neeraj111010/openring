@@ -7,6 +7,7 @@ with Vapi without a migration for every new field.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 import uuid
@@ -164,10 +165,19 @@ class Store:
 
     def find_phone_number(self, number: str) -> dict[str, Any] | None:
         wanted = _normalize_number(number)
+        if not wanted:  # no digits (an anonymous caller, a typo): never matches a number
+            return None
         for doc in self.list("phone_numbers", limit=10_000):
             if _normalize_number(doc.get("number", "")) == wanted:
                 return doc
         return None
+
+
+def is_phone_number(number: Any) -> bool:
+    """A phone number with its country code: 7 to 15 digits, written with spaces, dashes, dots or brackets."""
+    text = str(number or "").strip()
+    digits = _normalize_number(text)
+    return bool(re.fullmatch(r"\+?[\d\s().-]+", text)) and 7 <= len(digits) <= 15
 
 
 def _normalize_number(number: str) -> str:

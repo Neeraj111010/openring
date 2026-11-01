@@ -33,6 +33,7 @@ NUMBERS = [
     {"id": "p-1", "provider": "twilio", "number": "+15551234567", "assistantId": "a-1",
      "twilioAccountSid": "AC1", "twilioAuthToken": "secret-token", "createdAt": "2026-10-04T00:00:00Z"},
     {"id": "p-2", "provider": "vonage", "number": "+15557654321", "createdAt": "2026-10-04T00:00:00Z"},
+    {"id": "p-3", "provider": "twilio", "number": "not-a-number", "createdAt": "2026-10-04T00:00:00Z"},
 ]
 
 
@@ -73,6 +74,7 @@ def test_import_copies_tools_assistants_and_twilio_numbers():
     number = store.find_phone_number("+15551234567")
     assert number["assistantId"] == front["id"] and "twilioAuthToken" not in number
     assert {"number": "+15557654321", "skipped": "vonage numbers are not supported yet"} in report["phoneNumbers"]
+    assert {"number": "not-a-number", "skipped": "not a phone number with its country code"} in report["phoneNumbers"]
 
 
 def test_import_again_updates_instead_of_duplicating():
