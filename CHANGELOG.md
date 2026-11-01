@@ -6,6 +6,15 @@ All notable changes to OpenRing are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- With its output going to a pipe (Docker logs, systemd, `openring > log`), `openring` printed nothing at
+  startup: Python held the lines in a buffer while the server ran. They now show right away, and the Docker
+  image sets `PYTHONUNBUFFERED`.
+- When an example API key (`change-me`) was ignored on a first start, nothing said so: the generated key took
+  over silently and clients still sending the example got 401. `openring` now says the example is ignored and
+  where the key in use is.
+
 ## [0.1.4] - 2026-11-01
 
 ### Changed

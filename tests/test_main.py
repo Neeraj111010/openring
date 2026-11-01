@@ -78,3 +78,38 @@ def test_an_empty_environment_variable_does_not_hide_the_saved_key(home, monkeyp
 def test_a_deliberately_empty_key_stays_empty(home, monkeypatch):
     home.ENV_FILE.write_text("OPENRING_API_KEY=\n", encoding="utf-8")
     assert _start(home) == ""  # the API then answers only this computer
+
+
+def test_startup_lines_reach_a_pipe_while_the_server_runs(tmp_path):
+    """Docker logs, systemd and `> log` read stdout through a pipe; the startup lines must not wait in a buffer."""
+    import os
+    import subprocess
+    import sys
+    import threading
+    import time
+    from pathlib import Path
+
+    with socket.socket() as s:  # a free port: the server is never really started, but the port is checked
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    script = "\n".join([
+        "import time, uvicorn, openring.providers as p, openring.__main__ as m",
+        "p.warm_up = lambda: None",  # no Kokoro download in a test
+        "uvicorn.run = lambda *a, **k: time.sleep(60)",  # the server keeps running
+        f"m.main(['--port', '{port}'])",
+    ])
+    env = {**os.environ, "OPENRING_HOME": str(tmp_path), "OPENRING_API_KEY": "change-me",
+           "PYTHONPATH": str(Path(__file__).resolve().parents[1])}  # this checkout's openring
+    env.pop("PYTHONUNBUFFERED", None)
+    proc = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                            env=env, text=True, cwd=tmp_path)
+    lines: list[str] = []
+    threading.Thread(target=lambda: lines.extend(proc.stdout), daemon=True).start()
+    try:
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and not any("OpenRing is running" in line for line in lines):
+            time.sleep(0.2)
+    finally:
+        proc.kill()
+    assert any("OpenRing is running" in line for line in lines), lines
+    assert any("example value anyone can guess" in line for line in lines)

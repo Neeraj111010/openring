@@ -4,6 +4,7 @@ import argparse
 import os
 import secrets
 import socket
+import sys
 from pathlib import Path
 
 from .config import is_placeholder_key
@@ -120,17 +121,17 @@ def reset_password(db_path: str) -> None:
 def load_settings() -> tuple[bool, bool]:
     """Create the settings file on the first run, then read the settings into the environment.
 
-    An example API key ("change-me" from .env.example) is replaced by a generated one, saved so the next
-    start uses the same key. Returns (settings file created now, example key replaced).
+    An example API key ("change-me" from .env.example) is ignored: the key saved in the settings file applies,
+    or a generated one, saved so the next start uses the same key. Returns (settings file created now,
+    example key ignored), so the command can say which key is in use.
     """
     example_key = drop_example_api_key()
     created = first_run_setup()
     example_key |= load_env_file(Path.cwd() / ".env")  # a project-local .env takes precedence
     example_key |= load_env_file(ENV_FILE)
-    replaced = example_key and not os.environ.get("OPENRING_API_KEY")
-    if replaced:
+    if example_key and not os.environ.get("OPENRING_API_KEY"):
         save_new_api_key()
-    return created, replaced
+    return created, example_key
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -139,11 +140,16 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--reset-password", action="store_true",
                         help="forget the dashboard password; choose a new one at http://localhost on the next visit")
     args = parser.parse_args(argv)
+    # Docker, systemd and `> log` give stdout to a pipe, where Python holds prints until a buffer fills:
+    # the startup lines (and the notice about a replaced API key) would never show. One line at a time.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
 
-    created, replaced = load_settings()
-    if replaced:
-        print(f"\n  OPENRING_API_KEY was an example value anyone can guess. A new key is saved in {ENV_FILE}")
-        print("  (see it under Settings in the dashboard).")
+    created, example_key = load_settings()
+    if example_key:
+        # Clients still sending the example key get 401; say which key the server uses instead.
+        print("\n  OPENRING_API_KEY was an example value anyone can guess, so it is ignored.")
+        print(f"  The API key is the one in {ENV_FILE} (also under Settings in the dashboard).")
     os.environ.setdefault("OPENRING_DB_PATH", str(HOME / "openring.db"))
     if args.reset_password:
         reset_password(os.environ["OPENRING_DB_PATH"])
