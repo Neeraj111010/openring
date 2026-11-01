@@ -24,7 +24,8 @@ All notable changes to OpenRing are listed here. The format follows
   copy of PyPI's index. The launcher now asks PyPI again, once, when that happens (without slowing down or
   breaking offline starts the rest of the time).
 - Dates in the dashboard followed the browser's language ("30 de out.") on an English page; they now match
-  the page. A call's detail keeps its cards on one row.
+  the page. A call's cards come in rows of even length (4 + 3 rather than 5 + 2), wide enough for their values
+  and labels, and a call with one tool call no longer says "1 tool calls".
 
 ### Security
 

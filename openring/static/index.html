@@ -110,8 +110,10 @@ main { padding: 28px 32px 48px; max-width: 1320px; width: 100%; margin: 0 auto; 
 
 /* Big number cards */
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); gap: 14px; margin-bottom: 18px; }
-/* A call has 5 to 7 cards: narrower columns keep them on one row instead of leaving one alone below. */
-.cards.compact { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+/* A call has 5 to 7 cards, too many for one row: rows of even length (4 + 3, 3 + 3, 3 + 2) where there's room,
+   and columns wide enough for a label with its traffic light and for the cost line. */
+@media (min-width: 861px) { .cards.compact { grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); } }
+@media (min-width: 1240px) { .cards.compact { grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); } }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 15px 17px 16px; box-shadow: var(--shadow); min-width: 0; }
 .card .label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; font-weight: 500; }
 .card .label svg.i { width: 16px; height: 16px; }
@@ -1215,23 +1217,24 @@ async function viewCall(id) {
   const name = assistantOf(c, assistants);
   setPage("calls", caller(c), `${name} · ${when(c.startedAt || c.createdAt)}`);
   const pm = c.artifact?.performanceMetrics || {}, msgs = c.messages || [], turns = pm.turnLatencies || [];
-  const maxTurn = Math.max(1, ...turns.map(t => t.turnLatency));
+  const maxTurn = Math.max(1, ...turns.map(t => t.turnLatency)), toolCalls = msgs.reduce((n, m) => n + (m.role === "tool_calls" ? m.toolCalls?.length || 1 : 0), 0);
   const panes = {
     transcript: () => msgs.length ? `<div class="transcript">${msgs.map(transcriptRow).join("")}</div>` : `<p class="muted">${c.status === "ended" ? "No transcript for this call." : "The transcript appears when the call ends."}</p>`,
     latency: () => turns.length ? `<div class="legend" style="margin-bottom:14px">${PARTS.map(([, l, col]) => `<span style="--dot:${col}">${l}</span>`).join("")}</div><div class="turns">${turns.map((t, i) => `<div class="turn"><span class="muted">Turn ${i + 1}</span><div class="stack" style="width:${t.turnLatency / maxTurn * 100}%">${PARTS.map(([k, l, col]) => `<span style="width:${(t[k] || 0) / Math.max(1, PARTS.reduce((s, [p]) => s + (t[p] || 0), 0)) * 100}%;background:${col}" title="${l}: ${t[k] || 0} ms"></span>`).join("")}</div><b class="num">${ms(t.turnLatency)}</b></div>`).join("")}</div>` : `<p class="muted">No response times recorded for this call.</p>`,
     json: () => `<pre class="json">${esc(JSON.stringify(c, null, 2))}</pre>`,
   };
+  const cards = [
+    card("Duration", "clock", dur(c.durationSeconds), ""),
+    card("Response time", "bolt", ms(pm.turnLatencyAverage), tone(light("latency", pm.turnLatencyAverage)), turns.length > 1 ? `average of ${turns.length} turns` : turns.length ? "1 turn" : "", "", light("latency", pm.turnLatencyAverage)),
+    card("First word", "timer", ms(pm.firstWordLatency), tone(light("firstWord", pm.firstWordLatency)), pm.firstWordLatency == null ? "" : "wait for the greeting", "", light("firstWord", pm.firstWordLatency)),
+    typeof c.cost === "number" ? card("Cost", "coin", usd(c.cost), "", `<span title="List prices, without the phone line${c.costBreakdown?.unpriced ? ". No known price for: " + esc(c.costBreakdown.unpriced.join(", ")) : ""}">model ${usd(c.costBreakdown?.llm)} · speech ${usd(c.costBreakdown?.stt)} · voice ${usd(c.costBreakdown?.tts)}${c.costBreakdown?.unpriced ? " · partial" : ""}</span>`) : "",
+    c.costBreakdown ? card("Tokens", "hash", num((c.costBreakdown.llmPromptTokens || 0) + (c.costBreakdown.llmCompletionTokens || 0)), "", `${num(c.costBreakdown.llmPromptTokens)} in · ${num(c.costBreakdown.llmCompletionTokens)} out · ${num(c.costBreakdown.ttsCharacters)} voice characters`) : "",
+    card("Messages", "bot", num(msgs.filter(m => m.role === "user" || m.role === "assistant").length), "", toolCalls ? `${toolCalls} tool call${toolCalls === 1 ? "" : "s"}` : ""),
+    card("Type", "phone", esc(TYPE[c.type] || c.type), "", c.endedReason ? esc(c.endedReason) : ""),
+  ].filter(Boolean);
   const v = $("#view");
   v.innerHTML = `<div class="toolbar"><a class="btn ghost" href="#calls">← All calls</a><span class="spacer"></span>${statusBadge(c)}</div>
-  <div class="cards compact">
-    ${card("Duration", "clock", dur(c.durationSeconds), "")}
-    ${card("Response time", "bolt", ms(pm.turnLatencyAverage), tone(light("latency", pm.turnLatencyAverage)), turns.length ? `average of ${turns.length} turns` : "", "", light("latency", pm.turnLatencyAverage))}
-    ${card("First word", "timer", ms(pm.firstWordLatency), tone(light("firstWord", pm.firstWordLatency)), pm.firstWordLatency == null ? "" : "wait for the greeting", "", light("firstWord", pm.firstWordLatency))}
-    ${typeof c.cost === "number" ? card("Cost", "coin", usd(c.cost), "", `<span title="List prices, without the phone line${c.costBreakdown?.unpriced ? ". No known price for: " + esc(c.costBreakdown.unpriced.join(", ")) : ""}">model ${usd(c.costBreakdown?.llm)} · speech ${usd(c.costBreakdown?.stt)} · voice ${usd(c.costBreakdown?.tts)}${c.costBreakdown?.unpriced ? " · partial" : ""}</span>`) : ""}
-    ${c.costBreakdown ? card("Tokens", "hash", num((c.costBreakdown.llmPromptTokens || 0) + (c.costBreakdown.llmCompletionTokens || 0)), "", `${num(c.costBreakdown.llmPromptTokens)} in · ${num(c.costBreakdown.llmCompletionTokens)} out · ${num(c.costBreakdown.ttsCharacters)} voice characters`) : ""}
-    ${card("Messages", "bot", num(msgs.filter(m => m.role === "user" || m.role === "assistant").length), "", msgs.some(m => m.role === "tool_calls") ? `${msgs.filter(m => m.role === "tool_calls").length} tool calls` : "")}
-    ${card("Type", "phone", esc(TYPE[c.type] || c.type), "", c.endedReason ? esc(c.endedReason) : "")}
-  </div>
+  <div class="cards compact" style="--cols:${Math.ceil(cards.length / Math.ceil(cards.length / 4))}">${cards.join("")}</div>
   ${(c.providerFallbacks || []).map(f => `<p class="muted fallback-note">${ICON.bolt}${esc(LAYER_NAMES[f.layer] || f.layer)} switched to <b>${esc(f.to)}</b> at ${esc(new Date(f.at).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit", second: "2-digit" }))}${f.reason && f.reason !== "failed" ? ` (${esc(f.reason)})` : ""}</p>`).join("")}
   <div class="toolbar">${tabs([["transcript", "Transcript"], ["latency", "Response time"], ["json", "JSON"]], callTab)}</div>
   <section class="panel"><div class="body">${panes[callTab]()}</div></section>`;
