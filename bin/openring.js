@@ -61,11 +61,35 @@ let uv = findUv();
 if (!uv) { installUv(); uv = findUv(); }
 if (!uv) { console.error("  uv was installed but is not on PATH yet. Open a new terminal and run the command again."); process.exit(1); }
 
+// Right after a release, uv may still hold an older copy of PyPI's index and answer that this version doesn't
+// exist. Then ask PyPI again, once. (Refreshing on every start would break starting without internet.)
+const STALE_INDEX = /no version of openring|No solution found when resolving/i;
+const colors = process.stderr.isTTY ? { LOGURU_COLORIZE: "True" } : {};
+
+function run(refresh) {
+  const args = ["tool", "run", ...(process.stderr.isTTY ? ["--color", "always"] : []),
+    ...(refresh ? ["--refresh-package", "openring"] : []), "--python", "3.12", "--from", PACKAGE, "openring", ...userArgs];
+  // stderr passes through as it comes; the launcher also reads it to spot the stale index.
+  const child = spawn(uv, args, { stdio: ["inherit", "inherit", "pipe"], env: { ...process.env, PORT, ...colors } });
+  let seen = "";
+  child.stderr.on("data", (chunk) => {
+    process.stderr.write(chunk);
+    if (seen.length < 20000) seen += chunk.toString();
+  });
+  child.on("exit", (code) => {
+    if (code && !refresh && !SOURCE && STALE_INDEX.test(seen)) {
+      console.log(`\n  OpenRing ${VERSION} is brand new; asking PyPI again...\n`);
+      current = run(true);
+      return;
+    }
+    process.exit(code ?? 0);
+  });
+  return child;
+}
+
 console.log("\n  Starting OpenRing (the first run downloads dependencies and can take a few minutes)...\n");
-const args = ["tool", "run", "--python", "3.12", "--from", PACKAGE, "openring", ...userArgs];
-const child = spawn(uv, args, { stdio: "inherit", env: { ...process.env, PORT } });
-child.on("exit", (code) => process.exit(code ?? 0));
-for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => child.kill(sig));
+let current = run(false);
+for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => current.kill(sig));
 
 const url = `http://localhost:${PORT}`;
 waitForServer(url).then((up) => { if (up) openBrowser(url); });

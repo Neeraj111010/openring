@@ -17,6 +17,11 @@ All notable changes to OpenRing are listed here. The format follows
 - Ten wrong passwords on the server's own computer locked its owner out of the dashboard for five minutes,
   even with the right password. Sign-ins from this computer are no longer slowed down; through a tunnel or
   the network, each address still is.
+- Right after a release, `npx openring` could answer that the new version doesn't exist: uv still held an older
+  copy of PyPI's index. The launcher now asks PyPI again, once, when that happens (without slowing down or
+  breaking offline starts the rest of the time).
+- Dates in the dashboard followed the browser's language ("30 de out.") on an English page; they now match
+  the page. A call's detail keeps its cards on one row.
 
 ### Security
 
