@@ -26,3 +26,9 @@ Only the latest release gets security fixes while OpenRing is below 1.0.
 - Keep `TWILIO_AUTH_TOKEN` set: OpenRing uses it to reject webhooks that don't come from Twilio. Never set
   `VALIDATE_TWILIO_SIGNATURE=false` outside local tests.
 - Provider keys live in `~/.openring/.env`; treat that file like a password.
+- Treat what an assistant's tools receive as untrusted: the model fills in the arguments during a conversation
+  with a stranger, and callers can steer it (prompt injection). Your tool server should check who is calling
+  (`call.customer.number`), what they may do, and how much, and verify the `X-Vapi-Secret` you set as
+  `server.secret`. Don't put secrets in the system prompt: a caller can talk the model into repeating it.
+- OpenRing never calls cloud metadata or link-local addresses (169.254.169.254 and the like) for URLs that
+  come from assistants, tools, phone numbers or imports.

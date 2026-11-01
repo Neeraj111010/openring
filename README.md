@@ -225,6 +225,12 @@ messages work as on Vapi. `endCall` hangs up after the goodbye; `transferCall` m
 chosen number (Twilio) once the assistant stops talking. Tool calls and results show up in the call's
 transcript.
 
+**Treat tool arguments as untrusted input.** The model chooses them during a conversation with whoever
+called, and a caller can talk it into almost anything ("cancel every appointment", "my account number is
+someone else's"). Check every argument on your server as you would a public web form: who the caller is
+(`call.customer.number`), what they may see or change, and limits on how much. Set `server.secret` and verify
+`X-Vapi-Secret` so only OpenRing reaches the tool. `transferCall` only ever dials the destinations you listed.
+
 ### Server messages
 
 Your assistant's `server.url` gets Vapi's messages in Vapi's shape (`{"message": {"type": ..., "call": {...}}}`),

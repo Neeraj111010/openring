@@ -124,6 +124,11 @@ de cada número do Twilio importado para `$PUBLIC_URL/twilio/voice`.
 Toda requisição leva `Authorization: Bearer $OPENRING_API_KEY`. Os exemplos completos (ferramentas, mensagens
 para o servidor, ligações feitas) estão no [guia em inglês](README.md#-api-guide).
 
+**Ferramentas: trate os argumentos como entrada não confiável.** Quem escolhe os argumentos é o modelo, durante a
+conversa com quem ligou, e quem liga consegue induzi-lo ("cancele todos os horários"). O seu servidor deve
+conferir quem está ligando (`call.customer.number`), o que essa pessoa pode ver ou mudar, e limites. Configure
+`server.secret` e confira o `X-Vapi-Secret`. Não coloque segredos no prompt de sistema.
+
 Crie um assistente em português:
 
 ```bash
