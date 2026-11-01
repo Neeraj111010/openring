@@ -6,8 +6,9 @@ import re
 
 import pytest
 
+from openring import api as api_module
 from openring import routes
-from openring.providers import resolve_plan
+from openring.providers import ProviderError, resolve_plan
 
 from test_api import ASSISTANT, AUTH, make_client
 
@@ -92,6 +93,42 @@ def test_the_route_api_and_assistants_that_use_it():
     assert [x["id"] for x in client.get("/model-route", headers=AUTH).json()] == [route["id"]]
     assert client.delete(f"/model-route/{route['id']}", headers=AUTH).status_code == 200
     assert client.get(f"/model-route/{route['id']}", headers=AUTH).status_code == 404
+
+
+def test_assistants_on_a_deleted_route_keep_their_own_model_and_stay_editable():
+    client = make_client()
+    route = client.post("/model-route", json=ROUTE, headers=AUTH).json()
+    on_route = {**ASSISTANT, "model": {**ASSISTANT["model"], "routeId": route["id"]}}
+    a = client.post("/assistant", json=on_route, headers=AUTH).json()
+    client.delete(f"/model-route/{route['id']}", headers=AUTH)
+    model = client.get(f"/assistant/{a['id']}", headers=AUTH).json()["model"]
+    assert "routeId" not in model and model["model"] == ASSISTANT["model"]["model"]
+    assert client.patch(f"/assistant/{a['id']}", json={"name": "Renamed"}, headers=AUTH).status_code == 200
+    # One left pointing at a route deleted by an older version can still be edited, but not moved to a made-up one.
+    client.app.state.store.update("assistants", a["id"], {"model": {**model, "routeId": "deleted-earlier"}})
+    assert client.patch(f"/assistant/{a['id']}", json={"name": "Again"}, headers=AUTH).status_code == 200
+    moved = client.patch(f"/assistant/{a['id']}", json={"model": {**model, "routeId": "made-up"}}, headers=AUTH)
+    assert moved.status_code == 400
+
+
+def test_measuring_a_model_that_breaks_a_newer_rule_reports_it(monkeypatch):
+    client = make_client()
+    route = client.post("/model-route", json=ROUTE, headers=AUTH).json()
+
+    async def probe(model, plan):
+        return {"firstTokenMs": 300}
+
+    def refuse_ollama(assistant, **options):  # as if a rule added since refused how this model was saved
+        if assistant["model"]["provider"] == "ollama":
+            raise ProviderError("model.url: refused")
+        return real(assistant, **options)
+
+    real = api_module.resolve_plan
+    monkeypatch.setattr(routes, "probe", probe)
+    monkeypatch.setattr(api_module, "resolve_plan", refuse_ollama)
+    r = client.post(f"/model-route/{route['id']}/measure", headers=AUTH)
+    assert r.status_code == 200, r.text
+    assert r.json()["measured"] == [{"firstTokenMs": 300}, {"firstTokenMs": 300}, {"error": "model.url: refused"}]
 
 
 @pytest.mark.parametrize("stubborn", [False, True])

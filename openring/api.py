@@ -170,9 +170,10 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         """The assistant's stack, with its model route (if any) filled in."""
         return resolve_plan(routes.expand(assistant, lambda route_id: store.get("routes", route_id)), **options)
 
-    def _validate_assistant(doc: dict[str, Any]) -> None:
+    def _validate_assistant(doc: dict[str, Any], current: dict[str, Any] | None = None) -> None:
         route_id = (doc.get("model") or {}).get("routeId")
-        if route_id and store.get("routes", str(route_id)) is None:
+        kept = current is not None and route_id == (current.get("model") or {}).get("routeId")
+        if route_id and not kept and store.get("routes", str(route_id)) is None:
             raise HTTPException(status_code=400, detail=f"model.routeId: model route {route_id} not found")
         try:
             _plan(doc, check_keys=False)
@@ -392,7 +393,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     @app.patch("/assistant/{assistant_id}", dependencies=auth_deps)
     def update_assistant(assistant_id: str, body: dict[str, Any]) -> dict[str, Any]:
         current = _get_or_404("assistants", assistant_id)
-        _validate_assistant({**current, **body})
+        _validate_assistant({**current, **body}, current)  # an older server may have left a deleted route's id
         providers.prepare_local({**current, **body})
         return store.update("assistants", assistant_id, body)
 
@@ -438,9 +439,15 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         """Ask each model of the route for one short answer and time its first word, as a call would (a few
         tokens each). "fastest" routes order by these times and by the ones calls measure."""
         route = _get_or_404("routes", route_id)
-        models = route.get("models") or []
-        plans = [resolve_plan({"model": m}, check_keys=False, with_fallbacks=False) for m in models]
-        results = await asyncio.gather(*(routes.probe(m, p) for m, p in zip(models, plans)))
+
+        async def measure(model: dict[str, Any]) -> dict[str, Any]:
+            try:  # a model saved before a rule it breaks now (a refused model.url) gets its reason, not a 500
+                plan = resolve_plan({"model": model}, check_keys=False, with_fallbacks=False)
+            except ProviderError as exc:
+                return {"error": str(exc)}
+            return await routes.probe(model, plan)
+
+        results = await asyncio.gather(*(measure(m) for m in route.get("models") or []))
         routes.save_speed(store)
         return {**routes.with_status(route), "measured": list(results)}
 
@@ -454,6 +461,11 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     def delete_route(route_id: str) -> dict[str, Any]:
         """Assistants on a deleted route go back to the model saved in their own `model`."""
         _get_or_404("routes", route_id)
+        for assistant in store.list("assistants", limit=100_000):
+            model = assistant.get("model") or {}
+            if model.get("routeId") == route_id:
+                own = {k: v for k, v in model.items() if k != "routeId"}
+                store.update("assistants", assistant["id"], {"model": own})
         return store.delete("routes", route_id)
 
     # ---- Tools (Vapi's /tool: saved once, used by assistants through model.toolIds) ----

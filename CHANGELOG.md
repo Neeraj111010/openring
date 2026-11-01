@@ -31,6 +31,11 @@ All notable changes to OpenRing are listed here. The format follows
   breaking offline starts the rest of the time).
 - A Genesys connection whose signature carried a time that isn't a number crashed with an error in the log
   instead of being refused.
+- Deleting a model route left its assistants pointing at it: their calls used the assistant's own model, as
+  intended, but any change to them, even a new name, was refused with "model route not found". Deleting a
+  route now moves its assistants back to their own model.
+- **Measure speed** failed with an error 500 when one of the route's models broke a rule added after it was
+  saved (such as a refused `model.url`); that model now shows why, and the others are measured.
 - Dates in the dashboard followed the browser's language ("30 de out.") on an English page; they now match
   the page. A call's cards come in rows of even length (4 + 3 rather than 5 + 2), wide enough for their values
   and labels, and a call with one tool call no longer says "1 tool calls".
