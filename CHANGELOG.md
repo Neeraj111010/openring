@@ -6,6 +6,8 @@ All notable changes to OpenRing are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-11-01
+
 ### Added
 
 - The new-campaign form warns when calls could reach people before 8 AM or after 9 PM their time, the hours the
