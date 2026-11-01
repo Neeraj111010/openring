@@ -111,7 +111,7 @@ class Store:
         self._check(collection)
         with self._lock:
             rows = self._db.execute(
-                f"SELECT doc FROM {collection} ORDER BY created_at DESC LIMIT ?", (limit,)
+                f"SELECT doc FROM {collection} ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)
             ).fetchall()
         return [json.loads(r[0]) for r in rows]
 
