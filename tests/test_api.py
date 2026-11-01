@@ -280,3 +280,33 @@ def test_stats_endpoint():
     assert client.get("/stats").status_code == 401
     body = client.get("/stats?days=7", headers=AUTH).json()
     assert body["calls"] == 0 and len(body["perDay"]) == 7
+
+
+def test_an_example_api_key_is_never_accepted():
+    """`change-me` from .env.example would let anyone in: it counts as no key at all."""
+    client = make_client(api_key="change-me")
+    r = client.get("/assistant", headers={"Authorization": "Bearer change-me"})
+    assert r.status_code == 401 and "only answers this computer" in r.json()["detail"]
+    local = TestClient(create_app(Settings(api_key="change-me", public_url="", db_path=":memory:"),
+                                  Store(":memory:")), client=("127.0.0.1", 50000), base_url="http://localhost:8000")
+    assert local.get("/assistant").status_code == 200
+
+
+def test_without_an_api_key_only_this_computer_reaches_the_api():
+    remote = make_client(api_key="")
+    assert remote.get("/assistant").status_code == 401
+    assert remote.get("/stats").status_code == 401
+    # Tunnels connect from 127.0.0.1 but keep the public Host and add forwarding headers.
+    tunnel = TestClient(create_app(Settings(api_key="", public_url="", db_path=":memory:"), Store(":memory:")),
+                        client=("127.0.0.1", 50000), base_url="https://abc.trycloudflare.com")
+    assert tunnel.get("/assistant").status_code == 401
+    local = _local_client(base_url="http://localhost:8000")
+    local.app.state.settings.api_key = ""
+    assert local.get("/assistant").status_code == 200
+    assert local.get("/assistant", headers={"X-Forwarded-For": "203.0.113.9"}).status_code == 401
+
+
+def test_without_an_api_key_the_dashboard_session_still_works():
+    client = make_client(api_key="", password="correct horse")
+    assert client.post("/auth/login", json={"password": "correct horse"}).status_code == 200
+    assert client.get("/assistant", headers=DASH).status_code == 200

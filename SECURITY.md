@@ -22,6 +22,7 @@ Only the latest release gets security fixes while OpenRing is below 1.0.
 
 - Keep the server on `127.0.0.1` (the default) unless you need it reachable. If you expose it, set a
   strong dashboard password (`OPENRING_PASSWORD`) and a long `OPENRING_API_KEY`, and serve it over HTTPS.
+  Without a key, the API answers only the computer it runs on; example keys like `change-me` are refused.
 - Keep `TWILIO_AUTH_TOKEN` set: OpenRing uses it to reject webhooks that don't come from Twilio. Never set
   `VALIDATE_TWILIO_SIGNATURE=false` outside local tests.
 - Provider keys live in `~/.openring/.env`; treat that file like a password.

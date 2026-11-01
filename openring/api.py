@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from loguru import logger
 
 from . import __version__, auth, campaigns, genesys, keys, overrides, prices, providers, routes, stats, telnyx, twilio
-from .config import Settings, get_settings
+from .config import Settings, get_settings, is_placeholder_key
 from .importer import SourceError, import_account
 from .providers import ProviderError, resolve_plan
 from .server_messages import AssistantRequestError, request_assistant, server_of
@@ -90,8 +90,11 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     app.state.settings = settings
     app.state.store = store
 
+    if settings.api_key and is_placeholder_key(settings.api_key):
+        logger.error("OPENRING_API_KEY is an example value anyone can guess; it is ignored. Set a long random key.")
+        settings.api_key = ""
     if not settings.api_key:
-        logger.warning("OPENRING_API_KEY is empty: the REST API is open. Set it before exposing this server.")
+        logger.warning("OPENRING_API_KEY is not set: the REST API only answers requests from this computer.")
     if not settings.validate_twilio_signature:
         logger.warning("VALIDATE_TWILIO_SIGNATURE=false: /twilio/voice accepts requests from anyone. Local tests only.")
 
@@ -111,7 +114,13 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
 
     def require_key(request: Request, authorization: str = Header(default="")) -> None:
         if not settings.api_key:
-            return
+            # No key to check: only this computer may call the API (tunnels and the network may not).
+            if _is_direct_local_request(request) or signed_in(request):
+                return
+            raise HTTPException(
+                status_code=401,
+                detail="this server has no API key (OPENRING_API_KEY), so its API only answers this computer",
+            )
         token = authorization.removeprefix("Bearer ").strip()
         if token and hmac.compare_digest(token.encode(), settings.api_key.encode()):
             return

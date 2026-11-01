@@ -16,6 +16,17 @@ All notable changes to OpenRing are listed here. The format follows
 
 - The local Whisper transcriber didn't start on Apple Silicon Macs (M1 and later) unless MLX Whisper was
   installed: Pipecat requires it just to load its Whisper module there, though OpenRing uses faster-whisper.
+- Lists (calls, assistants...) created in the same instant could come back in either order; the newest is
+  now always first.
+
+### Security
+
+- An example API key (`change-me` from `.env.example`, which the Docker setup copied) was accepted, so a
+  server deployed that way answered anyone who knew the example. Example keys are now refused: `openring`
+  replaces one with a generated key, saved so it stays the same across restarts, and the dashboard shows it
+  under Settings. `.env.example` no longer carries one.
+- A server without an API key answered API requests from anywhere. Its API now answers only the computer
+  it runs on (not tunnels or the network); the dashboard keeps working through its sign-in.
 
 ## [0.1.3] - 2026-11-01
 

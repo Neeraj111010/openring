@@ -10,6 +10,18 @@ def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
 
 
+# API keys copied from examples and docs. Anyone can guess them, so a server using one is treated as a
+# server without a key (its API answers only the computer it runs on).
+PLACEHOLDER_API_KEYS = frozenset({
+    "change-me", "changeme", "change_me", "your-api-key", "your_api_key", "api-key", "apikey",
+    "secret", "password", "openring", "test", "xxx",
+})
+
+
+def is_placeholder_key(value: str) -> bool:
+    return value.strip().lower() in PLACEHOLDER_API_KEYS
+
+
 @dataclass
 class Settings:
     # Bearer token required by the REST API. Empty = API is open (local dev only).

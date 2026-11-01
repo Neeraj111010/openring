@@ -6,6 +6,8 @@ import secrets
 import socket
 from pathlib import Path
 
+from .config import is_placeholder_key
+
 HOME = Path(os.environ.get("OPENRING_HOME", Path.home() / ".openring"))
 ENV_FILE = HOME / ".env"
 
@@ -31,17 +33,51 @@ ELEVENLABS_API_KEY=
 """
 
 
-def load_env_file(path: Path) -> None:
-    """Load KEY=VALUE lines; real environment variables win."""
+def load_env_file(path: Path) -> bool:
+    """Load KEY=VALUE lines; real environment variables win, unless they are empty.
+
+    An example API key ("change-me") is skipped. Returns whether one was, so a real key can replace it.
+    """
     if not path.exists():
-        return
+        return False
+    skipped = False
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        if value.strip():
-            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        key, value = key.strip(), value.strip().strip('"').strip("'")
+        if key == "OPENRING_API_KEY" and is_placeholder_key(value):
+            skipped = True
+            continue
+        if value and not os.environ.get(key, "").strip():
+            os.environ[key] = value
+    return skipped
+
+
+def drop_example_api_key() -> bool:
+    """Forget an OPENRING_API_KEY environment variable that holds an example value. Returns whether it did."""
+    if is_placeholder_key(os.environ.get("OPENRING_API_KEY", "")):
+        del os.environ["OPENRING_API_KEY"]
+        return True
+    return False
+
+
+def save_new_api_key() -> str:
+    """Generate an API key, keep it in the settings file and use it now."""
+    key = secrets.token_urlsafe(24)
+    text = ENV_FILE.read_text(encoding="utf-8") if ENV_FILE.exists() else ""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip().startswith("OPENRING_API_KEY="):
+            lines[i] = f"OPENRING_API_KEY={key}"
+            break
+    else:
+        lines.append(f"OPENRING_API_KEY={key}")
+    HOME.mkdir(parents=True, exist_ok=True)
+    ENV_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.environ["OPENRING_API_KEY"] = key
+    return key
 
 
 def first_run_setup() -> bool:
@@ -81,6 +117,22 @@ def reset_password(db_path: str) -> None:
     print()
 
 
+def load_settings() -> tuple[bool, bool]:
+    """Create the settings file on the first run, then read the settings into the environment.
+
+    An example API key ("change-me" from .env.example) is replaced by a generated one, saved so the next
+    start uses the same key. Returns (settings file created now, example key replaced).
+    """
+    example_key = drop_example_api_key()
+    created = first_run_setup()
+    example_key |= load_env_file(Path.cwd() / ".env")  # a project-local .env takes precedence
+    example_key |= load_env_file(ENV_FILE)
+    replaced = example_key and not os.environ.get("OPENRING_API_KEY")
+    if replaced:
+        save_new_api_key()
+    return created, replaced
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="openring", description="Self-hosted voice AI agents, Vapi-compatible.")
     parser.add_argument("--port", type=int, help="port to serve on (default: $PORT, or 8000)")
@@ -88,9 +140,10 @@ def main(argv: list[str] | None = None) -> None:
                         help="forget the dashboard password; choose a new one at http://localhost on the next visit")
     args = parser.parse_args(argv)
 
-    created = first_run_setup()
-    load_env_file(Path.cwd() / ".env")  # a project-local .env takes precedence
-    load_env_file(ENV_FILE)
+    created, replaced = load_settings()
+    if replaced:
+        print(f"\n  OPENRING_API_KEY was an example value anyone can guess. A new key is saved in {ENV_FILE}")
+        print("  (see it under Settings in the dashboard).")
     os.environ.setdefault("OPENRING_DB_PATH", str(HOME / "openring.db"))
     if args.reset_password:
         reset_password(os.environ["OPENRING_DB_PATH"])

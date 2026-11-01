@@ -421,7 +421,8 @@ Small pull requests get merged fastest. Start with [CONTRIBUTING.md](CONTRIBUTIN
 
 ## 🔒 Security
 
-Set `OPENRING_API_KEY` before exposing the server. The dashboard has its own password: the first one can
+`openring` generates `OPENRING_API_KEY` on its first run; without a key, the API answers only the computer it
+runs on, and example values such as `change-me` are refused and replaced. The dashboard has its own password: the first one can
 only be chosen from the server's own computer (`http://localhost`) or with `OPENRING_PASSWORD`, so a stranger
 who finds your tunnel URL cannot claim it first. Sessions are `HttpOnly`, `SameSite=Strict` cookies, and
 repeated wrong passwords are slowed down. Forgot it? `openring --reset-password`. Incoming calls need
