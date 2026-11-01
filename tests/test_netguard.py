@@ -116,6 +116,16 @@ def test_server_messages_never_go_to_metadata(monkeypatch):
     assert err.ended_reason == "assistant-request-failed" and "never calls" in str(err)
 
 
+def test_a_failed_assistant_request_keeps_the_url_out_of_its_error():
+    # The error is logged; webhook paths often carry a secret.
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(503)))
+    server = {"url": "https://hooks.example.com/catch/123/SECRET-TOKEN"}
+    with pytest.raises(server_messages.AssistantRequestError) as err:
+        asyncio.run(server_messages.request_assistant(server, {"id": "c1"}, {"number": "+15551234567"}, client=client))
+    assert "SECRET-TOKEN" not in str(err.value) and "HTTP 503" in str(err.value)
+    assert err.value.ended_reason == "assistant-request-failed"
+
+
 def test_a_custom_llm_cannot_point_at_metadata():
     model = {"provider": "custom-llm", "model": "m", "url": "http://169.254.169.254/v1"}
     with pytest.raises(ProviderError, match="model.url"):

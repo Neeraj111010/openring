@@ -132,13 +132,13 @@ async def request_assistant(
     Returns {"assistantId": ...} or {"assistant": {...}} (a transient assistant), as Vapi's servers answer.
     """
     payload = message("assistant-request", call, phoneNumber=phone_number, customer=call.get("customer"))
+    where = netguard.safe_url_for_logs(server["url"])  # the detail is logged; the full URL may hold a secret
     try:
         r = await post(server, payload, timeout=ASSISTANT_REQUEST_TIMEOUT, client=client)
     except httpx.HTTPError as exc:
-        where = netguard.safe_url_for_logs(server["url"])
         raise AssistantRequestError("assistant-request-failed", f"{where}: {_why(exc)}") from exc
     if r.status_code >= 400:
-        raise AssistantRequestError("assistant-request-failed", f"{server['url']} answered HTTP {r.status_code}")
+        raise AssistantRequestError("assistant-request-failed", f"{where} answered HTTP {r.status_code}")
     try:
         body = r.json()
     except ValueError as exc:
