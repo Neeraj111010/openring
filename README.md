@@ -29,6 +29,11 @@ or server, with your own provider keys, and speaks the same JSON as Vapi.
 - 🖥️ **Yours.** Keys, calls and transcripts stay on your machine. No telemetry.
 - 🆓 **Free to try.** A free local voice (Kokoro) is built in, so your first test call costs nothing.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/elifalanrocha/openring/main/docs/assets/screenshots/tour.gif" width="860" alt="A tour of the dashboard: the overview, the calls with their cost, one call's transcript, the assistant editor and a model route">
+  <br><sub>The dashboard, with sample data.</sub>
+</p>
+
 ## ⚡ Quick start
 
 You need [Node.js](https://nodejs.org) 18 or later. Everything else, Python included, installs itself:
@@ -66,6 +71,17 @@ flowchart LR
 Each call runs a [Pipecat](https://github.com/pipecat-ai/pipecat) pipeline: the caller's speech becomes
 text, the model answers (and can call your tools), and the voice speaks the answer back. Every turn's
 latency is recorded, step by step, and shown in the dashboard.
+
+<table>
+<tr>
+<td width="50%"><img src="https://raw.githubusercontent.com/elifalanrocha/openring/main/docs/assets/screenshots/home.png" alt="The overview: calls, minutes, success rate, response time and provider cost"><br><b>Overview.</b> Calls, minutes, response time and what the providers charged.</td>
+<td width="50%"><img src="https://raw.githubusercontent.com/elifalanrocha/openring/main/docs/assets/screenshots/call.png" alt="One call: transcript, response time, cost per provider and a model switch"><br><b>Every call.</b> Transcript, latency per turn, cost per provider, and each provider switch with its reason.</td>
+</tr>
+<tr>
+<td width="50%"><img src="https://raw.githubusercontent.com/elifalanrocha/openring/main/docs/assets/screenshots/assistant.png" alt="The assistant editor: transcriber, model route and voice"><br><b>Assistants.</b> Transcriber, model (or a route) and voice, in the order a call goes through them.</td>
+<td width="50%"><img src="https://raw.githubusercontent.com/elifalanrocha/openring/main/docs/assets/screenshots/route.png" alt="A model route with the Fastest, Cheapest, Reliable and Custom presets"><br><b>Model routes.</b> Fastest, Cheapest, Reliable or Custom, with each model's measured speed and price.</td>
+</tr>
+</table>
 
 ## 📊 How it compares
 

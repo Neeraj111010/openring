@@ -30,6 +30,10 @@ dev = ["pytest>=8", "ruff>=0.13"]
 [project.scripts]
 openring = "openring.__main__:main"
 
+[tool.hatch.build.targets.sdist]
+# README screenshots are linked from GitHub; the source package doesn't need to carry them.
+exclude = ["docs/assets/screenshots"]
+
 [tool.ruff]
 line-length = 120
 

@@ -28,6 +28,22 @@ com as suas chaves, e fala o mesmo JSON do Vapi.
 - 🖥️ **Seu.** Chaves, ligações e transcrições ficam na sua máquina. Sem telemetria.
 - 🆓 **Grátis para testar.** Vem com uma voz local grátis (Kokoro): a primeira ligação de teste não custa nada.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/elifalanrocha/openring/main/docs/assets/screenshots/tour.gif" width="860" alt="Um passeio pelo painel: visão geral, ligações com o custo, a transcrição de uma ligação, o editor do assistente e uma rota de modelo">
+  <br><sub>O painel, com dados de exemplo.</sub>
+</p>
+
+<table>
+<tr>
+<td width="50%"><img src="https://raw.githubusercontent.com/elifalanrocha/openring/main/docs/assets/screenshots/home.png" alt="Visão geral: ligações, minutos, taxa de sucesso, tempo de resposta e custo dos provedores"><br><b>Visão geral.</b> Ligações, minutos, tempo de resposta e quanto os provedores cobraram.</td>
+<td width="50%"><img src="https://raw.githubusercontent.com/elifalanrocha/openring/main/docs/assets/screenshots/call.png" alt="Uma ligação: transcrição, tempo de resposta, custo por provedor e uma troca de modelo"><br><b>Cada ligação.</b> Transcrição, latência por turno, custo por provedor e cada troca de provedor com o motivo.</td>
+</tr>
+<tr>
+<td width="50%"><img src="https://raw.githubusercontent.com/elifalanrocha/openring/main/docs/assets/screenshots/assistant.png" alt="O editor do assistente: transcrição, rota de modelo e voz"><br><b>Assistentes.</b> Transcrição, modelo (ou uma rota) e voz, na ordem em que a ligação passa por eles.</td>
+<td width="50%"><img src="https://raw.githubusercontent.com/elifalanrocha/openring/main/docs/assets/screenshots/route.png" alt="Uma rota de modelo com os presets Fastest, Cheapest, Reliable e Custom"><br><b>Rotas de modelo.</b> Mais rápido, mais barato, estável ou do seu jeito, com a velocidade medida e o preço de cada modelo.</td>
+</tr>
+</table>
+
 ## ⚡ Começo rápido
 
 Basta ter o [Node.js](https://nodejs.org) 18 ou mais novo. O resto, inclusive o Python, se instala sozinho:
