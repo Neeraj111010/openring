@@ -204,3 +204,31 @@ def test_variables_fill_the_greeting_and_prompt():
     assert merged["model"]["temperature"] == 0.2 and merged["model"]["provider"] == "groq"
     assert overrides.combine({"variableValues": {"a": 1}}, {"variableValues": {"b": 2}}) == {
         "variableValues": {"a": 1, "b": 2}}
+
+
+def test_nobody_is_called_twice_in_one_campaign(server, placed):
+    client, store, a, n = server
+    # The same person written two ways, and again in another dialPlan entry.
+    people = [{"number": "+55 11 91234-0001"}, {"number": "+5511912340001"}, {"number": "+5511912340002"}]
+    r = client.post("/campaign", json={"name": "Twice", "phoneNumberId": n["id"], "assistantId": a["id"],
+                                       "customers": people}, headers=AUTH)
+    assert r.status_code == 201, r.text
+    assert [c["number"] for c in r.json()["customers"]] == ["+5511912340001", "+5511912340002"]
+    plan = {"name": "Plan", "assistantId": a["id"], "dialPlan": [
+        {"phoneNumberId": n["id"], "customers": [{"number": "+5511912340003"}]},
+        {"phoneNumberId": n["id"], "customers": [{"number": "+55 11 91234-0003"}, {"number": "+5511912340004"}]}]}
+    r = client.post("/campaign", json=plan, headers=AUTH)
+    assert r.status_code == 201, r.text
+    assert [len(e["customers"]) for e in r.json()["dialPlan"]] == [1, 1]
+    for campaign in client.get("/campaign", headers=AUTH).json()["results"]:
+        client.patch(f"/campaign/{campaign['id']}", json={"status": "cancelled"}, headers=AUTH)
+
+
+def test_customer_numbers_must_be_phone_numbers(server):
+    client, _, a, n = server
+    for bad in ("+1", "call me", "+12345678901234567"):
+        r = client.post("/campaign", json={"name": "Bad", "phoneNumberId": n["id"], "assistantId": a["id"],
+                                           "customers": [{"number": bad}]}, headers=AUTH)
+        assert r.status_code == 400 and "country code" in r.json()["detail"], bad
+        r = client.post("/call", json={"phoneNumberId": n["id"], "customer": {"number": bad}}, headers=AUTH)
+        assert r.status_code == 400 and "country code" in r.json()["detail"], bad

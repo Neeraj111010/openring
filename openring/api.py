@@ -545,8 +545,9 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         customer = dict(value) if isinstance(value, dict) else {}
         if customer.get("sipUri") and not customer.get("number"):
             raise HTTPException(status_code=400, detail=f"{where}.sipUri: SIP calls are not supported yet; use number")
-        if not any(ch.isdigit() for ch in str(customer.get("number") or "")):
-            raise HTTPException(status_code=400, detail=f"{where}.number is required (E.164, e.g. +5511999999999)")
+        if not is_phone_number(customer.get("number")):
+            raise HTTPException(status_code=400, detail=f"{where}.number must be a phone number with its country code "
+                                                        "(E.164, e.g. +5511999999999)")
         customer["number"] = _e164(str(customer["number"]))
         return customer
 
@@ -631,6 +632,19 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
                 raise HTTPException(status_code=400,
                                     detail='customers is required: who to call, e.g. [{"number": "+5511912345678"}]')
             doc["customers"] = [_customer(c, f"customers[{i}]") for i, c in enumerate(doc["customers"])]
+        # The same person twice in one campaign would get two automated calls: keep the first.
+        seen: set[str] = set()
+
+        def first_time(customer: dict[str, Any]) -> bool:
+            fresh = customer["number"] not in seen
+            seen.add(customer["number"])
+            return fresh
+
+        if doc.get("dialPlan"):
+            doc["dialPlan"] = [{**entry, "customers": [c for c in entry["customers"] if first_time(c)]}
+                               for entry in doc["dialPlan"]]
+        else:
+            doc["customers"] = [c for c in doc["customers"] if first_time(c)]
         planned = campaigns.dials(doc)
         if not planned:
             raise HTTPException(status_code=400, detail="the campaign has nobody to call")

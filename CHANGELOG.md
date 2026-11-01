@@ -8,6 +8,9 @@ All notable changes to OpenRing are listed here. The format follows
 
 ### Fixed
 
+- A campaign created through the API with the same number twice (written the same way or not, in one list
+  or across `dialPlan` entries) called that person twice; repeats are now left out. Customer numbers in
+  campaigns and `POST /call` need 7 to 15 digits, as saved phone numbers do, instead of any digit at all.
 - With its output going to a pipe (Docker logs, systemd, `openring > log`), `openring` printed nothing at
   startup: Python held the lines in a buffer while the server ran. They now show right away, and the Docker
   image sets `PYTHONUNBUFFERED`.
