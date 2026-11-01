@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import whisper
+from . import netguard, whisper
 
 
 class ProviderError(ValueError):
@@ -361,6 +361,10 @@ def resolve_plan(assistant: dict[str, Any], *, check_keys: bool = True, with_fal
         base_url = model.get("url")
         if not base_url:
             raise ProviderError("model.provider 'custom-llm' requires model.url (an OpenAI-compatible base URL)")
+        try:
+            netguard.check_url(str(base_url))
+        except netguard.UnsafeURL as exc:
+            raise ProviderError(f"model.url: {exc}") from exc
         key_env = None
         llm_api_key = model.get("apiKey") or "not-needed"
     elif llm_provider in LLM_PROVIDERS:

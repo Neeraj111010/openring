@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 
+from . import netguard
 from .providers import ProviderError, resolve_plan
 from .store import Store, is_phone_number
 from .tools import ToolError, check_tool
@@ -92,8 +93,12 @@ async def import_account(
         raise SourceError("baseUrl must start with https://")
     if not api_key:
         raise SourceError("apiKey is required: the account's private API key")
+    try:
+        await netguard.check_url_async(base_url)
+    except netguard.UnsafeURL as exc:
+        raise SourceError(str(exc)) from exc
     owned = client is None
-    client = client or httpx.AsyncClient(timeout=30)
+    client = client or netguard.client(timeout=30)
     client.headers["Authorization"] = f"Bearer {api_key}"
     try:
         tools = await _list_all(client, base_url, "tool")

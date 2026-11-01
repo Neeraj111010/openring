@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 from loguru import logger
 
+from . import netguard
 from .store import Store
 
 # Tool types OpenRing runs. Assistants imported with other types still load; those tools are skipped.
@@ -174,19 +175,25 @@ async def call_server(
     headers = {str(k): str(v) for k, v in (server.get("headers") or {}).items()}
     if server.get("secret"):
         headers.setdefault("X-Vapi-Secret", str(server["secret"]))  # the header Vapi servers check
+    # The model reads these errors and may say them to the caller: they never contain the URL, which often
+    # carries a secret (a webhook path). Logs get the scheme and host only.
+    try:
+        await netguard.check_url_async(url)
+    except netguard.UnsafeURL as exc:
+        raise ToolError(f"the tool's server address is refused ({exc})") from exc
     payload = tool_calls_message(tool, tool_call_id, arguments, call=call, assistant=assistant)
     timeout = float(server.get("timeoutSeconds") or DEFAULT_TIMEOUT)
     owned = client is None
-    client = client or httpx.AsyncClient()
+    client = client or netguard.client()
     try:
         r = await client.post(url, json=payload, headers=headers, timeout=timeout)
     except httpx.HTTPError as exc:
-        raise ToolError(f"could not reach {url}: {exc.__class__.__name__}") from exc
+        raise ToolError(f"could not reach the tool's server ({exc.__class__.__name__})") from exc
     finally:
         if owned:
             await client.aclose()
     if r.status_code >= 400:
-        raise ToolError(f"{url} answered HTTP {r.status_code}")
+        raise ToolError(f"the tool's server answered HTTP {r.status_code}")
     try:
         body = r.json()
     except ValueError:

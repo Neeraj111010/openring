@@ -18,7 +18,21 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket,
 from fastapi.responses import FileResponse, JSONResponse, Response
 from loguru import logger
 
-from . import __version__, auth, campaigns, genesys, keys, overrides, prices, providers, routes, stats, telnyx, twilio
+from . import (
+    __version__,
+    auth,
+    campaigns,
+    genesys,
+    keys,
+    netguard,
+    overrides,
+    prices,
+    providers,
+    routes,
+    stats,
+    telnyx,
+    twilio,
+)
 from .config import Settings, get_settings, is_placeholder_key
 from .importer import SourceError, import_account
 from .providers import ProviderError, resolve_plan
@@ -814,8 +828,8 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
                     _validate_assistant(answer["assistant"])
             except (AssistantRequestError, HTTPException) as exc:
                 reason = getattr(exc, "ended_reason", "assistant-request-returned-invalid-assistant")
-                logger.warning("call {}: assistant-request to {} failed: {}", call["id"], ask["url"],
-                               getattr(exc, "detail", exc))
+                logger.warning("call {}: assistant-request to {} failed: {}", call["id"],
+                               netguard.safe_url_for_logs(ask["url"]), getattr(exc, "detail", exc))
                 store.update("calls", call["id"], {"status": "ended", "endedReason": reason, "endedAt": now_iso()})
                 return "Sorry, this line cannot take calls right now."
             call = store.update("calls", call["id"], answer)

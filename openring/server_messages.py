@@ -14,6 +14,8 @@ from typing import Any
 import httpx
 from loguru import logger
 
+from . import netguard
+
 # What Vapi sends when the assistant doesn't list `serverMessages`. OpenRing sends these three of them;
 # tool-calls go to each tool's server (see tools.py).
 DEFAULT_MESSAGES = (
@@ -53,8 +55,12 @@ def message(kind: str, call: dict[str, Any] | None, **fields: Any) -> dict[str, 
 
 async def post(server: dict[str, Any], payload: dict[str, Any], *, timeout: float | None = None,
                client: httpx.AsyncClient | None = None) -> httpx.Response:
+    try:
+        await netguard.check_url_async(server["url"])
+    except netguard.UnsafeURL as exc:
+        raise httpx.ConnectError(str(exc)) from exc
     owned = client is None
-    client = client or httpx.AsyncClient()
+    client = client or netguard.client()
     try:
         return await client.post(server["url"], json=payload, headers=_headers(server),
                                  timeout=timeout or float(server.get("timeoutSeconds") or 20))
@@ -71,9 +77,14 @@ async def send(assistant: dict[str, Any], kind: str, call: dict[str, Any] | None
     try:
         r = await post(server, message(kind, call, **fields))
         if r.status_code >= 400:
-            logger.warning("{} to {} answered HTTP {}", kind, server["url"], r.status_code)
+            logger.warning("{} to {} answered HTTP {}", kind, netguard.safe_url_for_logs(server["url"]), r.status_code)
     except httpx.HTTPError as exc:
-        logger.warning("{} to {} failed: {}", kind, server["url"], exc.__class__.__name__)
+        logger.warning("{} to {} failed: {}", kind, netguard.safe_url_for_logs(server["url"]), _why(exc))
+
+
+def _why(exc: Exception) -> str:
+    """A refused address says why; other failures name their kind (their text may repeat the URL)."""
+    return str(exc) if "OpenRing never calls" in str(exc) else exc.__class__.__name__
 
 
 class Outbox:
@@ -124,7 +135,8 @@ async def request_assistant(
     try:
         r = await post(server, payload, timeout=ASSISTANT_REQUEST_TIMEOUT, client=client)
     except httpx.HTTPError as exc:
-        raise AssistantRequestError("assistant-request-failed", f"{server['url']}: {exc.__class__.__name__}") from exc
+        where = netguard.safe_url_for_logs(server["url"])
+        raise AssistantRequestError("assistant-request-failed", f"{where}: {_why(exc)}") from exc
     if r.status_code >= 400:
         raise AssistantRequestError("assistant-request-failed", f"{server['url']} answered HTTP {r.status_code}")
     try:

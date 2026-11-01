@@ -15,6 +15,18 @@ All notable changes to OpenRing are listed here. The format follows
   over silently and clients still sending the example got 401. `openring` now says the example is ignored and
   where the key in use is.
 
+### Security
+
+- URLs that come from assistants, phone numbers and API calls (tool servers, `server.url`, `custom-llm`
+  `model.url`, the import source) could point at a cloud server's metadata address (169.254.169.254 and the
+  like). Whoever could set one could then read the machine's cloud credentials through OpenRing: a tool's
+  answer lands in the transcript, and the import report repeats what the source sent. Those addresses
+  (link-local and cloud metadata, IPv4 and IPv6) are now refused, for every request and redirect; local and
+  private networks stay allowed.
+- When a tool failed, the error the model read (and could say to the caller) included the tool's full URL,
+  which often carries a secret (webhook paths). The model now gets the reason without the URL, and logs show
+  only the scheme and host of webhook URLs.
+
 ## [0.1.4] - 2026-11-01
 
 ### Changed
