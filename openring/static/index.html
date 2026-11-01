@@ -98,6 +98,7 @@ main { padding: 28px 32px 48px; max-width: 1320px; width: 100%; margin: 0 auto; 
 .toolbar .spacer { flex: 1; }
 .muted { color: var(--muted); }
 .error { color: var(--bad); min-height: 1.2em; margin-top: 10px; }
+.hours-warning { background: var(--warn-soft); color: var(--ink); border-radius: 8px; padding: 9px 12px; font-size: 13px; margin: 4px 0 12px; }
 .empty { padding: 44px 24px; text-align: center; color: var(--muted); }
 .empty .btn { margin-top: 14px; }
 
@@ -444,6 +445,7 @@ dialog::backdrop { background: rgba(5,8,12,.6); }
       <div class="field"><label for="cmpEnd">Stop calling at</label><p class="hint">Optional.</p><input id="cmpEnd" type="datetime-local"></div>
       <div class="field narrow"><label for="cmpLines">At a time</label><p class="hint">Calls at once.</p><input id="cmpLines" type="number" min="1" max="500" value="3" required></div>
     </div>
+    <p class="hours-warning" id="cmpHours" role="status" hidden></p>
     <label class="consent"><input type="checkbox" id="cmpConsent" required><span>Everyone on this list agreed to get this call from an automated assistant. Automated calls are regulated (the TCPA in the US, Anatel's rules in Brazil), including the hours you may call.</span></label>
     <div class="error" id="cmpErr" role="alert"></div>
     <div class="row-actions"><span class="spacer"></span><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn" value="start" id="cmpGo">Start campaign</button></div>
@@ -971,6 +973,64 @@ function parsePeople(text) {
   return out;
 }
 
+// Calling hours. Automated calls are usually allowed only from 8 AM to 9 PM where the person is (the TCPA's rule in
+// the US), so the new-campaign form warns when a call could land outside them. A number's time zones come from its
+// country code, and from its area code in Brazil and for North American numbers outside the mainland; a country
+// with several zones lists its main ones, so the check errs on the careful side. Other codes use this computer's zone.
+const US_ZONES = ["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles"];
+const PHONE_ZONES = {
+  1: US_ZONES, 1808: ["Pacific/Honolulu"], 1907: ["America/Anchorage"], 1506: ["America/Halifax"], 1782: ["America/Halifax"],
+  1902: ["America/Halifax"], 1709: ["America/St_Johns"], 1787: ["America/Puerto_Rico"], 1939: ["America/Puerto_Rico"],
+  1809: ["America/Santo_Domingo"], 1829: ["America/Santo_Domingo"], 1849: ["America/Santo_Domingo"],
+  55: ["America/Sao_Paulo"], 5565: ["America/Cuiaba"], 5566: ["America/Cuiaba"], 5567: ["America/Campo_Grande"],
+  5568: ["America/Rio_Branco"], 5569: ["America/Porto_Velho"], 5592: ["America/Manaus"], 5595: ["America/Boa_Vista"],
+  5597: ["America/Manaus", "America/Rio_Branco"],
+  52: ["America/Cancun", "America/Mexico_City", "America/Hermosillo", "America/Tijuana"],
+  61: ["Australia/Perth", "Australia/Adelaide", "Australia/Brisbane", "Australia/Sydney"],
+  62: ["Asia/Jakarta", "Asia/Makassar", "Asia/Jayapura"],
+  7: ["Europe/Moscow"], 20: ["Africa/Cairo"], 27: ["Africa/Johannesburg"], 30: ["Europe/Athens"], 31: ["Europe/Amsterdam"],
+  32: ["Europe/Brussels"], 33: ["Europe/Paris"], 34: ["Europe/Madrid"], 36: ["Europe/Budapest"], 39: ["Europe/Rome"],
+  40: ["Europe/Bucharest"], 41: ["Europe/Zurich"], 43: ["Europe/Vienna"], 44: ["Europe/London"], 45: ["Europe/Copenhagen"],
+  46: ["Europe/Stockholm"], 47: ["Europe/Oslo"], 48: ["Europe/Warsaw"], 49: ["Europe/Berlin"], 51: ["America/Lima"],
+  53: ["America/Havana"], 54: ["America/Argentina/Buenos_Aires"], 56: ["America/Santiago"], 57: ["America/Bogota"],
+  58: ["America/Caracas"], 60: ["Asia/Kuala_Lumpur"], 63: ["Asia/Manila"], 64: ["Pacific/Auckland"], 65: ["Asia/Singapore"],
+  66: ["Asia/Bangkok"], 81: ["Asia/Tokyo"], 82: ["Asia/Seoul"], 84: ["Asia/Ho_Chi_Minh"], 86: ["Asia/Shanghai"],
+  90: ["Europe/Istanbul"], 91: ["Asia/Kolkata"], 92: ["Asia/Karachi"], 212: ["Africa/Casablanca"], 234: ["Africa/Lagos"],
+  254: ["Africa/Nairobi"], 351: ["Europe/Lisbon"], 353: ["Europe/Dublin"], 358: ["Europe/Helsinki"], 380: ["Europe/Kyiv"],
+  420: ["Europe/Prague"], 502: ["America/Guatemala"], 503: ["America/El_Salvador"], 504: ["America/Tegucigalpa"],
+  505: ["America/Managua"], 506: ["America/Costa_Rica"], 507: ["America/Panama"], 591: ["America/La_Paz"],
+  593: ["America/Guayaquil"], 595: ["America/Asuncion"], 598: ["America/Montevideo"], 852: ["Asia/Hong_Kong"],
+  880: ["Asia/Dhaka"], 886: ["Asia/Taipei"], 966: ["Asia/Riyadh"], 971: ["Asia/Dubai"], 972: ["Asia/Jerusalem"],
+};
+function phoneZones(number, here) {
+  const digits = String(number).replace(/\D/g, "");
+  for (let n = 4; n > 0; n--) if (PHONE_ZONES[digits.slice(0, n)]) return PHONE_ZONES[digits.slice(0, n)];
+  return [here];
+}
+const zoneClocks = {};
+// Minutes after midnight in a time zone, or null for a zone this browser doesn't know.
+function minutesIn(zone, at) {
+  if (!(zone in zoneClocks)) {
+    try { zoneClocks[zone] = new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "numeric", hourCycle: "h23" }); }
+    catch { zoneClocks[zone] = null; }
+  }
+  if (!zoneClocks[zone]) return null;
+  const p = Object.fromEntries(zoneClocks[zone].formatToParts(at).map(x => [x.type, x.value]));
+  return Number(p.hour) * 60 + Number(p.minute);
+}
+// For each time zone on the list, the first moment from start to end (checked every 15 minutes) outside 8 AM-9 PM.
+function callingHours(numbers, start, end, here) {
+  const last = Math.min(Math.max(+end || 0, +start), +start + 14 * 864e5), out = [];
+  for (const zone of new Set(numbers.flatMap(n => phoneZones(n, here)))) {
+    for (let t = +start; ; t = Math.min(t + 9e5, last)) {
+      const m = minutesIn(zone, new Date(t));
+      if (m !== null && (m < 480 || m > 1260)) { out.push({ zone, at: new Date(t) }); break; }
+      if (t >= last) break;
+    }
+  }
+  return out;
+}
+
 function newCampaign(assistants, nums) {
   const phones = nums.filter(n => (n.provider || "twilio") === "twilio");
   const d = $("#campaignDialog"), f = $("#campaignForm");
@@ -982,18 +1042,33 @@ function newCampaign(assistants, nums) {
   const pickAssistant = () => { const n = phones.find(x => x.id === $("#cmpFrom").value); if (n?.assistantId && assistants.some(a => a.id === n.assistantId)) $("#cmpAssistant").value = n.assistantId; };
   pickAssistant();
   $("#cmpFrom").onchange = pickAssistant;
+  const here = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const hours = people => {
+    const lines = Math.max(1, Number($("#cmpLines").value) || 3), start = $("#cmpStart").value ? new Date($("#cmpStart").value) : new Date();
+    const end = $("#cmpEnd").value ? new Date($("#cmpEnd").value) : null;
+    // With no stop time, calls go on until everyone is called: about 3 minutes a call, `lines` at a time.
+    const minutes = Math.ceil(people.length / lines) * 3;
+    const late = callingHours(people.map(p => p.number), start, end || new Date(+start + minutes * 6e4), here);
+    const times = late.slice(0, 3).map(x => `${x.at.toLocaleTimeString(LOCALE, { timeZone: x.zone, hour: "numeric", minute: "2-digit" })} ${x.zone.split("/").pop().replace(/_/g, " ")} time`).join(", ");
+    const why = !end && late.some(x => +x.at > +start)
+      ? `With no stop time, calls go on until everyone is called (about ${minutes < 90 ? minutes + " minutes" : Math.round(minutes / 30) / 2 + " hours"} at ${lines} at a time), so they could reach some people at ${times}.`
+      : `Calls could reach some people at ${times}.`;
+    $("#cmpHours").hidden = !late.length;
+    $("#cmpHours").textContent = late.length ? `${why} Automated calls are usually allowed only from 8 AM to 9 PM where the person is (the TCPA's rule in the US).` : "";
+  };
   const count = () => {
     const r = parsePeople($("#cmpPeople").value);
     $("#cmpCount").textContent = [r.people.length ? `${num(r.people.length)} ${r.people.length === 1 ? "person" : "people"}` : "",
       r.dupes ? `${num(r.dupes)} repeated left out` : "", r.bad ? `${num(r.bad)} left out: no number with country code` : "",
       r.vars.length ? "variables " + r.vars.map(k => `{{${k}}}`).join(", ") : ""].filter(Boolean).join(" · ");
+    hours(r.people);
     return r;
   };
-  $("#cmpPeople").oninput = count;
+  $("#cmpPeople").oninput = $("#cmpEnd").oninput = $("#cmpLines").oninput = count;
   count();
   $("#cmpCsv").onchange = async () => { const file = $("#cmpCsv").files[0]; if (file) { $("#cmpPeople").value = await file.text(); count(); } };
   f.querySelector('label[for="cmpCsv"]').onkeydown = e => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), $("#cmpCsv").click());
-  $("#cmpStart").oninput = () => $("#cmpGo").textContent = $("#cmpStart").value && new Date($("#cmpStart").value) > new Date() ? "Schedule campaign" : "Start campaign";
+  $("#cmpStart").oninput = () => { $("#cmpGo").textContent = $("#cmpStart").value && new Date($("#cmpStart").value) > new Date() ? "Schedule campaign" : "Start campaign"; count(); };
   d.showModal();
   f.onsubmit = async e => {
     if (e.submitter?.value !== "start") return;  // Cancel just closes

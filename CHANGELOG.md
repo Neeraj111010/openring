@@ -6,6 +6,12 @@ All notable changes to OpenRing are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The new-campaign form warns when calls could reach people before 8 AM or after 9 PM their time, the hours the
+  TCPA allows in the US. Each number's time zone comes from its country code (and its area code in Brazil and
+  North America); a campaign with no stop time is checked for how long its list may take.
+
 ### Fixed
 
 - A campaign created through the API with the same number twice (written the same way or not, in one list
