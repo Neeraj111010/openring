@@ -331,3 +331,18 @@ def test_a_caller_without_digits_never_matches_a_number():
     store.create("phone_numbers", {"number": "unknown"})
     assert store.find_phone_number("anonymous") is None
     assert store.find_phone_number("") is None
+
+
+def test_the_owner_at_this_computer_is_never_locked_out_by_typos():
+    settings = Settings(api_key="test-key", public_url="", db_path=":memory:", password="correct horse")
+    local = TestClient(create_app(settings, Store(":memory:")), client=("127.0.0.1", 50000),
+                       base_url="http://localhost:8000")
+    for _ in range(15):
+        assert local.post("/auth/login", json={"password": "typo"}).status_code == 401
+    assert local.post("/auth/login", json={"password": "correct horse"}).status_code == 200
+    # Through a tunnel (public Host, forwarding headers) the limit still applies.
+    tunnel = TestClient(local.app, client=("127.0.0.1", 50000), base_url="https://abc.trycloudflare.com")
+    for _ in range(10):
+        tunnel.post("/auth/login", json={"password": "guess"}, headers={"X-Forwarded-For": "203.0.113.9"})
+    assert tunnel.post("/auth/login", json={"password": "correct horse"},
+                       headers={"X-Forwarded-For": "203.0.113.9"}).status_code == 429

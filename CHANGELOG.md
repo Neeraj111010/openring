@@ -14,6 +14,9 @@ All notable changes to OpenRing are listed here. The format follows
 - When an example API key (`change-me`) was ignored on a first start, nothing said so: the generated key took
   over silently and clients still sending the example got 401. `openring` now says the example is ignored and
   where the key in use is.
+- Ten wrong passwords on the server's own computer locked its owner out of the dashboard for five minutes,
+  even with the right password. Sign-ins from this computer are no longer slowed down; through a tunnel or
+  the network, each address still is.
 
 ### Security
 

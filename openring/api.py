@@ -230,13 +230,18 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
 
     @app.post("/auth/login", include_in_schema=False)
     def auth_login(body: dict[str, Any], request: Request) -> JSONResponse:
-        who = request.client.host if request.client else "?"
-        if throttle.blocked(who):
+        # Wrong passwords slow down the address that sent them (behind a tunnel, uvicorn takes it from
+        # X-Forwarded-For). Never this computer: its owner could lock themselves out with typos, and a program
+        # running here can read the settings and the database anyway.
+        who = None if _is_direct_local_request(request) else (request.client.host if request.client else "?")
+        if who is not None and throttle.blocked(who):
             raise HTTPException(status_code=429, detail="too many wrong passwords; wait a few minutes")
         if not sessions.check(str(body.get("password") or "")):
-            throttle.fail(who)
+            if who is not None:
+                throttle.fail(who)
             raise HTTPException(status_code=401, detail="wrong password")
-        throttle.clear(who)
+        if who is not None:
+            throttle.clear(who)
         return with_session_cookie({"signedIn": True}, request)
 
     @app.post("/auth/logout", include_in_schema=False)
