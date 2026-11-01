@@ -110,6 +110,8 @@ main { padding: 28px 32px 48px; max-width: 1320px; width: 100%; margin: 0 auto; 
 
 /* Big number cards */
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); gap: 14px; margin-bottom: 18px; }
+/* A call has 5 to 7 cards: narrower columns keep them on one row instead of leaving one alone below. */
+.cards.compact { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 15px 17px 16px; box-shadow: var(--shadow); min-width: 0; }
 .card .label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; font-weight: 500; }
 .card .label svg.i { width: 16px; height: 16px; }
@@ -470,7 +472,9 @@ const num = n => n == null ? "—" : Number(n).toLocaleString("en-US");
 const ms = n => n == null ? "—" : n >= 1000 ? (n / 1000).toFixed(2) + " s" : n + " ms";
 const usd = n => n == null ? "—" : "$" + (n === 0 ? "0" : n >= 1 ? n.toFixed(2) : n.toPrecision(2));
 const dur = s => { if (!s) return "—"; s = Math.round(s); return s < 60 ? s + "s" : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`; };
-const when = iso => { if (!iso) return ""; const d = new Date(iso), today = new Date().toDateString() === d.toDateString(); return today ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); };
+// Dates in the interface language, like every other word on the page (the browser's would mix "30 de out." in).
+const LOCALE = "en-US";
+const when = iso => { if (!iso) return ""; const d = new Date(iso), today = new Date().toDateString() === d.toDateString(); return today ? d.toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" }) : d.toLocaleString(LOCALE, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); };
 const initials = s => (s || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase();
 const caller = c => c.type === "webCall" ? "Browser test" : c.type === "outboundPhoneCall" ? `Call to ${c.customer?.name || c.customer?.number || "?"}` : c.customer?.number || "Unknown caller";
 // Who answered a call: a saved assistant, or a transient one that lives in the call record.
@@ -599,7 +603,7 @@ async function viewHome() {
   ];
   const max = Math.max(1, ...s.perDay.map(d => d.calls));
   const lp = s.latencyParts, lpTotal = PARTS.reduce((t, [k]) => t + (lp[k] || 0), 0);
-  const label = d => new Date(d + "T12:00:00").toLocaleDateString([], { month: "short", day: "numeric" });
+  const label = d => new Date(d + "T12:00:00").toLocaleDateString(LOCALE, { month: "short", day: "numeric" });
   const pd = s.perDay;
 
   const v = $("#view");
@@ -1219,7 +1223,7 @@ async function viewCall(id) {
   };
   const v = $("#view");
   v.innerHTML = `<div class="toolbar"><a class="btn ghost" href="#calls">← All calls</a><span class="spacer"></span>${statusBadge(c)}</div>
-  <div class="cards">
+  <div class="cards compact">
     ${card("Duration", "clock", dur(c.durationSeconds), "")}
     ${card("Response time", "bolt", ms(pm.turnLatencyAverage), tone(light("latency", pm.turnLatencyAverage)), turns.length ? `average of ${turns.length} turns` : "", "", light("latency", pm.turnLatencyAverage))}
     ${card("First word", "timer", ms(pm.firstWordLatency), tone(light("firstWord", pm.firstWordLatency)), pm.firstWordLatency == null ? "" : "wait for the greeting", "", light("firstWord", pm.firstWordLatency))}
@@ -1228,7 +1232,7 @@ async function viewCall(id) {
     ${card("Messages", "bot", num(msgs.filter(m => m.role === "user" || m.role === "assistant").length), "", msgs.some(m => m.role === "tool_calls") ? `${msgs.filter(m => m.role === "tool_calls").length} tool calls` : "")}
     ${card("Type", "phone", esc(TYPE[c.type] || c.type), "", c.endedReason ? esc(c.endedReason) : "")}
   </div>
-  ${(c.providerFallbacks || []).map(f => `<p class="muted fallback-note">${ICON.bolt}${esc(LAYER_NAMES[f.layer] || f.layer)} switched to <b>${esc(f.to)}</b> at ${esc(new Date(f.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }))}${f.reason && f.reason !== "failed" ? ` (${esc(f.reason)})` : ""}</p>`).join("")}
+  ${(c.providerFallbacks || []).map(f => `<p class="muted fallback-note">${ICON.bolt}${esc(LAYER_NAMES[f.layer] || f.layer)} switched to <b>${esc(f.to)}</b> at ${esc(new Date(f.at).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit", second: "2-digit" }))}${f.reason && f.reason !== "failed" ? ` (${esc(f.reason)})` : ""}</p>`).join("")}
   <div class="toolbar">${tabs([["transcript", "Transcript"], ["latency", "Response time"], ["json", "JSON"]], callTab)}</div>
   <section class="panel"><div class="body">${panes[callTab]()}</div></section>`;
   v.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { callTab = b.dataset.tab; viewCall(id); });
