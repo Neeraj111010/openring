@@ -211,7 +211,7 @@ def _whisper_row() -> dict[str, Any]:
     elif loading:
         row["note"] = f"getting the {loading[0]} model (about {whisper.MODELS[loading[0]][1]}, one time)"
     elif not loaded:
-        row["note"] = (f"free, on this computer: downloads its model the first time an assistant uses it "
+        row["note"] = (f"Free, on this computer. Downloads its model the first time an assistant uses it "
                        f"({whisper.DEFAULT}: about {whisper.MODELS[whisper.DEFAULT][1]})")
     return row
 
@@ -285,6 +285,10 @@ class StackPlan:
     # the reason in `warnings`.
     fallbacks: dict[str, list[StackPlan]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    # A model slower than this to start answering (ms) hands the turn to the next fallback model.
+    max_latency_ms: int | None = None
+    # The model route the models came from (`routes.expand`): {"id", "name", "cooldownMinutes"}.
+    route: dict[str, Any] | None = None
 
 
 def _require_key(env_name: str | None, what: str) -> None:
@@ -414,6 +418,8 @@ def resolve_plan(assistant: dict[str, Any], *, check_keys: bool = True, with_fal
         end_call_phrases=list(assistant.get("endCallPhrases") or []),
         server_url=server.get("url") or assistant.get("serverUrl"),
         assistant=assistant,
+        route=model.get("route"),
+        max_latency_ms=(model.get("route") or {}).get("maxLatencyMs") or model.get("maxLatencyMs"),
     )
     if multilingual and plan.tts_provider not in MULTILINGUAL_VOICES:
         plan.warnings.append(f"the {plan.tts_provider} voice speaks one language; to follow callers in several "
@@ -585,6 +591,8 @@ def label(layer: str, plan: StackPlan) -> str:
 
 def _labeled(service: Any, layer: str, plan: StackPlan) -> Any:
     service.openring_label = label(layer, plan)
+    if layer == "model":  # which model this is, so a route can rest it after it fails or is slow
+        service.openring_model = (plan.llm_provider, plan.llm_model)
     return service
 
 

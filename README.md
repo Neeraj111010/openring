@@ -84,7 +84,8 @@ affiliated with any of them.
 
 | Works today | Next |
 |---|---|
-| Browser test calls from the dashboard (WebRTC) | Switching when a provider gets slow; routing by cost |
+| Browser test calls from the dashboard (WebRTC) | Routing by cost |
+| Model routes: models in order, shared by assistants; the next takes over when one fails or is slow (**beta**) | |
 | A 100% local, free stack: Whisper, Ollama and Kokoro, one click in the editor | |
 | Provider fallback in Vapi's format, across providers (**beta**) | |
 | Callers in any language: the assistant answers in theirs (`"language": "multi"`) | |
@@ -252,6 +253,26 @@ a fallback model can come from another provider:
 
 When the model switches, the new one answers the caller's last message, so the turn isn't lost. A fallback
 whose key is missing is skipped, and each switch is listed in the call's `providerFallbacks` and on its page.
+
+### Model routes (beta)
+
+A model route is a saved list of models, in order, that several assistants can share, like OmniRoute's
+combos. Make one on the **Model routes** page (or `POST /model-route`) and pick it in the assistant editor
+(`"model": {"routeId": "ROUTE_ID", ...}`; the assistant keeps its own instructions and tools):
+
+```json
+{"name": "Fast, then cheap", "maxLatencyMs": 2000, "cooldownMinutes": 5,
+ "models": [{"provider": "groq", "model": "openai/gpt-oss-20b"},
+            {"provider": "openrouter", "model": "openai/gpt-4.1-mini"},
+            {"provider": "ollama", "model": "llama3.2"}]}
+```
+
+Calls start on the first model. The next one takes over when a model fails (a rejected key, no credit left,
+a rate limit, an outage) or, with `maxLatencyMs`, when it hasn't started answering after that many
+milliseconds: the slow request is cancelled and the next model answers the same turn. The model that let the
+route down rests for `cooldownMinutes`, so new calls start on the next one until it's back; the Model
+routes page shows which ones are resting. Without a route, `"maxLatencyMs"` on an assistant's `model` does
+the same for its `fallbackModels`.
 
 ### Telnyx (beta)
 

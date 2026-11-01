@@ -83,7 +83,8 @@ empresa em outubro de 2026; confira antes de decidir. O OpenRing não tem víncu
 
 | Já funciona | Próximos passos |
 |---|---|
-| Teste no navegador pelo painel (WebRTC) | Troca quando um provedor fica lento; roteamento por custo |
+| Teste no navegador pelo painel (WebRTC) | Roteamento por custo |
+| Rotas de modelo: modelos em ordem, compartilhados entre assistentes; o próximo assume quando um falha ou fica lento (**beta**) | |
 | Stack 100% local e grátis: Whisper, Ollama e Kokoro, com um clique no editor | |
 | Provedor reserva no formato do Vapi, inclusive de outro provedor (**beta**) | |
 | Quem liga em qualquer idioma: o assistente responde no idioma dele (`"language": "multi"`) | |
@@ -144,6 +145,16 @@ resolve (chave recusada, crédito acabado, provedor fora do ar), o próximo da l
 do Vapi, o modelo reserva pode ser de outro provedor: `"fallbackModels": [{"provider": "openai", "model":
 "gpt-4.1-mini"}]`. Quando o modelo troca, o novo responde a última fala de quem ligou. Exemplo completo no
 [README em inglês](README.md#provider-fallback-beta).
+
+### Rotas de modelo (beta)
+
+Uma rota é uma lista de modelos em ordem, salva uma vez e usada por vários assistentes, como os combos do
+OmniRoute. Crie na página **Model routes** (ou `POST /model-route`) e escolha no editor do assistente. A ligação
+começa no primeiro modelo; o próximo assume quando um falha (chave recusada, crédito acabado, limite, fora do ar)
+ou, com `maxLatencyMs`, quando demora mais que isso para começar a responder: a requisição lenta é cancelada e
+o próximo responde a mesma fala. O modelo que falhou ou ficou lento descansa por `cooldownMinutes`, e as
+próximas ligações já começam no seguinte até ele voltar. Exemplo no
+[README em inglês](README.md#model-routes-beta).
 
 ### Ligações por telefone
 

@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import WebSocket
 from loguru import logger
 
-from . import server_messages
+from . import routes, server_messages
 from .config import Settings
 from .providers import StackPlan, build_services
 from .store import Store, now_iso
@@ -256,17 +256,38 @@ async def run_call(
             logger.warning("call {}: {}", call_id, warning)
         speech = {"speaking": False, "last_stop": 0.0}
 
+        # With fallback models, a watch after the model closes what a replaced model left open and, with a
+        # latency limit, hands a slow turn to the next model.
+        watch = None
+        why = {"model": ""}  # why the model is about to switch, when it isn't an error
+        if isinstance(llm, ServiceSwitcher):
+            from . import fallback
+
+            async def too_slow(seconds: float) -> None:
+                why["model"] = f"slow: no answer after {seconds:.1f} s"
+                if await llm.strategy.skip(llm.strategy.active_service) is None:
+                    why["model"] = ""
+                    logger.warning("call {}: model slow ({:.1f} s) and no faster one left", call_id, seconds)
+
+            watch = fallback.model_watch(plan.max_latency_ms, too_slow)
+
         def watch_fallback(layer: str, service: Any) -> None:
             """Record each provider that takes over; a new model answers the turn the failed one dropped."""
             if not isinstance(service, ServiceSwitcher):
                 return
+            current = {"service": service.strategy.active_service}
 
             @service.strategy.event_handler("on_service_switched")
             async def _switched(_strategy, active):
                 to = getattr(active, "openring_label", active.name)
-                switches.append({"layer": layer, "to": to, "at": now_iso()})
-                logger.warning("call {}: {} failed over to {}", call_id, layer, to)
+                reason, why[layer] = why.get(layer) or "failed", ""
+                switches.append({"layer": layer, "to": to, "at": now_iso(), "reason": reason})
+                logger.warning("call {}: {} switched to {} ({})", call_id, layer, to, reason)
+                left, current["service"] = current["service"], active
                 if layer == "model":
+                    routes.let_down(plan.route, left)  # so the next calls start on the next model
+                    if watch is not None:
+                        await watch.replaced(left)
                     await task.queue_frames([LLMRunFrame()])
 
         for layer, service in (("transcriber", stt), ("model", llm), ("voice", tts)):
@@ -324,6 +345,7 @@ async def run_call(
                 stt,
                 aggregators.user(),
                 llm,
+                *([watch] if watch is not None else []),
                 tts,
                 transport.output(),
                 aggregators.assistant(),

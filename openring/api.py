@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket,
 from fastapi.responses import FileResponse, JSONResponse, Response
 from loguru import logger
 
-from . import __version__, auth, campaigns, genesys, keys, overrides, providers, stats, telnyx, twilio
+from . import __version__, auth, campaigns, genesys, keys, overrides, providers, routes, stats, telnyx, twilio
 from .config import Settings, get_settings
 from .importer import SourceError, import_account
 from .providers import ProviderError, resolve_plan
@@ -142,9 +142,16 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             raise HTTPException(status_code=404, detail=f"{collection[:-1].replace('_', ' ')} not found")
         return doc
 
+    def _plan(assistant: dict[str, Any], **options: Any) -> providers.StackPlan:
+        """The assistant's stack, with its model route (if any) filled in."""
+        return resolve_plan(routes.expand(assistant, lambda route_id: store.get("routes", route_id)), **options)
+
     def _validate_assistant(doc: dict[str, Any]) -> None:
+        route_id = (doc.get("model") or {}).get("routeId")
+        if route_id and store.get("routes", str(route_id)) is None:
+            raise HTTPException(status_code=400, detail=f"model.routeId: model route {route_id} not found")
         try:
-            resolve_plan(doc, check_keys=False)
+            _plan(doc, check_keys=False)
             model = doc.get("model") or {}
             for tool in model.get("tools") or []:
                 check_tool(tool)
@@ -365,6 +372,42 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         _get_or_404("assistants", assistant_id)
         return store.delete("assistants", assistant_id)
 
+    # ---- Model routes: models in order, shared by assistants (an OpenRing addition, like OmniRoute's combos)
+    def _route_doc(body: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            doc = routes.clean({**(current or {}), **body})
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        for i, model in enumerate(doc["models"]):
+            try:
+                resolve_plan({"model": model}, check_keys=False, with_fallbacks=False)
+            except ProviderError as exc:
+                raise HTTPException(status_code=400, detail=f"models[{i}]: {exc}") from exc
+        return doc
+
+    @app.post("/model-route", status_code=201, dependencies=auth_deps)
+    def create_route(body: dict[str, Any]) -> dict[str, Any]:
+        return routes.with_status(store.create("routes", _route_doc(body)))
+
+    @app.get("/model-route", dependencies=auth_deps)
+    def list_routes() -> list[dict[str, Any]]:
+        return [routes.with_status(r) for r in store.list("routes", limit=1000)]
+
+    @app.get("/model-route/{route_id}", dependencies=auth_deps)
+    def get_route(route_id: str) -> dict[str, Any]:
+        return routes.with_status(_get_or_404("routes", route_id))
+
+    @app.patch("/model-route/{route_id}", dependencies=auth_deps)
+    def update_route(route_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        current = _get_or_404("routes", route_id)
+        return routes.with_status(store.update("routes", route_id, _route_doc(body, current)))
+
+    @app.delete("/model-route/{route_id}", dependencies=auth_deps)
+    def delete_route(route_id: str) -> dict[str, Any]:
+        """Assistants on a deleted route go back to the model saved in their own `model`."""
+        _get_or_404("routes", route_id)
+        return store.delete("routes", route_id)
+
     # ---- Tools (Vapi's /tool: saved once, used by assistants through model.toolIds) ----
     @app.post("/tool", status_code=201, dependencies=auth_deps)
     def create_tool(body: dict[str, Any]) -> dict[str, Any]:
@@ -459,7 +502,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         """Everything an outbound call needs before Twilio dials: a working assistant, Twilio, a public URL."""
         _validate_assistant(assistant)
         try:
-            resolve_plan(assistant)
+            _plan(assistant)
         except ProviderError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not (settings.twilio_account_sid and settings.twilio_auth_token):
@@ -667,7 +710,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         if overrides.changes_assistant(body.get("assistantOverrides")):
             _validate_assistant(assistant)
         try:
-            plan = resolve_plan(assistant)
+            plan = _plan(assistant)
         except ProviderError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         connection = SmallWebRTCConnection()
@@ -836,7 +879,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         # This call's overrides and variables: a campaign's `{{customer.name}}`, an assistant-request's changes.
         assistant = overrides.apply(assistant, call.get("assistantOverrides"), call.get("customer"))
         try:
-            plan = resolve_plan(assistant)
+            plan = _plan(assistant)
         except ProviderError as exc:
             logger.error("call {} cannot start: {}", call_id, exc)
             store.update("calls", call_id, {"status": "ended", "endedReason": f"provider-error: {exc}"})

@@ -53,7 +53,15 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
   (names, or `{provider, model}` for another provider) and `voice.fallbackPlan.voices` resolve into
   `StackPlan.fallbacks`; `build_services` wraps a layer in Pipecat's `ServiceSwitcher`/`LLMSwitcher` with
   the `Failover` strategy (switches on auth, quota, rate-limit, server and connectivity errors, never back).
-  A model switch queues an `LLMRunFrame` so the new model answers; switches land in `providerFallbacks`.
+  A model switch queues an `LLMRunFrame` so the new model answers; switches land in `providerFallbacks`
+  with a `reason`. Pipecat's switcher gates what goes into an inactive service, not what comes out, so
+  `fallback.model_watch` (after the LLM) stops the replaced model (`_start_interruption`, Pipecat's own way),
+  closes its open response and drops its leftovers; with `maxLatencyMs` it switches a model that hasn't
+  started answering in time (`Failover.skip`).
+- Model routes (`openring/routes.py` + `/model-route`, collection `routes`): models in order + `maxLatencyMs`
+  + `cooldownMinutes`. `model.routeId` on an assistant; `routes.expand` (via `api._plan`, used wherever a plan
+  is resolved) puts the first non-resting model in `model` and the rest in `fallbackModels`. A model the call
+  moved off rests in memory (`routes.let_down`), so new calls start on the next one.
 - Groq's catalog changed in 2026: Llama 3.x is gone; use `openai/gpt-oss-20b` (fast) or
   `openai/gpt-oss-120b`. Groq's Cloudflare returns 403 to Python's default urllib User-Agent.
 - Genesys Cloud (`openring/genesys.py` + `/ws/genesys`, beta): Audio Connector over AudioHook. Refused unless
@@ -81,10 +89,10 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
   any Vapi-compatible API (pages back with `createdAtLt`), drops source-owned fields and secrets, remaps
   `model.toolIds`, marks docs with `importedFrom` so a re-import updates them; reports per-assistant problems
   (unsupported providers/tools) without refusing the import. Dashboard: **Import** on the Assistants page.
-- `openring/store.py` SQLite document store (JSON docs) for assistants, phone_numbers, calls, tools, campaigns.
+- `openring/store.py` SQLite document store (JSON docs) for assistants, phone_numbers, calls, tools, campaigns, routes.
 - `openring/static/index.html` single-file dashboard (vanilla JS, no build step), styled after OmniRoute:
   sidebar with sections, dark/light theme, big-number cards, tabs. Pages: Home (overview + get started),
-  Assistants (tiles; editor with Setup/JSON tabs), Phone numbers, Calls (filters; detail with transcript,
+  Assistants (tiles; editor with Setup/JSON tabs), Phone numbers, Model routes, Calls (filters; detail with transcript,
   per-turn latency, JSON), Campaigns (list/CSV, consent checkbox, progress), Providers, Settings (API
   access, password).
 - `openring/__main__.py` `openring` command: first run creates `~/.openring/.env` with a generated

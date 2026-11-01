@@ -5,8 +5,8 @@ something, or pick an item and say you're on it. Shipped work moves to the [chan
 
 ## Next (weeks after the first release)
 
-- **Smarter provider fallback.** Fallback on failure is in (beta); next is switching when a provider gets
-  slow, and routing by cost.
+- **Routing by cost.** Model routes already switch when a model fails or is slow (beta); next is choosing
+  the cheapest model that is fast enough, and the same for speech-to-text and voices.
 - **Faster local speech-to-text on a CPU:** streaming Moonshine for the languages it covers. The 100% local
   stack itself (Whisper, Ollama, Kokoro) is in.
 - **Cost per call in dollars.** Calls already record their tokens, voice characters and transcribed

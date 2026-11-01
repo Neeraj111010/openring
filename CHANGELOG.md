@@ -8,6 +8,13 @@ All notable changes to OpenRing are listed here. The format follows
 
 ### Added
 
+- Model routes (beta), like OmniRoute's combos: a saved list of models, in order, that assistants share
+  (`/model-route`, the **Model routes** page, and a route picker in the assistant editor). The next model
+  takes over when one fails or, with `maxLatencyMs`, when it is slow to start answering: the slow request is
+  cancelled and the next model answers the same turn. A model that let the route down rests for
+  `cooldownMinutes`, so new calls start on the next one. Each switch shows its reason on the call's page.
+- Fixed: after a model switch, the replaced model is stopped and the response it left open is closed, so the
+  caller hears one answer and the new model's reply reaches the transcript.
 - A 100% local, free stack: the new `whisper` transcriber (faster-whisper) runs on your computer, with
   Ollama for the model and Kokoro for the voice, so nothing is billed per minute and the audio stays on the
   machine. **Use the free local stack** in the assistant editor sets all three; the editor offers the models
