@@ -24,7 +24,7 @@ def is_placeholder_key(value: str) -> bool:
 
 @dataclass
 class Settings:
-    # Bearer token required by the REST API. Empty = API is open (local dev only).
+    # Bearer token required by the REST API. Empty (or an example value): the API answers only this computer.
     api_key: str = field(default_factory=lambda: _env("OPENRING_API_KEY"))
     # Initial dashboard password, for servers nobody opens from their own browser (Docker, VPS).
     # Used only while no password is set; afterwards it is changed from the dashboard.
