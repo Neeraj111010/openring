@@ -39,6 +39,10 @@ All notable changes to OpenRing are listed here. The format follows
 - Dates in the dashboard followed the browser's language ("30 de out.") on an English page; they now match
   the page. A call's cards come in rows of even length (4 + 3 rather than 5 + 2), wide enough for their values
   and labels, and a call with one tool call no longer says "1 tool calls".
+- On the overview, the bars under **Busiest assistants** and **How calls ended** moved with the length of each
+  row's label and number; they now start and end at the same place in every row. The overview's cards fill
+  whole rows (3 per row, 5 on wide screens), so a label keeps its traffic light on one line from phones to wide
+  screens, and more end reasons read in words ("Assistant ended the call", "Transferred", "Server restarted").
 
 ### Security
 

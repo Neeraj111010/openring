@@ -115,6 +115,12 @@ main { padding: 28px 32px 48px; max-width: 1320px; width: 100%; margin: 0 auto; 
    and columns wide enough for a label with its traffic light and for the cost line. */
 @media (min-width: 861px) { .cards.compact { grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); } }
 @media (min-width: 1240px) { .cards.compact { grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); } }
+/* The overview's 8 cards, the first twice as wide, fill whole rows: 3 columns (2 + 1, 3, 3), or 5 on a wide
+   screen; 4 or 6 would leave a card alone, and 5 below 1440 px is too narrow for a label and its traffic light. */
+@media (min-width: 970px) { .cards.overview { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 1440px) { .cards.overview { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+/* Narrower cards drop the label's icon, so a label and its traffic light still share one line. */
+@media (max-width: 969px) { .card .label svg.i { display: none; } .card .label .light { padding: 1px 6px; } }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 15px 17px 16px; box-shadow: var(--shadow); min-width: 0; }
 .card .label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; font-weight: 500; }
 .card .label svg.i { width: 16px; height: 16px; }
@@ -166,6 +172,15 @@ a.rowlink { color: inherit; text-decoration: none; border-radius: 6px; }
 a.rowlink:hover { background: var(--panel-2); }
 .minirow .meter { flex: 1; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; max-width: 140px; }
 .minirow .meter span { display: block; height: 100%; background: var(--accent); }
+/* Rows compared by their bars (busiest assistants, how calls ended) share one set of columns, so every bar starts
+   and ends at the same place whatever the length of its label and number. */
+@supports (grid-template-columns: subgrid) {
+  .meter-list { display: grid; grid-template-columns: fit-content(45%) minmax(48px, 1fr) auto; column-gap: 12px; }
+  .meter-list > .minirow { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; }
+  .meter-list > .minirow .meter { max-width: none; }
+  .meter-list > .minirow > :last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .meter-list > p { grid-column: 1 / -1; }
+}
 
 .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); white-space: nowrap; }
 .badge.ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
@@ -331,6 +346,7 @@ dialog::backdrop { background: rgba(5,8,12,.6); }
   .top p { display: none; }
   main { padding: 20px 16px 40px; }
   .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .card { padding: 13px 12px 14px; }
   .card .value { font-size: 24px; }
   .line-diagram { grid-template-columns: minmax(0, 1fr); }
   .cable { width: 2px; height: 14px; margin-left: 24px; background: var(--accent); opacity: .5; }
@@ -489,8 +505,11 @@ const ENDED = {
   "customer-ended-call": "Caller hung up", "assistant-said-end-call-phrase": "Assistant said goodbye",
   "customer-busy": "Line busy", "customer-did-not-answer": "No answer",
   "twilio-failed-to-connect-call": "Twilio couldn't connect", "assistant-not-found": "Assistant was deleted",
+  "assistant-ended-call": "Assistant ended the call", "assistant-forwarded-call": "Transferred",
+  "worker-shutdown": "Server restarted", "silence-timed-out": "Silence timed out",
 };
-const endedLabel = r => ENDED[r] || (r.startsWith("pipeline-error") ? "Error during the call" : r.startsWith("provider-error") ? "Provider not set up" : r);
+const endedLabel = r => ENDED[r] || (r.startsWith("pipeline-error") ? "Error during the call" : r.startsWith("provider-error") ? "Provider not set up"
+  : r.startsWith("assistant-request") ? "Your server picked no assistant" : r);
 function statusBadge(c) {
   if (c.status === "ended") return failed(c) ? `<span class="badge bad" title="${esc(c.endedReason)}">Failed</span>` : `<span class="badge ok">Ended</span>`;
   if (c.status === "in-progress") return `<span class="badge live">Live</span>`;
@@ -614,7 +633,7 @@ async function viewHome() {
   v.innerHTML = `
   ${steps.every(x => x[0]) ? "" : `<section class="panel" style="margin-bottom:18px"><header><h2>Get started</h2><span class="muted" style="font-size:13px">${steps.filter(x => x[0]).length} of ${steps.length} done</span></header><div class="body"><div class="steps">${steps.map(([done, t, p, act], i) => `<div class="step ${done ? "done" : ""}"><span class="n">${done ? "✓" : i + 1}</span><div><b>${t}</b><p>${p}</p>${done ? "" : act}</div></div>`).join("")}</div></div></section>`}
   <div class="toolbar"><h2 style="font-size:18px">Overview</h2>${tabs(PERIODS, days, "period")}</div>
-  <div class="cards">
+  <div class="cards overview">
     ${card("Fees avoided", "coin", "$" + s.platformFeeSaved.toFixed(2), "brand", '<span title="Hosted voice platforms charge about US$0.05 per minute for orchestration alone.">vs $0.05/min platforms</span>', "hero")}
     ${card("Calls", "phone", num(s.calls), "", s.inProgress ? `${s.inProgress} live now` : `${num(s.byType.inboundPhoneCall || 0)} in · ${num(s.byType.outboundPhoneCall || 0)} out · ${num(s.byType.webCall || 0)} browser`)}
     ${card("Minutes", "clock", num(s.minutes), "", s.averageDurationSeconds ? `${dur(s.averageDurationSeconds)} per call` : "")}
@@ -637,12 +656,12 @@ async function viewHome() {
   </div>
   <div class="grid2 even">
     <section class="panel"><header><h2>Recent calls</h2><a href="#calls" style="font-size:13px">See all</a></header>
-      <div class="body" style="padding-top:8px">${recent.length ? recent.map(c => `<a class="minirow rowlink" href="#calls/${encodeURIComponent(c.id)}"><div style="min-width:0"><b>${esc(caller(c))}</b><div class="muted" style="font-size:12.5px">${esc(assistantOf(c, assistants))} · ${when(c.createdAt)}</div></div><span class="muted">${dur(c.durationSeconds)}</span>${statusBadge(c)}</a>`).join("") : `<p class="muted">No calls yet.</p>`}</div></section>
+      <div class="body" style="padding-top:8px">${recent.length ? recent.map(c => `<a class="minirow rowlink" href="#calls/${encodeURIComponent(c.id)}"><div style="min-width:0"><b>${esc(caller(c))}</b><div class="muted" style="font-size:12.5px">${esc(assistantOf(c, assistants))} · ${when(c.createdAt)}</div></div><span class="muted" style="white-space:nowrap">${dur(c.durationSeconds)}</span>${statusBadge(c)}</a>`).join("") : `<p class="muted">No calls yet.</p>`}</div></section>
     <div style="display:grid;gap:14px;align-content:start">
       <section class="panel"><header><h2>Busiest assistants</h2></header>
-        <div class="body" style="padding-top:8px">${s.byAssistant.length ? s.byAssistant.map(b => `<div class="minirow"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(name(b.assistantId))}</span><span class="meter"><span style="width:${b.calls / s.byAssistant[0].calls * 100}%"></span></span><span class="muted" style="white-space:nowrap">${num(b.calls)} calls · ${num(b.minutes)} min</span></div>`).join("") : `<p class="muted">No calls in this period.</p>`}</div></section>
+        <div class="body meter-list" style="padding-top:8px">${s.byAssistant.length ? s.byAssistant.map(b => `<div class="minirow"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(name(b.assistantId))}">${esc(name(b.assistantId))}</span><span class="meter"><span style="width:${b.calls / s.byAssistant[0].calls * 100}%"></span></span><span class="muted" style="white-space:nowrap">${num(b.calls)} call${b.calls === 1 ? "" : "s"} · ${num(b.minutes)} min</span></div>`).join("") : `<p class="muted">No calls in this period.</p>`}</div></section>
       <section class="panel"><header><h2>How calls ended</h2></header>
-        <div class="body" style="padding-top:8px">${Object.keys(s.endedReasons).length ? Object.entries(s.endedReasons).map(([r, n]) => `<div class="minirow"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r)}">${esc(endedLabel(r))}</span><span class="meter"><span style="width:${n / Math.max(...Object.values(s.endedReasons)) * 100}%;background:${failed({ endedReason: r }) ? "var(--bad)" : "var(--c1)"}"></span></span><span class="muted">${num(n)}</span></div>`).join("") : `<p class="muted">No finished calls in this period.</p>`}</div></section>
+        <div class="body meter-list" style="padding-top:8px">${Object.keys(s.endedReasons).length ? Object.entries(s.endedReasons).map(([r, n]) => `<div class="minirow"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r)}">${esc(endedLabel(r))}</span><span class="meter"><span style="width:${n / Math.max(...Object.values(s.endedReasons)) * 100}%;background:${failed({ endedReason: r }) ? "var(--bad)" : "var(--c1)"}"></span></span><span class="muted">${num(n)}</span></div>`).join("") : `<p class="muted">No finished calls in this period.</p>`}</div></section>
     </div>
   </div>`;
   v.querySelectorAll("[data-period]").forEach(b => b.onclick = () => { store.set("openring-period", b.dataset.period); viewHome(); });
