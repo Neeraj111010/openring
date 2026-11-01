@@ -6,6 +6,8 @@ All notable changes to OpenRing are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-01
+
 ### Added
 
 - Route presets, OmniRoute's mode packs cut down to what a call needs: **Fastest** (the model with the
