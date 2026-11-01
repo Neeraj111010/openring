@@ -82,6 +82,24 @@ def test_calls_share_one_model_and_decode_greedily(loaded):
     assert loaded.heard[-1][1]["beam_size"] == 1
 
 
+def test_whisper_loads_on_apple_silicon_without_mlx(loaded, monkeypatch):
+    """On macOS arm64, Pipecat 1.15 requires mlx_whisper just to import its Whisper module; ours uses
+    faster-whisper, so a Mac without MLX must still get a transcriber (this failed on every M-series Mac)."""
+    import importlib.util
+    import platform
+    import sys
+
+    if importlib.util.find_spec("mlx_whisper") is not None:
+        pytest.skip("MLX Whisper is installed here, so the import never needs the stand-in")
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(platform, "machine", lambda: "arm64")
+    monkeypatch.delitem(sys.modules, "pipecat.services.whisper.stt", raising=False)
+    monkeypatch.setattr(whisper, "_service", [])  # load Pipecat's module again, as on a fresh start
+    stt = whisper.stt_service("base", "pt")
+    assert type(stt).__name__ == "LocalWhisper"
+    assert "mlx_whisper" not in sys.modules  # the stand-in is gone, so the MLX service still fails clearly
+
+
 def test_phone_audio_reaches_whisper_at_16_khz(loaded):
     stt, _, _ = build_services(resolve_plan(BUILD, check_keys=False))
     stt._sample_rate = 8000  # a phone call

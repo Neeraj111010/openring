@@ -130,11 +130,35 @@ def status(name: str) -> str:
 _service: list[Any] = []
 
 
+def _import_pipecat_whisper() -> Any:
+    """Pipecat's Whisper module, also on Apple Silicon Macs without MLX Whisper.
+
+    On macOS arm64, Pipecat 1.15 imports `mlx_whisper` when the module loads and fails without it, though
+    only its MLX service uses it (and imports it again when used). OpenRing uses faster-whisper, so a
+    stand-in lets the module load; it is removed right after, so the MLX service still fails clearly.
+    """
+    import platform
+    import sys
+    import types
+
+    stand_in = None
+    if (platform.system() == "Darwin" and platform.machine() == "arm64"
+            and "mlx_whisper" not in sys.modules and importlib.util.find_spec("mlx_whisper") is None):
+        stand_in = sys.modules["mlx_whisper"] = types.ModuleType("mlx_whisper")
+    try:
+        import pipecat.services.whisper.stt as whisper_stt
+    finally:
+        if stand_in is not None and sys.modules.get("mlx_whisper") is stand_in:
+            del sys.modules["mlx_whisper"]
+    return whisper_stt
+
+
 def stt_service(name: str, language: Any) -> Any:
     """A Pipecat speech-to-text service on the shared model. `language` None lets Whisper detect it."""
     if not _service:
-        import pipecat.services.whisper.stt as whisper_stt
         from pipecat.audio.utils import create_file_resampler
+
+        whisper_stt = _import_pipecat_whisper()
 
         # Pipecat loads a fresh model for every service it creates; hand it the shared one instead.
         whisper_stt.WhisperModel = lambda key, **_options: load(key)

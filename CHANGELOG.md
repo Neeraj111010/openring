@@ -12,6 +12,11 @@ All notable changes to OpenRing are listed here. The format follows
   number, with Deepgram, Groq and the Kokoro voice), including interruptions and the cost record. Outgoing calls
   through Twilio, and so campaigns, stay beta until a real one is confirmed.
 
+### Fixed
+
+- The local Whisper transcriber didn't start on Apple Silicon Macs (M1 and later) unless MLX Whisper was
+  installed: Pipecat requires it just to load its Whisper module there, though OpenRing uses faster-whisper.
+
 ## [0.1.3] - 2026-11-01
 
 ### Added
