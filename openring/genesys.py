@@ -84,12 +84,16 @@ def check_signature(
     if not hmac.compare_digest(params.get("keyid", "").encode(), api_key.encode()):
         return "the signature is for another API key"
     now = time.time() if now is None else now
-    if not params.get("created"):
+    try:
+        created = int(params["created"]) if params.get("created") else None
+        expires = int(params["expires"]) if params.get("expires") else None
+    except ValueError:  # text, or a number too long to read
+        return "malformed signature times"
+    if created is None:
         return "the signature has no creation time"
-    if int(params["created"]) > now + CLOCK_SKEW:
+    if created > now + CLOCK_SKEW:
         return "the signature is from the future; check this server's clock"
-    if int(params["created"]) + MAX_AGE < now - CLOCK_SKEW or (params.get("expires")
-                                                                and int(params["expires"]) < now - CLOCK_SKEW):
+    if created + MAX_AGE < now - CLOCK_SKEW or (expires is not None and expires < now - CLOCK_SKEW):
         return "the signature expired; check this server's clock"
 
     path, _, query = target.partition("?")

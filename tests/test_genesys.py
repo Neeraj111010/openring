@@ -122,6 +122,11 @@ def test_the_signature_example_from_genesys_docs_verifies():
     assert "expired" in check(now=1641013200 + 3600)
     assert "future" in check(now=1641013200 - 3600)
     assert "not signed" in check(h={k: v for k, v in headers.items() if not k.startswith("signature")})
+    # Odd times are refused, not a crash (int() raises on text and on numbers over 4,300 digits).
+    for old, odd in (("created=1641013200", 'created="soon"'), ("created=1641013200", "created=" + "9" * 5000),
+                     ("expires=3282026430", 'expires="never"')):
+        odd_input = headers["signature-input"].replace(old, odd)
+        assert "malformed" in check(h={**headers, "signature-input": odd_input})
 
 
 def test_connections_without_the_key_or_signature_are_refused(server):
