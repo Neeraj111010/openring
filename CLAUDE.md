@@ -134,6 +134,8 @@ Only one server can use port 8000; stop the old one first, or pass `--port`.
   sandbox's proxy re-signs webhooks (they fail validation with the account token) and the media stream
   never opens, so callers hear silence. Test with an inbound call to a number you bought, or upgrade.
 - The Calls API on trial rejects the `Method`/`StatusCallbackMethod` parameters.
+- On a trial, an inbound call to a bought number works: Twilio plays its trial notice, the caller presses a
+  key, then the voice webhook runs (confirmed on a real call, 2026-11-01).
 - To reach a local server, use a tunnel (`cloudflared tunnel --url http://localhost:8000`). Quick-tunnel
   URLs change on every start: update `PUBLIC_URL` and the number's voice webhook.
 

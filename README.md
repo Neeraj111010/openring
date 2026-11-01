@@ -89,7 +89,8 @@ affiliated with any of them.
 | A 100% local, free stack: Whisper, Ollama and Kokoro, one click in the editor | |
 | Provider fallback in Vapi's format, across providers (**beta**) | |
 | Callers in any language: the assistant answers in theirs (`"language": "multi"`) | |
-| Phone calls in and out through Twilio (**beta**: tell us how it goes) | Outbound calls through Telnyx and Genesys; Plivo |
+| Incoming phone calls through Twilio, confirmed on a real call | Outbound calls through Telnyx and Genesys; Plivo |
+| Outgoing calls through Twilio (**beta**: tell us how it goes) | |
 | Campaigns: one assistant calls a list or CSV, a few at a time, greeting each person by name (**beta**) | |
 | Incoming calls through Telnyx (**beta**, see [Telnyx](#telnyx-beta)) | |
 | Genesys Cloud calls through its Audio Connector, inside your Architect flows (**beta**, see [Genesys](#genesys-cloud-beta)) | |

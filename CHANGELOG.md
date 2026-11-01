@@ -6,6 +6,12 @@ All notable changes to OpenRing are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Incoming calls through Twilio are no longer beta: confirmed on a real phone call (a caller in Brazil to a US
+  number, with Deepgram, Groq and the Kokoro voice), including interruptions and the cost record. Outgoing calls
+  through Twilio, and so campaigns, stay beta until a real one is confirmed.
+
 ## [0.1.3] - 2026-11-01
 
 ### Added

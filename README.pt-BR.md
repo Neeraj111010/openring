@@ -88,7 +88,8 @@ empresa em outubro de 2026; confira antes de decidir. O OpenRing não tem víncu
 | Stack 100% local e grátis: Whisper, Ollama e Kokoro, com um clique no editor | |
 | Provedor reserva no formato do Vapi, inclusive de outro provedor (**beta**) | |
 | Quem liga em qualquer idioma: o assistente responde no idioma dele (`"language": "multi"`) | |
-| Ligações recebidas e feitas pelo Twilio (**beta**: conte como foi) | Ligações de saída pela Telnyx e pelo Genesys; Plivo |
+| Ligações recebidas pelo Twilio, confirmadas numa ligação real | Ligações de saída pela Telnyx e pelo Genesys; Plivo |
+| Ligações feitas pelo Twilio (**beta**: conte como foi) | |
 | Campanhas: um assistente liga para uma lista ou CSV, algumas ligações por vez, chamando cada pessoa pelo nome (**beta**) | |
 | Ligações recebidas pela Telnyx (**beta**) | |
 | Ligações do Genesys Cloud pelo Audio Connector, dentro dos seus fluxos do Architect (**beta**) | |
