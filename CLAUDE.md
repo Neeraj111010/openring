@@ -61,7 +61,16 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
 - Model routes (`openring/routes.py` + `/model-route`, collection `routes`): models in order + `maxLatencyMs`
   + `cooldownMinutes`. `model.routeId` on an assistant; `routes.expand` (via `api._plan`, used wherever a plan
   is resolved) puts the first non-resting model in `model` and the rest in `fallbackModels`. A model the call
-  moved off rests in memory (`routes.let_down`), so new calls start on the next one.
+  moved off rests in memory (`routes.let_down`), so new calls start on the next one. `preset`
+  (fastest/cheapest/reliable, `routes.PRESETS`) sets `order` + `maxLatencyMs` + `cooldownMinutes`; `custom` keeps
+  its own; a PATCH touching one of them makes the route custom. "fastest" orders by the median time to first
+  answer token (`routes._speed`, last 20 per model, from Pipecat's `TTFATMetricsData` on calls and from
+  `routes.probe` via `POST /model-route/{id}/measure`; saved in the settings table as `model_speed`).
+- `openring/prices.py`: list prices. Models from `llm_prices.json` (regenerate with `scripts/update_prices.py`:
+  LiteLLM + OpenRouter), STT per minute and TTS per 1M characters hand-kept in `STT`/`TTS`, user overrides in
+  `~/.openring/prices.json`; unknown is None, never guessed. `bot.Usage` keeps usage per Pipecat processor and
+  prices it per service (`service.openring_price`, set by `providers._labeled`) into `cost` and
+  `costBreakdown.{llm,stt,tts,total,unpriced}`; `GET /prices`; "cheapest" routes rank by `prices.blended`.
 - Groq's catalog changed in 2026: Llama 3.x is gone; use `openai/gpt-oss-20b` (fast) or
   `openai/gpt-oss-120b`. Groq's Cloudflare returns 403 to Python's default urllib User-Agent.
 - Genesys Cloud (`openring/genesys.py` + `/ws/genesys`, beta): Audio Connector over AudioHook. Refused unless

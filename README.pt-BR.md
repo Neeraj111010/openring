@@ -83,8 +83,8 @@ empresa em outubro de 2026; confira antes de decidir. O OpenRing não tem víncu
 
 | Já funciona | Próximos passos |
 |---|---|
-| Teste no navegador pelo painel (WebRTC) | Roteamento por custo |
-| Rotas de modelo: modelos em ordem, compartilhados entre assistentes; o próximo assume quando um falha ou fica lento (**beta**) | |
+| Teste no navegador pelo painel (WebRTC) | Roteamento por custo de transcrição e voz |
+| Rotas de modelo: Mais rápido, Mais barato, Estável ou Custom; o próximo modelo assume quando um falha ou fica lento (**beta**) | |
 | Stack 100% local e grátis: Whisper, Ollama e Kokoro, com um clique no editor | |
 | Provedor reserva no formato do Vapi, inclusive de outro provedor (**beta**) | |
 | Quem liga em qualquer idioma: o assistente responde no idioma dele (`"language": "multi"`) | |
@@ -92,7 +92,8 @@ empresa em outubro de 2026; confira antes de decidir. O OpenRing não tem víncu
 | Campanhas: um assistente liga para uma lista ou CSV, algumas ligações por vez, chamando cada pessoa pelo nome (**beta**) | |
 | Ligações recebidas pela Telnyx (**beta**) | |
 | Ligações do Genesys Cloud pelo Audio Connector, dentro dos seus fluxos do Architect (**beta**) | |
-| APIs `/assistant`, `/phone-number`, `/call`, `/campaign` e `/tool` no formato do Vapi | Custo por ligação em dólares |
+| APIs `/assistant`, `/phone-number`, `/call`, `/campaign` e `/tool` no formato do Vapi | |
+| Custo por ligação em dólares, por provedor, a preço de tabela (`cost` e `costBreakdown`) | Custo da linha telefônica |
 | Ferramentas do Vapi: `function`, `endCall`, `transferCall` | |
 | Webhooks do Vapi: `status-update`, `conversation-update`, `end-of-call-report`, `assistant-request` | Ligações pelo WhatsApp |
 | Importação de assistentes, ferramentas e números de uma conta do Vapi | |
@@ -153,8 +154,21 @@ OmniRoute. Crie na página **Model routes** (ou `POST /model-route`) e escolha n
 começa no primeiro modelo; o próximo assume quando um falha (chave recusada, crédito acabado, limite, fora do ar)
 ou, com `maxLatencyMs`, quando demora mais que isso para começar a responder: a requisição lenta é cancelada e
 o próximo responde a mesma fala. O modelo que falhou ou ficou lento descansa por `cooldownMinutes`, e as
-próximas ligações já começam no seguinte até ele voltar. Exemplo no
+próximas ligações já começam no seguinte até ele voltar.
+
+O `preset` decide a ordem e esses dois números: `fastest` (a resposta mais rápida medida primeiro; troca depois
+de 1,5 s), `cheapest` (o menor preço primeiro, modelos locais antes dos pagos; 3 s), `reliable` (a sua ordem;
+2 s, e quem falha descansa 15 min) ou `custom` (você escolhe `order`, `maxLatencyMs` e `cooldownMinutes`). O
+"mais rápido" usa o tempo até a primeira palavra nas ligações recentes; **Measure speed** na página da rota
+mede cada modelo com uma resposta curta. Mexer num ajuste de uma rota com preset a torna `custom`. Exemplo no
 [README em inglês](README.md#model-routes-beta).
+
+### Quanto custa cada ligação
+
+Cada ligação grava quanto os provedores cobram, a preço de tabela, nos campos do Vapi: `cost` (US$) e
+`costBreakdown.llm`, `.stt`, `.tts` e `.total`; o painel mostra por ligação e por minuto. A linha telefônica
+ainda não entra. Provedor sem preço conhecido aparece em `costBreakdown.unpriced` e fica fora do total. Para
+usar os seus preços, escreva `~/.openring/prices.json` ([formato no README em inglês](README.md#what-a-call-costs)).
 
 ### Ligações por telefone
 

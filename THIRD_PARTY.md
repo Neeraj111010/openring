@@ -35,6 +35,13 @@ component, install `openring` without the `kokoro` extra and use a cloud voice s
 | [Silero VAD](https://github.com/snakers4/silero-vad) | MIT | Detects when the caller speaks; ships inside Pipecat |
 | [Whisper](https://github.com/openai/whisper) by OpenAI, as CTranslate2 conversions by [Systran](https://huggingface.co/Systran) (and [deepdml](https://huggingface.co/deepdml/faster-whisper-large-v3-turbo-ct2) for large-v3-turbo) | MIT | Only when an assistant uses the `whisper` transcriber: downloaded from Hugging Face to `~/.cache/huggingface` |
 
+## Data
+
+| Data | License | Notes |
+| --- | --- | --- |
+| Model prices from [LiteLLM](https://github.com/BerriAI/litellm)'s `model_prices_and_context_window.json` | MIT | Copied into `openring/llm_prices.json` by `scripts/update_prices.py` |
+| Model prices from [OpenRouter](https://openrouter.ai)'s public model list | Public API data | Same file, for the `openrouter` provider |
+
 ## Fonts
 
 The dashboard loads [IBM Plex Sans and IBM Plex Mono](https://github.com/IBM/plex) (SIL Open Font

@@ -53,6 +53,21 @@ def _usage(window: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _cost(window: list[dict[str, Any]]) -> dict[str, Any]:
+    """What the providers charged, at list prices, over the calls priced so far (calls record it since 0.1.3)."""
+    priced = [c for c in window if isinstance(c.get("cost"), (int, float))]
+    total = sum(float(c["cost"]) for c in priced)
+    minutes = sum(float(c.get("durationSeconds") or 0) for c in priced) / 60
+    return {
+        "calls": len(priced),
+        "total": round(total, 4),
+        "perMinute": round(total / minutes, 4) if minutes else None,
+        "perCall": round(total / len(priced), 4) if priced else None,
+        # Calls where a provider has no known price: their total leaves it out.
+        "incomplete": sum(1 for c in priced if (c.get("costBreakdown") or {}).get("unpriced")),
+    }
+
+
 def summarize(calls: list[dict[str, Any]], days: int | None = None, now: datetime | None = None) -> dict[str, Any]:
     """Totals for the last `days` days (every call when None), plus one entry per day for the chart."""
     now = now or datetime.now(timezone.utc)
@@ -114,6 +129,7 @@ def summarize(calls: list[dict[str, Any]], days: int | None = None, now: datetim
         "firstWordMedianMs": _median(first_words),
         "transferRate": round(100 * forwarded / len(ended)) if ended else None,
         "usage": _usage(window),
+        "cost": _cost(window),
         "latencyAverageMs": round(sum(t["turnLatency"] for t in turns) / len(turns)) if turns else None,
         "latencyParts": {p: round(sum(t.get(p, 0) for t in turns) / len(turns)) if turns else None
                          for p in LATENCY_PARTS},

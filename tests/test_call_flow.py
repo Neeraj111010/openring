@@ -101,7 +101,8 @@ def test_call_lifecycle(monkeypatch):
     assert call["artifact"]["messages"] == call["messages"]
     assert call["artifact"]["performanceMetrics"]["turnLatencies"] == []  # nobody spoke
     assert set(call["costBreakdown"]) == {"llmPromptTokens", "llmCompletionTokens", "ttsCharacters",
-                                          "transcriberAudioSeconds"}
+                                          "transcriberAudioSeconds", "stt", "llm", "tts", "total"}
+    assert call["cost"] == call["costBreakdown"]["total"]
 
 
 def test_media_stream_is_single_use(monkeypatch, fake_bot):

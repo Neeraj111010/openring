@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket,
 from fastapi.responses import FileResponse, JSONResponse, Response
 from loguru import logger
 
-from . import __version__, auth, campaigns, genesys, keys, overrides, providers, routes, stats, telnyx, twilio
+from . import __version__, auth, campaigns, genesys, keys, overrides, prices, providers, routes, stats, telnyx, twilio
 from .config import Settings, get_settings
 from .importer import SourceError, import_account
 from .providers import ProviderError, resolve_plan
@@ -79,6 +79,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        routes.load_speed(store)  # how fast each model answered on earlier calls, for "fastest" routes
         dialer.resume()
         for assistant in store.list("assistants", limit=10_000):  # their local models load in the background
             providers.prepare_local(assistant)
@@ -400,7 +401,26 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     @app.patch("/model-route/{route_id}", dependencies=auth_deps)
     def update_route(route_id: str, body: dict[str, Any]) -> dict[str, Any]:
         current = _get_or_404("routes", route_id)
+        if "preset" not in body and any(k in body for k in routes.SETTINGS):
+            body = {**body, "preset": "custom"}  # changing what a preset decides makes the route custom
         return routes.with_status(store.update("routes", route_id, _route_doc(body, current)))
+
+    @app.post("/model-route/{route_id}/measure", dependencies=auth_deps)
+    async def measure_route(route_id: str) -> dict[str, Any]:
+        """Ask each model of the route for one short answer and time its first word, as a call would (a few
+        tokens each). "fastest" routes order by these times and by the ones calls measure."""
+        route = _get_or_404("routes", route_id)
+        models = route.get("models") or []
+        plans = [resolve_plan({"model": m}, check_keys=False, with_fallbacks=False) for m in models]
+        results = await asyncio.gather(*(routes.probe(m, p) for m, p in zip(models, plans)))
+        routes.save_speed(store)
+        return {**routes.with_status(route), "measured": list(results)}
+
+    @app.get("/prices", dependencies=auth_deps)
+    def price_list() -> dict[str, Any]:
+        """The list prices calls are priced at: models per 1M tokens, speech-to-text per minute, voices per 1M
+        characters (with ~/.openring/prices.json applied)."""
+        return prices.table()
 
     @app.delete("/model-route/{route_id}", dependencies=auth_deps)
     def delete_route(route_id: str) -> dict[str, Any]:

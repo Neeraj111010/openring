@@ -591,6 +591,12 @@ def label(layer: str, plan: StackPlan) -> str:
 
 def _labeled(service: Any, layer: str, plan: StackPlan) -> Any:
     service.openring_label = label(layer, plan)
+    # What the call record prices this service by (prices.py); the model can be None: the provider's default.
+    service.openring_price = {
+        "transcriber": ("transcriber", plan.stt_provider, plan.stt_model, plan.stt_language),
+        "model": ("model", plan.llm_provider, plan.llm_model, None),
+        "voice": ("voice", plan.tts_provider, plan.tts_model, None),
+    }[layer]
     if layer == "model":  # which model this is, so a route can rest it after it fails or is slow
         service.openring_model = (plan.llm_provider, plan.llm_model)
     return service

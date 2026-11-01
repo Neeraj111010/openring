@@ -8,6 +8,18 @@ All notable changes to OpenRing are listed here. The format follows
 
 ### Added
 
+- Route presets, OmniRoute's mode packs cut down to what a call needs: **Fastest** (the model with the
+  quickest measured answers first), **Cheapest** (the lowest price first, local models before paid ones),
+  **Reliable** (your order, longer rest for a failing model) and **Custom** (`order`, `maxLatencyMs` and
+  `cooldownMinutes`, all yours). Changing a setting on a preset route makes it Custom.
+- Model speed: each call records how long its model took to start answering, and
+  `POST /model-route/{id}/measure` (**Measure speed** on the route's page) times one short answer from each
+  model. The route editor shows each model's speed and price, and the order the next call will try.
+- Cost per call in dollars, at list prices: `cost` and `costBreakdown.llm`, `.stt`, `.tts`, `.total` (Vapi's
+  fields), priced per provider when a call switched. Model prices ship in `openring/llm_prices.json` (from
+  LiteLLM's price list and OpenRouter's), speech-to-text and voices in `openring/prices.py`;
+  `~/.openring/prices.json` overrides them and `GET /prices` lists them. The dashboard shows the cost per
+  call, per minute and in total.
 - Model routes (beta), like OmniRoute's combos: a saved list of models, in order, that assistants share
   (`/model-route`, the **Model routes** page, and a route picker in the assistant editor). The next model
   takes over when one fails or, with `maxLatencyMs`, when it is slow to start answering: the slow request is

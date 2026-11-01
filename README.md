@@ -84,8 +84,8 @@ affiliated with any of them.
 
 | Works today | Next |
 |---|---|
-| Browser test calls from the dashboard (WebRTC) | Routing by cost |
-| Model routes: models in order, shared by assistants; the next takes over when one fails or is slow (**beta**) | |
+| Browser test calls from the dashboard (WebRTC) | Routing speech-to-text and voices by cost |
+| Model routes: Fastest, Cheapest, Reliable or Custom; the next model takes over when one fails or is slow (**beta**) | |
 | A 100% local, free stack: Whisper, Ollama and Kokoro, one click in the editor | |
 | Provider fallback in Vapi's format, across providers (**beta**) | |
 | Callers in any language: the assistant answers in theirs (`"language": "multi"`) | |
@@ -93,7 +93,8 @@ affiliated with any of them.
 | Campaigns: one assistant calls a list or CSV, a few at a time, greeting each person by name (**beta**) | |
 | Incoming calls through Telnyx (**beta**, see [Telnyx](#telnyx-beta)) | |
 | Genesys Cloud calls through its Audio Connector, inside your Architect flows (**beta**, see [Genesys](#genesys-cloud-beta)) | |
-| Vapi-style `/assistant`, `/phone-number`, `/call`, `/campaign` and `/tool` APIs | Cost per call in dollars |
+| Vapi-style `/assistant`, `/phone-number`, `/call`, `/campaign` and `/tool` APIs | |
+| Cost per call in dollars, per provider, at list prices (`cost` and `costBreakdown`) | The phone line's cost |
 | Vapi tools: `function`, `endCall`, `transferCall` | |
 | Vapi webhooks: `status-update`, `conversation-update`, `end-of-call-report`, `assistant-request` | Calls over WhatsApp |
 | Import assistants, tools and numbers from a Vapi account | |
@@ -261,18 +262,56 @@ combos. Make one on the **Model routes** page (or `POST /model-route`) and pick 
 (`"model": {"routeId": "ROUTE_ID", ...}`; the assistant keeps its own instructions and tools):
 
 ```json
-{"name": "Fast, then cheap", "maxLatencyMs": 2000, "cooldownMinutes": 5,
+{"name": "Fast, then cheap", "preset": "fastest",
  "models": [{"provider": "groq", "model": "openai/gpt-oss-20b"},
             {"provider": "openrouter", "model": "openai/gpt-4.1-mini"},
             {"provider": "ollama", "model": "llama3.2"}]}
 ```
 
-Calls start on the first model. The next one takes over when a model fails (a rejected key, no credit left,
-a rate limit, an outage) or, with `maxLatencyMs`, when it hasn't started answering after that many
-milliseconds: the slow request is cancelled and the next model answers the same turn. The model that let the
-route down rests for `cooldownMinutes`, so new calls start on the next one until it's back; the Model
-routes page shows which ones are resting. Without a route, `"maxLatencyMs"` on an assistant's `model` does
-the same for its `fallbackModels`.
+A call starts on the first model in the route's order. The next one takes over when a model fails (a rejected
+key, no credit left, a rate limit, an outage) or when it hasn't started answering after `maxLatencyMs`: the
+slow request is cancelled and the next model answers the same turn. The model that let the route down rests
+for `cooldownMinutes`, so new calls start on the next one until it's back.
+
+The `preset` sets the order and those two numbers. OmniRoute's combos offer many presets and sixteen scoring
+sliders, for a gateway that serves coding tools; a phone call needs three things (answer fast, keep going,
+cost little), so OpenRing keeps three presets, plus Custom for everything:
+
+| Preset | Order | Switches after | Rests a model |
+|---|---|---|---|
+| `fastest` | The quickest measured answer first | 1.5 s | 5 min |
+| `cheapest` | The lowest price first, local models before paid ones | 3 s | 5 min |
+| `reliable` | Yours, as listed | 2 s | 15 min |
+| `custom` | `"order"`: `listed`, `fastest` or `cheapest` | `"maxLatencyMs"` (or `null`: errors only) | `"cooldownMinutes"` |
+
+"Fastest" goes by how long each model took to start answering on your recent calls; **Measure speed** on the
+route's page (or `POST /model-route/{id}/measure`) asks each model for one short answer to time it, a few
+tokens each. "Cheapest" goes by list prices (see [What a call costs](#what-a-call-costs)). Models not
+measured or priced yet come after the others, in your order. Changing the order or a number on a preset
+route makes it `custom`. Without a route, `"maxLatencyMs"` on an assistant's `model` does the same for its
+`fallbackModels`.
+
+### What a call costs
+
+Every call records what its providers charge, at list prices, in Vapi's fields: `cost` (US$) and
+`costBreakdown.llm`, `.stt`, `.tts` and `.total`, next to the tokens, voice characters and seconds of audio it
+used. A call that switched providers is priced per provider. The dashboard shows it per call and per minute.
+The phone line (Twilio, Telnyx) isn't included yet.
+
+Model prices ship with OpenRing (`openring/llm_prices.json`, from [LiteLLM](https://github.com/BerriAI/litellm)'s
+price list and OpenRouter's model list); speech-to-text and voice prices come from each provider's pricing
+page (`openring/prices.py`). Local providers cost nothing. A provider without a known price is listed in
+`costBreakdown.unpriced` and left out of the total, never guessed. For your own rates, or a model the list
+doesn't have, write `~/.openring/prices.json` and restart OpenRing:
+
+```json
+{"llm": {"custom-llm": {"my-model": [0.2, 0.6]}},
+ "stt": {"deepgram": {"nova-3": 0.0065}},
+ "tts": {"rime-ai": {"*": 30}}}
+```
+
+Models are per 1M tokens (input, output), speech-to-text per minute, voices per 1M characters; `"*"` is any
+model of that provider. `GET /prices` shows every price in use.
 
 ### Telnyx (beta)
 

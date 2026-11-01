@@ -229,7 +229,23 @@ textarea.code { font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace;
 .field-row .field.narrow { flex: 0 1 120px; min-width: 110px; }
 .route-chain { margin: 4px 0 10px; padding-left: 20px; display: grid; gap: 4px; font-size: 13px; }
 .route-chain li { display: flex; align-items: center; gap: 8px; }
-.route-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.route-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.route-row .route-meta { flex-basis: 100%; padding-left: 26px; margin-top: -2px; font-size: 12.5px; color: var(--muted); }
+.route-row .route-meta .bad { color: var(--bad); }
+.route-how { border: 0; padding: 0; margin: 16px 0 0; min-width: 0; }
+.route-how legend { font-weight: 600; padding: 0; margin-bottom: 4px; }
+.route-how .hint { font-size: 13px; margin: 8px 0 0; }
+.presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; margin-top: 8px; }
+.preset { position: relative; display: grid; align-content: start; gap: 4px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-2); cursor: pointer; }
+.preset:hover { border-color: var(--muted); }
+.preset:has(input:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.preset:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.preset input { position: absolute; opacity: 0; pointer-events: none; }
+.preset b { font-size: 14px; }
+.preset span { font-size: 12.5px; color: var(--muted); line-height: 1.4; }
+.route-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px; margin-top: 14px; font-size: 13.5px; }
+.route-settings label { display: flex; align-items: center; gap: 8px; }
+.route-settings select { padding: 4px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-2); }
 .route-row > .num { width: 18px; text-align: right; }
 .route-row select { flex: 0 0 150px; }
 .route-row input { flex: 1; min-width: 0; }
@@ -451,6 +467,7 @@ async function api(path, opts = {}) {
 // ---- Formatting -------------------------------------------------------------------------
 const num = n => n == null ? "—" : Number(n).toLocaleString("en-US");
 const ms = n => n == null ? "—" : n >= 1000 ? (n / 1000).toFixed(2) + " s" : n + " ms";
+const usd = n => n == null ? "—" : "$" + (n === 0 ? "0" : n >= 1 ? n.toFixed(2) : n.toPrecision(2));
 const dur = s => { if (!s) return "—"; s = Math.round(s); return s < 60 ? s + "s" : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`; };
 const when = iso => { if (!iso) return ""; const d = new Date(iso), today = new Date().toDateString() === d.toDateString(); return today ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); };
 const initials = s => (s || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase();
@@ -596,7 +613,7 @@ async function viewHome() {
     ${card("Response time", "bolt", ms(s.latencyMedianMs), tone(light("latency", s.latencyMedianMs)), s.turns ? `median of ${num(s.turns)} turns · p95 ${ms(s.latencyP95Ms)}` : "No turns yet", "", light("latency", s.latencyMedianMs))}
     ${card("First word", "timer", ms(s.firstWordMedianMs), tone(light("firstWord", s.firstWordMedianMs)), s.firstWordMedianMs == null ? "No answered calls yet" : "median wait for the greeting", "", light("firstWord", s.firstWordMedianMs))}
     ${card("Tokens", "hash", num(s.usage.llmPromptTokens + s.usage.llmCompletionTokens), "", s.usage.calls ? `${num(s.usage.tokensPerCall)} per call · ${num(s.usage.ttsCharacters)} voice characters` : "Counted from this version on")}
-    ${card("Assistants", "bot", num(assistants.length), "", `${num(numbers.length)} phone number${numbers.length === 1 ? "" : "s"}`)}
+    ${card("Provider cost", "coin", s.cost.calls ? usd(s.cost.total) : "—", "", s.cost.calls ? `<span title="List prices of the models, transcribers and voices, without the phone line${s.cost.incomplete ? `. ${s.cost.incomplete} call${s.cost.incomplete === 1 ? " uses a provider" : "s use providers"} without a known price` : ""}">${usd(s.cost.perMinute)} per minute · ${usd(s.cost.perCall)} per call${s.cost.incomplete ? " · partial" : ""}</span>` : "Priced from this version on")}
   </div>
   <div class="grid2">
     <section class="panel"><header><h2>Calls per day</h2><div class="legend"><span style="--dot:var(--c1)">Calls</span><span style="--dot:var(--bad)">Failed</span></div></header>
@@ -752,7 +769,7 @@ async function viewAssistant(id) {
       const r = mr && routes.find(x => x.id === mr.value);
       $("#mfixed").hidden = !!r;
       $("#mroute").hidden = !r;
-      if (r) $("#mroute").textContent = r.models.map(x => x.model).join(" → ");
+      if (r) $("#mroute").textContent = `${PRESET_NAME[r.preset] || "Custom"}: ` + r.next.map(i => r.models[i].model).join(" → ");
     };
     if (mr) mr.onchange = showRoute;
     showRoute();
@@ -854,8 +871,8 @@ async function viewCalls() {
   const count = k => calls.filter(CALL_FILTERS[k]).length;
   const v = $("#view");
   v.innerHTML = `<div class="toolbar">${tabs([["all", "All", count("all")], ["phone", "Phone", count("phone")], ["browser", "Browser", count("browser")], ["failed", "Failed", count("failed")]], filter, "filter")}<button class="btn ghost" id="refresh">${ICON.refresh}Refresh</button></div>
-  <section class="panel">${shown.length ? `<div class="scroll"><table class="table"><thead><tr><th>Caller</th><th>Assistant</th><th class="hide-sm">Type</th><th class="num">Duration</th><th class="num hide-sm">Response</th><th>Status</th><th class="num hide-sm">When</th></tr></thead><tbody>
-    ${shown.map(c => `<tr class="link" tabindex="0" data-id="${esc(c.id)}"><td><b>${esc(caller(c))}</b></td><td>${esc(assistantOf(c, assistants))}</td><td class="hide-sm muted">${esc(TYPE[c.type] || c.type)}</td><td class="num">${dur(c.durationSeconds)}</td><td class="num hide-sm">${ms(c.artifact?.performanceMetrics?.turnLatencyAverage)}</td><td>${statusBadge(c)}</td><td class="num hide-sm muted">${when(c.createdAt)}</td></tr>`).join("")}
+  <section class="panel">${shown.length ? `<div class="scroll"><table class="table"><thead><tr><th>Caller</th><th>Assistant</th><th class="hide-sm">Type</th><th class="num">Duration</th><th class="num hide-sm">Response</th><th class="num hide-sm">Cost</th><th>Status</th><th class="num hide-sm">When</th></tr></thead><tbody>
+    ${shown.map(c => `<tr class="link" tabindex="0" data-id="${esc(c.id)}"><td><b>${esc(caller(c))}</b></td><td>${esc(assistantOf(c, assistants))}</td><td class="hide-sm muted">${esc(TYPE[c.type] || c.type)}</td><td class="num">${dur(c.durationSeconds)}</td><td class="num hide-sm">${ms(c.artifact?.performanceMetrics?.turnLatencyAverage)}</td><td class="num hide-sm">${usd(c.cost)}</td><td>${statusBadge(c)}</td><td class="num hide-sm muted">${when(c.createdAt)}</td></tr>`).join("")}
   </tbody></table></div>` : `<div class="empty">${calls.length ? "No calls match this filter." : "No calls yet. Call one of your numbers, or press Test on an assistant to talk to it from here."}</div>`}</section>`;
   $("#refresh").onclick = viewCalls;
   v.querySelectorAll("[data-filter]").forEach(b => b.onclick = () => { store.set("openring-calls-filter", b.dataset.filter); viewCalls(); });
@@ -1037,46 +1054,99 @@ async function viewCampaign(id) {
 
 // ---- Model routes: models in order, shared by assistants (like OmniRoute's combos) ----------
 const restLabel = s => s >= 60 ? `resting ${Math.ceil(s / 60)} min` : `resting ${s} s`;
-const routeRules = r => [`Switches on errors${r.maxLatencyMs ? ` and after ${(r.maxLatencyMs / 1000).toFixed(1)} s without an answer` : ""}`,
-  r.cooldownMinutes ? `rests a model ${r.cooldownMinutes} min` : "never rests a model"].join(" · ");
+// A route's preset, like OmniRoute's mode packs cut down to what a call needs; "custom" is every setting.
+const PRESETS = [
+  ["fastest", "Fastest", "The model with the quickest answers on your calls goes first. Switches after 1.5 s without an answer."],
+  ["cheapest", "Cheapest", "The lowest price goes first, free local models before paid ones. Switches after 3 s."],
+  ["reliable", "Reliable", "Your order. Switches after 2 s, and a model that fails rests 15 minutes."],
+  ["custom", "Custom", "You choose the order, how long to wait for an answer and how long a model rests."],
+];
+const PRESET_NAME = Object.fromEntries(PRESETS.map(([k, n]) => [k, n]));
+const PRESET_VALUES = { fastest: { order: "fastest", maxLatencyMs: 1500, cooldownMinutes: 5 }, cheapest: { order: "cheapest", maxLatencyMs: 3000, cooldownMinutes: 5 }, reliable: { order: "listed", maxLatencyMs: 2000, cooldownMinutes: 15 } };
+const ORDER_NAMES = { listed: "Your order", fastest: "Fastest first", cheapest: "Cheapest first" };
+const routeRules = r => [PRESET_VALUES[r.preset] ? "" : ORDER_NAMES[r.order] || ORDER_NAMES.listed, `switches on errors${r.maxLatencyMs ? ` and after ${(r.maxLatencyMs / 1000).toFixed(1)} s without an answer` : ""}`,
+  r.cooldownMinutes ? `rests a model ${r.cooldownMinutes} min` : "never rests a model"].filter(Boolean).join(" · ");
+// List prices per 1M tokens, [input, output], from GET /prices (loaded once).
+let priceList = null;
+const loadPrices = async () => priceList ??= await api("/prices").catch(() => ({ llm: {} }));
+function llmPrice(p, m) {
+  if (p === "ollama") return [0, 0];
+  const t = priceList?.llm?.[p] || {};
+  return t[m] || t[(m || "").toLowerCase()] || t["*"] || null;
+}
+const blended = x => x ? x[0] * 0.75 + x[1] * 0.25 : null;  // a call's bill is mostly input: as routes.py
+const priceText = x => !x ? "price unknown" : !x[0] && !x[1] ? "free" : `${usd(x[0])} in · ${usd(x[1])} out per 1M tokens`;
+// The order the next call tries the models in, as routes.ordered does: resting ones last, then the measured
+// (fastest) or priced (cheapest) ones, the others as listed.
+function nextOrder(models, order, info) {
+  const key = (m, i) => {
+    const s = info(m), fig = order === "fastest" ? s.firstTokenMs ?? null : order === "cheapest" ? blended(llmPrice(m.provider, m.model)) : 0;
+    return [s.restingSeconds > 0 ? 1 : 0, fig == null ? 1 : 0, fig || 0, i];
+  };
+  const cmp = (a, b) => { for (let j = 0; j < a.k.length; j++) if (a.k[j] !== b.k[j]) return a.k[j] - b.k[j]; return 0; };
+  return models.map((m, i) => ({ m, k: key(m, i) })).sort(cmp).map(x => x.m);
+}
 
 async function viewRoutes() {
   setPage("routes");
   const [list, assistants] = await Promise.all([api("/model-route"), api("/assistant")]);
   const users = r => assistants.filter(a => a.model?.routeId === r.id).length;
   const v = $("#view");
-  v.innerHTML = `<div class="toolbar"><span class="muted">Assistants on a route start on its first model. When a model fails (a rejected key, no credit, a rate limit, an outage) or is slow to answer, the next one takes over, and the one that let the route down rests for a while, so the next calls start on the next model.</span><span class="spacer"></span><a class="btn" href="#routes/new">${ICON.plus}New route</a></div>
+  v.innerHTML = `<div class="toolbar"><span class="muted">Assistants on a route start on the first model in its order: the fastest, the cheapest or yours. When a model fails (a rejected key, no credit, a rate limit, an outage) or is slow to answer, the next one takes over, and the one that let the route down rests for a while, so the next calls start on the next model.</span><span class="spacer"></span><a class="btn" href="#routes/new">${ICON.plus}New route</a></div>
   ${list.length ? `<div class="tiles">${list.map(r => `<article class="tile link" tabindex="0" data-id="${esc(r.id)}">
       <div class="head"><span class="avatar">${r.models.length}</span><div class="grow"><div class="name">${esc(r.name)}</div><div class="sub">${users(r) ? `Used by ${users(r)} assistant${users(r) === 1 ? "" : "s"}` : "No assistant uses it yet"}</div></div></div>
-      <ol class="route-chain">${r.models.map(m => `<li><span>${esc(m.provider)} · ${esc(m.model)}</span>${m.restingSeconds ? `<span class="badge warn">${esc(restLabel(m.restingSeconds))}</span>` : ""}</li>`).join("")}</ol>
-      <div class="sub">${esc(routeRules(r))}</div>
+      <ol class="route-chain">${r.next.map(i => r.models[i]).map(m => `<li><span>${esc(m.provider)} · ${esc(m.model)}</span>${m.firstTokenMs != null ? `<span class="muted">${ms(m.firstTokenMs)}</span>` : ""}${m.restingSeconds ? `<span class="badge warn">${esc(restLabel(m.restingSeconds))}</span>` : ""}</li>`).join("")}</ol>
+      <div class="sub"><b>${esc(PRESET_NAME[r.preset] || "Custom")}</b> · ${esc(routeRules(r))}</div>
     </article>`).join("")}</div>`
     : `<div class="panel empty">No routes yet. Put a fast model first and a cheaper or local one after it, so calls keep going when a provider runs out of credit or slows down.<br><a class="btn" href="#routes/new">${ICON.plus}New route</a></div>`}`;
   v.querySelectorAll(".tile").forEach(t => { t.onclick = () => go("routes/" + t.dataset.id); t.onkeydown = e => e.key === "Enter" && t.click(); });
 }
 
 async function viewRoute(id) {
-  const r = id === "new" ? { name: "", models: [{ provider: "groq", model: SUGGESTED_MODEL.groq }], maxLatencyMs: 2000, cooldownMinutes: 5 } : await api("/model-route/" + id);
+  const [r] = await Promise.all([id === "new" ? { name: "", preset: "fastest", ...PRESET_VALUES.fastest, models: [{ provider: "groq", model: SUGGESTED_MODEL.groq }] } : api("/model-route/" + id), loadPrices()]);
   setPage("routes", r.id ? r.name : "New route", "Models in order: the next one takes over when a model fails or is slow");
-  const models = r.models.map(m => ({ ...m }));
+  const models = r.models.map(({ restingSeconds: _r, firstTokenMs: _f, samples: _s, price: _p, ...m }) => m);
+  // What the server knows of each saved model: measured speed, rest left; and the last measurement's error.
+  const known = new Map(r.models.map(m => [m.provider + "|" + m.model, m]));
+  const errors = new Map();
+  const info = m => known.get(m.provider + "|" + m.model) || {};
   let ollama = [];
   const v = $("#view");
   v.innerHTML = `<div class="toolbar"><a class="btn ghost" href="#routes">← All routes</a></div>
   <section class="panel"><div class="body"><form id="f">
     <div class="field"><label for="rn">Name</label><input id="rn" required value="${esc(r.name)}" placeholder="Fast, then cheap"></div>
-    <div class="field"><label>Models, in order</label><p class="hint">The first one answers; the next takes over when it can't.</p><div id="rows"></div>
-      <button type="button" class="btn ghost small" id="add" style="margin-top:8px">${ICON.plus}Add a model</button></div>
-    <label class="consent"><input type="checkbox" id="rl" ${r.maxLatencyMs ? "checked" : ""}><span>Also switch when a model takes longer than <input id="rlms" type="number" min="300" max="30000" step="100" value="${r.maxLatencyMs || 2000}" class="inline-num" aria-label="Milliseconds"> ms to start answering</span></label>
-    <div class="field"><label for="rc">Rest a model that failed or was slow for</label><p class="hint">Minutes. Meanwhile new calls start on the next model; 0 never rests one.</p><input id="rc" type="number" min="0" max="1440" value="${r.cooldownMinutes ?? 5}" style="max-width:120px"></div>
+    <fieldset class="route-how"><legend>How it picks a model</legend>
+      <div class="presets">${PRESETS.map(([k, n, d]) => `<label class="preset"><input type="radio" name="preset" value="${k}" ${(r.preset || "custom") === k ? "checked" : ""}><b>${n}</b><span>${d}</span></label>`).join("")}</div>
+      <div class="route-settings">
+        <label>Order <select id="ro">${Object.entries(ORDER_NAMES).map(([k, n]) => option(k, n, r.order || "listed")).join("")}</select></label>
+        <label><input type="checkbox" id="rl" ${r.maxLatencyMs ? "checked" : ""}>Switch after <input id="rlms" type="number" min="300" max="30000" step="100" value="${r.maxLatencyMs || 2000}" class="inline-num" aria-label="Milliseconds"> ms without an answer</label>
+        <label>Rest a model that let the route down <input id="rc" type="number" min="0" max="1440" value="${r.cooldownMinutes ?? 5}" class="inline-num" aria-label="Minutes"> min</label>
+      </div>
+      <p class="hint muted">A preset fills these in; change one and the route becomes Custom.</p>
+    </fieldset>
+    <div class="field"><label>Models</label><p class="hint" id="nextOrder"></p><div id="rows"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button type="button" class="btn ghost small" id="add">${ICON.plus}Add a model</button>${r.id ? `<button type="button" class="btn ghost small" id="measure" title="Asks each saved model for one short answer (a few tokens each) and times its first word">${ICON.bolt}Measure speed</button>` : ""}</div></div>
     <div class="error" id="err" role="alert"></div>
     <div class="row-actions">${r.id ? `<button type="button" class="btn danger" id="del">Delete</button>` : ""}<span class="spacer"></span><a class="btn ghost" href="#routes">Cancel</a><button class="btn">${r.id ? "Save changes" : "Create route"}</button></div>
   </form></div></section>`;
+  const preset = () => $("#f").querySelector("[name=preset]:checked")?.value || "custom";
+  const order = () => $("#ro").value;
+  const meta = m => {
+    const s = info(m), err = errors.get(m.provider + "|" + m.model);
+    return [s.firstTokenMs != null ? `<span title="median of the last ${s.samples} answers">answers in ${ms(s.firstTokenMs)}</span>` : "speed not measured yet",
+      priceText(llmPrice(m.provider, m.model)), s.restingSeconds ? restLabel(s.restingSeconds) : "", err ? `<span class="bad">${esc(err)}</span>` : ""].filter(Boolean).join(" · ");
+  };
+  const showNext = () => {
+    const list = nextOrder(models.filter(m => m.provider && m.model), order(), info);
+    $("#nextOrder").textContent = list.length ? "Next call tries: " + list.map(m => m.model).join(" → ") : "";
+  };
   const rows = () => {
+    showNext();
     $("#rows").innerHTML = models.map((m, i) => `<div class="route-row" data-i="${i}"><span class="muted num">${i + 1}</span>
       <select data-k="provider" aria-label="Provider">${LLM.map(p => option(p, p, m.provider)).join("")}</select>
       <input data-k="model" value="${esc(m.model || "")}" aria-label="Model" ${m.provider === "ollama" ? 'list="routeOllama"' : ""} placeholder="model name">
       ${m.provider === "custom-llm" ? `<input data-k="url" value="${esc(m.url || "")}" aria-label="Base URL" placeholder="https://…/v1">` : ""}
-      <button type="button" class="iconbtn" data-move="-1" aria-label="Move up" ${i ? "" : "disabled"}>↑</button><button type="button" class="iconbtn" data-move="1" aria-label="Move down" ${i < models.length - 1 ? "" : "disabled"}>↓</button><button type="button" class="iconbtn" data-del="${i}" aria-label="Remove" ${models.length > 1 ? "" : "disabled"}>✕</button></div>`).join("")
+      <button type="button" class="iconbtn" data-move="-1" aria-label="Move up" ${i ? "" : "disabled"}>↑</button><button type="button" class="iconbtn" data-move="1" aria-label="Move down" ${i < models.length - 1 ? "" : "disabled"}>↓</button><button type="button" class="iconbtn" data-del="${i}" aria-label="Remove" ${models.length > 1 ? "" : "disabled"}>✕</button><span class="route-meta" data-meta="${i}">${meta(m)}</span></div>`).join("")
       + `<datalist id="routeOllama">${ollama.map(n => `<option value="${esc(n)}">`).join("")}</datalist>`;
     $("#rows").querySelectorAll(".route-row").forEach(row => {
       const i = Number(row.dataset.i);
@@ -1084,6 +1154,7 @@ async function viewRoute(id) {
         const before = models[i].provider;
         models[i][el.dataset.k] = el.value;
         if (el.dataset.k === "provider" && el.value !== before) { models[i].model = SUGGESTED_MODEL[el.value] ?? ""; rows(); }
+        else { row.querySelector("[data-meta]").innerHTML = meta(models[i]); showNext(); }
       });
       row.querySelectorAll("[data-move]").forEach(b => b.onclick = () => { const j = i + Number(b.dataset.move); [models[i], models[j]] = [models[j], models[i]]; rows(); });
       row.querySelector("[data-del]").onclick = () => { models.splice(i, 1); rows(); };
@@ -1092,11 +1163,35 @@ async function viewRoute(id) {
   rows();
   api("/providers/ollama/models").then(o => { ollama = o.models; rows(); }).catch(() => {});
   $("#add").onclick = () => { models.push({ provider: "openrouter", model: SUGGESTED_MODEL.openrouter }); rows(); };
+  // A preset fills in the settings; touching a setting makes the route custom (as OmniRoute's mode packs do).
+  $("#f").querySelectorAll("[name=preset]").forEach(x => x.onchange = () => {
+    const p = PRESET_VALUES[preset()];
+    if (p) { $("#ro").value = p.order; $("#rl").checked = true; $("#rlms").value = p.maxLatencyMs; $("#rc").value = p.cooldownMinutes; }
+    showNext();
+  });
+  ["#ro", "#rl", "#rlms", "#rc"].forEach(s => $(s).oninput = $(s).onchange = () => { $("#f").querySelector("[name=preset][value=custom]").checked = true; showNext(); });
+  const measure = () => api("/model-route/" + (r.id || "") + "/measure", { method: "POST" });
+  if (r.id) $("#measure").onclick = async () => {
+    const b = $("#measure");
+    b.disabled = true; b.lastChild.textContent = "Measuring…";
+    try {
+      const done = await measure();
+      done.models.forEach((m, i) => { known.set(m.provider + "|" + m.model, m); errors.set(m.provider + "|" + m.model, done.measured[i]?.error); });
+      rows();
+    } catch (err) { $("#err").textContent = err.message; }
+    b.disabled = false; b.lastChild.textContent = "Measure speed";
+  };
   $("#f").onsubmit = async e => {
     e.preventDefault();
-    const body = { name: $("#rn").value, models: models.map(({ restingSeconds: _r, ...m }) => m), maxLatencyMs: $("#rl").checked ? Number($("#rlms").value) : null, cooldownMinutes: Number($("#rc").value) };
-    try { await api(r.id ? "/model-route/" + r.id : "/model-route", { method: r.id ? "PATCH" : "POST", body: JSON.stringify(body) }); go("routes"); }
-    catch (err) { $("#err").textContent = err.message; }
+    const body = { name: $("#rn").value, models, preset: preset() };
+    if (body.preset === "custom") Object.assign(body, { order: order(), maxLatencyMs: $("#rl").checked ? Number($("#rlms").value) : null, cooldownMinutes: Number($("#rc").value) });
+    try {
+      const saved = await api(r.id ? "/model-route/" + r.id : "/model-route", { method: r.id ? "PATCH" : "POST", body: JSON.stringify(body) });
+      // A new "fastest" route has nothing to go by yet: time its models in the background.
+      if (saved.order === "fastest" && saved.models.some(m => m.firstTokenMs == null))
+        api("/model-route/" + saved.id + "/measure", { method: "POST" }).then(() => location.hash === "#routes" && viewRoutes()).catch(() => {});
+      go("routes");
+    } catch (err) { $("#err").textContent = err.message; }
   };
   if (r.id) $("#del").onclick = async () => { if (confirm("Delete this route? Its assistants go back to the first model, as saved.")) { await api("/model-route/" + r.id, { method: "DELETE" }); go("routes"); } };
 }
@@ -1127,6 +1222,7 @@ async function viewCall(id) {
     ${card("Duration", "clock", dur(c.durationSeconds), "")}
     ${card("Response time", "bolt", ms(pm.turnLatencyAverage), tone(light("latency", pm.turnLatencyAverage)), turns.length ? `average of ${turns.length} turns` : "", "", light("latency", pm.turnLatencyAverage))}
     ${card("First word", "timer", ms(pm.firstWordLatency), tone(light("firstWord", pm.firstWordLatency)), pm.firstWordLatency == null ? "" : "wait for the greeting", "", light("firstWord", pm.firstWordLatency))}
+    ${typeof c.cost === "number" ? card("Cost", "coin", usd(c.cost), "", `<span title="List prices, without the phone line${c.costBreakdown?.unpriced ? ". No known price for: " + esc(c.costBreakdown.unpriced.join(", ")) : ""}">model ${usd(c.costBreakdown?.llm)} · speech ${usd(c.costBreakdown?.stt)} · voice ${usd(c.costBreakdown?.tts)}${c.costBreakdown?.unpriced ? " · partial" : ""}</span>`) : ""}
     ${c.costBreakdown ? card("Tokens", "hash", num((c.costBreakdown.llmPromptTokens || 0) + (c.costBreakdown.llmCompletionTokens || 0)), "", `${num(c.costBreakdown.llmPromptTokens)} in · ${num(c.costBreakdown.llmCompletionTokens)} out · ${num(c.costBreakdown.ttsCharacters)} voice characters`) : ""}
     ${card("Messages", "bot", num(msgs.filter(m => m.role === "user" || m.role === "assistant").length), "", msgs.some(m => m.role === "tool_calls") ? `${msgs.filter(m => m.role === "tool_calls").length} tool calls` : "")}
     ${card("Type", "phone", esc(TYPE[c.type] || c.type), "", c.endedReason ? esc(c.endedReason) : "")}

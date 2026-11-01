@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import WebSocket
 from loguru import logger
 
-from . import routes, server_messages
+from . import prices, routes, server_messages
 from .config import Settings
 from .providers import StackPlan, build_services
 from .store import Store, now_iso
@@ -60,6 +60,14 @@ class Usage:
     def __init__(self) -> None:
         self.prompt_tokens = self.completion_tokens = self.tts_characters = 0
         self.audio_seconds = 0.0
+        # Per service (Pipecat's processor name), so a call that switched providers is priced per provider.
+        self.by_service: dict[str, dict[str, Any]] = {}
+
+    def _row(self, item: Any) -> dict[str, Any]:
+        row = self.by_service.setdefault(item.processor, {"model": None, "prompt": 0, "completion": 0,
+                                                         "characters": 0, "seconds": 0.0})
+        row["model"] = item.model or row["model"]
+        return row
 
     def add(self, data: list[Any]) -> None:
         from pipecat.metrics.metrics import LLMUsageMetricsData, STTUsageMetricsData, TTSUsageMetricsData
@@ -68,19 +76,63 @@ class Usage:
             if isinstance(item, LLMUsageMetricsData):
                 self.prompt_tokens += item.value.prompt_tokens
                 self.completion_tokens += item.value.completion_tokens
+                row = self._row(item)
+                row["prompt"] += item.value.prompt_tokens
+                row["completion"] += item.value.completion_tokens
             elif isinstance(item, TTSUsageMetricsData):
                 self.tts_characters += item.value
+                self._row(item)["characters"] += item.value
             elif isinstance(item, STTUsageMetricsData):
                 self.audio_seconds += item.value.audio_seconds
+                self._row(item)["seconds"] += item.value.audio_seconds
 
-    def cost_breakdown(self) -> dict[str, Any]:
-        """Vapi's `costBreakdown` usage fields, plus the seconds of audio sent to speech-to-text."""
+    def costs(self, services: list[Any]) -> dict[str, Any]:
+        """US$ at list prices (prices.py), in Vapi's `stt`, `llm`, `tts` and `total`. A provider without a known
+        price is named in `unpriced` and left out of the total."""
+        by_name = {s.name: s for s in services}
+        totals = {"stt": 0.0, "llm": 0.0, "tts": 0.0}
+        unpriced: list[str] = []
+        for name, row in self.by_service.items():
+            service = by_name.get(name)
+            if service is None or not hasattr(service, "openring_price"):
+                continue
+            layer, provider, model, language = service.openring_price
+            model = model or row["model"]
+            if layer == "model":
+                price = prices.llm(provider, model)
+                field, cost = "llm", None if price is None else (
+                    row["prompt"] * price[0] + row["completion"] * price[1]) / 1_000_000
+            elif layer == "transcriber":
+                rate = prices.stt(provider, model, language)
+                field, cost = "stt", None if rate is None else row["seconds"] / 60 * rate
+            else:
+                rate = prices.tts(provider, model)
+                field, cost = "tts", None if rate is None else row["characters"] / 1_000_000 * rate
+            if cost is None:
+                unpriced.append(service.openring_label)
+            else:
+                totals[field] += cost
+        result: dict[str, Any] = {k: round(v, 6) for k, v in totals.items()}
+        result["total"] = round(sum(totals.values()), 6)
+        if unpriced:
+            result["unpriced"] = unpriced
+        return result
+
+    def cost_breakdown(self, services: list[Any] | None = None) -> dict[str, Any]:
+        """Vapi's `costBreakdown`: usage (plus the seconds of audio sent to speech-to-text) and, given the
+        call's services, what it cost."""
         return {
             "llmPromptTokens": self.prompt_tokens,
             "llmCompletionTokens": self.completion_tokens,
             "ttsCharacters": self.tts_characters,
             "transcriberAudioSeconds": round(self.audio_seconds, 1),
+            **(self.costs(services) if services is not None else {}),
         }
+
+
+def members(service: Any) -> list[Any]:
+    """The provider services behind one pipeline step: a switcher's, or the service itself."""
+    return list(getattr(service, "services", None) or [service]) if service is not None else []
 
 
 def transcript_messages(messages: list[Any]) -> list[dict[str, Any]]:
@@ -227,6 +279,7 @@ async def run_call(
         MetricsFrame,
         TTSSpeakFrame,
     )
+    from pipecat.metrics.metrics import TTFATMetricsData
     from pipecat.observers.base_observer import BaseObserver
     from pipecat.observers.user_bot_latency_observer import MeasuredFrom, UserBotLatencyObserver
     from pipecat.pipeline.pipeline import Pipeline
@@ -245,6 +298,7 @@ async def run_call(
     turns: list[dict[str, int]] = []
     usage = Usage()
     switches: list[dict[str, str]] = []  # providers that took over from one that failed
+    services: list[Any] = []  # every provider service the call built, to price its usage
     first_word: dict[str, float | None] = {"connected": None, "spoke": None}
     outbox = server_messages.Outbox(plan.assistant, lambda: store.get("calls", call_id))
     # The setup runs inside the try as well, so the call record ends however the call does: a caller
@@ -252,6 +306,8 @@ async def run_call(
     try:
         # Loading a local voice model takes a moment; doing it off the event loop keeps other calls flowing.
         stt, llm, tts = await asyncio.to_thread(build_services, plan)
+        services = [*members(stt), *members(llm), *members(tts)]
+        by_name = {s.name: s for s in services}
         for warning in plan.warnings:
             logger.warning("call {}: {}", call_id, warning)
         speech = {"speaking": False, "last_stop": 0.0}
@@ -265,7 +321,10 @@ async def run_call(
 
             async def too_slow(seconds: float) -> None:
                 why["model"] = f"slow: no answer after {seconds:.1f} s"
-                if await llm.strategy.skip(llm.strategy.active_service) is None:
+                slow = llm.strategy.active_service
+                if getattr(slow, "openring_model", None):  # at least this slow: "fastest" routes rank it lower
+                    routes.record_speed(*slow.openring_model, seconds * 1000)
+                if await llm.strategy.skip(slow) is None:
                     why["model"] = ""
                     logger.warning("call {}: model slow ({:.1f} s) and no faster one left", call_id, seconds)
 
@@ -363,6 +422,10 @@ async def run_call(
                     speech.update(speaking=False, last_stop=time.monotonic())
                 elif isinstance(data.frame, MetricsFrame):
                     usage.add(data.frame.data)
+                    for item in data.frame.data:  # how long each model took to start answering
+                        model = getattr(by_name.get(item.processor), "openring_model", None)
+                        if isinstance(item, TTFATMetricsData) and model:
+                            routes.record_speed(*model, item.ttfat * 1000)
 
         @latency.event_handler("on_latency_breakdown")
         async def _on_latency(_observer, breakdown):
@@ -414,6 +477,8 @@ async def run_call(
         ended_reason = f"pipeline-error: {exc}"
     finally:
         transcript = transcript_messages(context.get_messages()) if context is not None else []
+        breakdown = usage.cost_breakdown(services)
+        routes.save_speed(store)
         spoke, connected = first_word["spoke"], first_word["connected"]
         first_word_ms = round((spoke - connected) * 1000) if spoke and connected else None
         call = store.update(
@@ -426,7 +491,8 @@ async def run_call(
                 "durationSeconds": round(time.monotonic() - started, 1),
                 "messages": transcript,
                 "artifact": {"messages": transcript, "performanceMetrics": performance_metrics(turns, first_word_ms)},
-                "costBreakdown": usage.cost_breakdown(),
+                "cost": breakdown["total"],
+                "costBreakdown": breakdown,
                 **({"providerFallbacks": switches} if switches else {}),
             },
         )

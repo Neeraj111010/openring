@@ -21,6 +21,7 @@ ROUTE = {"name": "Fast, then cheap", "maxLatencyMs": 2000, "cooldownMinutes": 5,
 @pytest.fixture(autouse=True)
 def nothing_resting(monkeypatch):
     monkeypatch.setattr(routes, "_resting", {})
+    monkeypatch.setattr(routes, "_speed", {})
     for k in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "ELEVENLABS_API_KEY"):
         monkeypatch.setenv(k, "fake")
 
@@ -155,3 +156,129 @@ def test_a_slow_model_hands_the_turn_to_the_next_one(stubborn):
     assert flow == ["LLMFullResponseStartFrame", "LLMFullResponseEndFrame", "LLMFullResponseStartFrame",
                     "LLMTextFrame:fast", "LLMFullResponseEndFrame"]
     assert len(slow_after) == 1 and slow_after[0] >= 0.08  # Windows timers are ~15 ms coarse
+
+
+def test_a_preset_decides_the_order_the_wait_and_the_rest():
+    fastest = routes.clean({**ROUTE, "preset": "fastest", "maxLatencyMs": 9000})
+    assert (fastest["order"], fastest["maxLatencyMs"], fastest["cooldownMinutes"]) == ("fastest", 1500, 5)
+    reliable = routes.clean({**ROUTE, "preset": "reliable"})
+    assert (reliable["order"], reliable["maxLatencyMs"], reliable["cooldownMinutes"]) == ("listed", 2000, 15)
+    custom = routes.clean({**ROUTE, "order": "cheapest", "maxLatencyMs": 2500})
+    assert (custom["preset"], custom["order"], custom["maxLatencyMs"]) == ("custom", "cheapest", 2500)
+    for change, words in (({"preset": "turbo"}, "preset"), ({"order": "random"}, "order")):
+        with pytest.raises(ValueError, match=words):
+            routes.clean({**ROUTE, **change})
+    plan = resolve_plan(routes.expand({**ASSISTANT, "model": {"routeId": "r1"}}, lookup(fastest)))
+    assert plan.max_latency_ms == 1500 and plan.route["preset"] == "fastest"
+
+
+def test_fastest_puts_the_quickest_measured_model_first():
+    route = {**ROUTE, "preset": "fastest"}
+    assert [m["provider"] for m in routes.ordered(route)] == ["groq", "openrouter", "ollama"]  # nothing measured
+    for ms in (900, 700, 800):
+        routes.record_speed("groq", "openai/gpt-oss-20b", ms)
+    routes.record_speed("ollama", "llama3.2", 300)
+    assert routes.speed("groq", "openai/gpt-oss-20b") == 800  # the median
+    # Measured ones first, quickest first; the one not measured yet after them.
+    assert [m["provider"] for m in routes.ordered(route)] == ["ollama", "groq", "openrouter"]
+    routes.rest("ollama", "llama3.2", 5)  # resting still goes last
+    assert [m["provider"] for m in routes.ordered(route)] == ["groq", "openrouter", "ollama"]
+    for _ in range(routes.SAMPLES + 5):
+        routes.record_speed("groq", "openai/gpt-oss-20b", 100)
+    assert len(routes._speed[("groq", "openai/gpt-oss-20b")]) == routes.SAMPLES
+
+
+def test_cheapest_puts_free_and_low_prices_first():
+    route = {**ROUTE, "preset": "cheapest", "models": [
+        {"provider": "openai", "model": "gpt-4.1-mini"},
+        {"provider": "custom-llm", "model": "mine", "url": "https://llm.example.com/v1"},  # no known price
+        {"provider": "groq", "model": "openai/gpt-oss-20b"},
+        {"provider": "ollama", "model": "llama3.2"},
+    ]}
+    assert [m["provider"] for m in routes.ordered(route)] == ["ollama", "groq", "openai", "custom-llm"]
+    status = routes.with_status({**route, "id": "r1"})
+    assert status["next"] == [3, 2, 0, 1]
+    assert status["models"][3]["price"] == {"input": 0.0, "output": 0.0} and status["models"][1]["price"] is None
+
+
+def test_speeds_survive_a_restart():
+    from openring.store import Store
+
+    store = Store(":memory:")
+    routes.record_speed("groq", "openai/gpt-oss-20b", 420)
+    routes.save_speed(store)
+    routes._speed.clear()
+    routes.load_speed(store)
+    assert routes.speed("groq", "openai/gpt-oss-20b") == 420
+
+
+def test_changing_a_setting_makes_a_route_custom_and_measuring_times_its_models(monkeypatch):
+    client = make_client()
+    route = client.post("/model-route", json={**ROUTE, "preset": "fastest"}, headers=AUTH).json()
+    assert (route["preset"], route["maxLatencyMs"]) == ("fastest", 1500)
+    renamed = client.patch(f"/model-route/{route['id']}", json={"name": "Quick"}, headers=AUTH).json()
+    assert renamed["preset"] == "fastest"  # a name isn't a setting
+    tuned = client.patch(f"/model-route/{route['id']}", json={"maxLatencyMs": 1800}, headers=AUTH).json()
+    assert (tuned["preset"], tuned["order"], tuned["maxLatencyMs"]) == ("custom", "fastest", 1800)
+
+    async def probe(model, plan):
+        if model["provider"] == "ollama":
+            return {"error": "Connection error."}
+        routes.record_speed(model["provider"], model["model"], 250 if model["provider"] == "openrouter" else 600)
+        return {"firstTokenMs": 250 if model["provider"] == "openrouter" else 600}
+
+    monkeypatch.setattr(routes, "probe", probe)
+    measured = client.post(f"/model-route/{route['id']}/measure", headers=AUTH).json()
+    assert [m.get("firstTokenMs") for m in measured["measured"]] == [600, 250, None]
+    assert measured["measured"][2]["error"] == "Connection error."
+    assert measured["next"] == [1, 0, 2]  # fastest first; the one that didn't answer after the measured ones
+    assert [m["firstTokenMs"] for m in measured["models"]] == [600, 250, None]
+
+
+def test_measuring_a_model_without_its_key_says_so(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY")
+    model = {"provider": "groq", "model": "openai/gpt-oss-20b"}
+    plan = resolve_plan({"model": model}, check_keys=False, with_fallbacks=False)
+    assert asyncio.run(routes.probe(model, plan)) == {"error": "no key: add GROQ_API_KEY"}
+
+
+def test_measuring_times_the_first_word_of_the_answer(monkeypatch):
+    import openai
+
+    class Chunk:
+        def __init__(self, text):
+            self.choices = [type("Choice", (), {"delta": type("Delta", (), {"content": text})()})()]
+
+    class Stream:
+        def __init__(self):
+            self.closed = False
+
+        async def __aiter__(self):
+            for text in ("", None, "Yes"):  # role and reasoning chunks come before the answer
+                await asyncio.sleep(0.05)
+                yield Chunk(text)
+
+        async def close(self):
+            self.closed = True
+
+    asked = {}
+
+    class Client:
+        def __init__(self, **options):
+            asked["options"] = options
+            self.chat = type("Chat", (), {"completions": self})()
+
+        async def create(self, **body):
+            asked["body"] = body
+            return Stream()
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", Client)
+    model = {"provider": "openrouter", "model": "openai/gpt-4.1-mini"}
+    plan = resolve_plan({"model": model}, check_keys=False, with_fallbacks=False)
+    result = asyncio.run(routes.probe(model, plan))
+    assert 120 <= result["firstTokenMs"] < 1000
+    assert asked["body"]["stream"] is True and asked["options"]["base_url"] == "https://openrouter.ai/api/v1"
+    assert routes.speed("openrouter", "openai/gpt-4.1-mini") == result["firstTokenMs"]

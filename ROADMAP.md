@@ -5,13 +5,11 @@ something, or pick an item and say you're on it. Shipped work moves to the [chan
 
 ## Next (weeks after the first release)
 
-- **Routing by cost.** Model routes already switch when a model fails or is slow (beta); next is choosing
-  the cheapest model that is fast enough, and the same for speech-to-text and voices.
+- **Routing speech-to-text and voices by cost and speed**, as model routes already do for models (beta).
 - **Faster local speech-to-text on a CPU:** streaming Moonshine for the languages it covers. The 100% local
   stack itself (Whisper, Ollama, Kokoro) is in.
-- **Cost per call in dollars.** Calls already record their tokens, voice characters and transcribed
-  seconds; next is turning them into what each provider charged, and what the same call would have cost
-  on a hosted platform.
+- **The phone line in the cost per call.** Calls already record what their models, transcribers and voices
+  cost; next is the Twilio or Telnyx minute.
 - **More telephony:** outbound calls through Telnyx and Genesys Cloud (incoming calls through both are in
   beta), and Plivo.
 - **Campaigns, next steps:** retrying busy and unanswered numbers, calling hours per time zone, and Vapi's
