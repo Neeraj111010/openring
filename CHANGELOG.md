@@ -6,6 +6,8 @@ All notable changes to OpenRing are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-01
+
 ### Changed
 
 - Incoming calls through Twilio are no longer beta: confirmed on a real phone call (a caller in Brazil to a US
@@ -18,6 +20,10 @@ All notable changes to OpenRing are listed here. The format follows
   installed: Pipecat requires it just to load its Whisper module there, though OpenRing uses faster-whisper.
 - Lists (calls, assistants...) created in the same instant could come back in either order; the newest is
   now always first.
+- Phone numbers are checked when saved (`POST`/`PATCH /phone-number`): 7 to 15 digits, with the country
+  code. Text without digits used to match any other such text, so an import could skip a real number and
+  an anonymous caller could reach a number saved by mistake; the importer now skips non-numbers with a
+  reason. The Providers page no longer scrolls sideways on a phone when the settings path is long.
 
 ### Security
 
