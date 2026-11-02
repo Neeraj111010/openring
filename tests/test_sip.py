@@ -9,8 +9,9 @@ import time
 
 import pytest
 from fastapi.testclient import TestClient
+from test_real_model_tools import Stub, _text, _tool_call
 
-from openring import sip
+from openring import bot, providers, sip
 from openring.api import create_app
 from openring.config import Settings
 from openring.store import Store
@@ -805,3 +806,75 @@ def test_shutting_down_does_not_wait_for_a_silent_carrier(monkeypatch, quiet_pro
         started = time.monotonic()
     assert time.monotonic() - started < 6
     phone.until(lambda m: not m.is_response and m.method == "BYE")  # it did say goodbye
+
+
+def _call_being_transferred(server, phone, monkeypatch, model_server):
+    """A call whose real model service asks for a transfer right away, up to the carrier accepting the REFER."""
+    url, scripts, asked = model_server
+    monkeypatch.setattr(bot, "build_services", providers.build_services)
+    monkeypatch.setattr(providers, "_build_stt", lambda plan: Stub())
+    monkeypatch.setattr(providers, "_build_tts", lambda plan: Stub())
+    tool = {"type": "transferCall", "destinations": [{"type": "number", "number": "+15550001111"}]}
+    assistant = server.post("/assistant", headers=AUTH, json={
+        "name": "Ana", "voice": {"provider": "deepgram", "voiceId": "thalia"},
+        "model": {"provider": "custom-llm", "model": "m", "url": f"{url}/ana", "tools": [tool],
+                  "messages": [{"role": "system", "content": "You are Ana."}]}}).json()
+    trunk = _trunk(server)
+    server.post("/phone-number", headers=AUTH, json={"provider": "byo-phone-number", "number": "+15557654321",
+                                                     "credentialId": trunk["id"], "assistantId": assistant["id"]})
+    scripts["ana"] = [_tool_call("transferCall", {"destination": "+15550001111"}), _text("Sorry, that line is busy.")]
+    port = _port(server)
+    phone.send(phone.invite_text(port), port)
+    answer = _answered(phone, port)
+    _ack(phone, answer, port)
+    refer, addr = phone.until(lambda m: not m.is_response and m.method == "REFER")
+    assert "+15550001111@" in refer.get("refer-to")
+    _reply(phone, refer, addr, 202)
+    return answer, port, asked
+
+
+def _notify(phone, answer, port, status, cseq):
+    body = f"SIP/2.0 {status}\r\n"
+    request = phone.in_dialog("NOTIFY", answer, port, cseq=cseq)
+    request = request.replace("Content-Length: 0", f"Content-Length: {len(body)}")
+    phone.send(request + body, port)
+    phone.until(lambda m: m.is_response and m.cseq_method == "NOTIFY" and m.cseq == cseq)
+
+
+def test_a_transfer_that_connects_ends_this_side_of_the_call(server, phone, monkeypatch, model_server):
+    answer, port, asked = _call_being_transferred(server, phone, monkeypatch, model_server)
+    _notify(phone, answer, port, "100 Trying", 5)
+    _notify(phone, answer, port, "200 OK", 6)
+    bye, addr = phone.until(lambda m: not m.is_response and m.method == "BYE")
+    _reply(phone, bye, addr, 200)
+    assert _ended(server)[0]["endedReason"] == "assistant-forwarded-call"
+    assert len(asked) == 1
+
+
+def test_a_transfer_that_fails_comes_back_to_the_assistant(server, phone, monkeypatch, model_server):
+    answer, port, asked = _call_being_transferred(server, phone, monkeypatch, model_server)
+    _notify(phone, answer, port, "100 Trying", 5)
+    _notify(phone, answer, port, "486 Busy Here", 6)
+    assert _wait(lambda: len(asked) == 2), asked  # the model hears, and tells the caller
+    told = [m["content"] for m in asked[1][1]["messages"] if m["role"] == "system"]
+    assert any("transfer" in text.lower() for text in told)
+    assert _calls(server)[0]["status"] == "in-progress"
+    phone.send(phone.in_dialog("BYE", answer, port, cseq=7), port)
+    call = _ended(server)[0]
+    assert call["endedReason"] == "customer-ended-call"  # not "forwarded": nobody was
+    assert any(m.get("message") == "Sorry, that line is busy." for m in call["messages"])
+
+
+def test_a_transfer_the_carrier_never_reports_on_comes_back_too(server, phone, monkeypatch, model_server):
+    monkeypatch.setattr(sip, "REFER_SECONDS", 0.3)
+    answer, port, asked = _call_being_transferred(server, phone, monkeypatch, model_server)
+    assert _wait(lambda: len(asked) == 2), asked
+    phone.send(phone.in_dialog("BYE", answer, port, cseq=7), port)
+    assert _ended(server)[0]["endedReason"] == "customer-ended-call"
+
+
+def test_a_carrier_that_just_hangs_up_after_a_refer_has_moved_the_call(server, phone, monkeypatch, model_server):
+    answer, port, asked = _call_being_transferred(server, phone, monkeypatch, model_server)
+    phone.send(phone.in_dialog("BYE", answer, port, cseq=5), port)
+    assert _ended(server)[0]["endedReason"] == "assistant-forwarded-call"
+    assert len(asked) == 1

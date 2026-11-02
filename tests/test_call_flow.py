@@ -399,15 +399,28 @@ def test_pipecats_own_idle_limit_waits_for_the_silence_limit_and_says_why(monkey
     assert call["endedReason"] == "silence-timed-out"  # not "customer-ended-call", which reads as a normal call
 
 
-def _transfer_on_start(monkeypatch, limits, redirect):
+def _transfer_on_start(monkeypatch, limits, redirect, interrupted=False):
     """A call whose assistant asks for a transfer as soon as it starts. Returns _scripted_call's and the hang-ups."""
     from pipecat.serializers.twilio import TwilioFrameSerializer
 
-    from openring import bot, twilio
+    from openring import bot, tools, twilio
 
     controls, hang_ups = {}, []
 
     async def transfer():
+        if interrupted:  # Pipecat cancels a tool's handler when the caller speaks
+            class Params:
+                arguments, tool_call_id = {"destination": "+15557654321"}, "t1"
+
+                @staticmethod
+                async def result_callback(_result, properties=None):
+                    pass
+
+            tool = {"type": "transferCall", "destinations": [{"type": "number", "number": "+15557654321"}]}
+            running = asyncio.ensure_future(tools.make_handler(tool, controls["call"])(Params()))
+            await asyncio.sleep(0.2)
+            running.cancel()
+            return
         try:
             await controls["call"].transfer("+15557654321", None)
         except twilio.TwilioError:
@@ -441,6 +454,23 @@ def test_a_limit_reached_during_a_transfer_does_not_hang_up_on_the_caller(monkey
     call = _wait_until_ended(store, params["callId"])
     assert redirected and call["endedReason"] == "assistant-forwarded-call"
     assert "Bye." not in said and not hang_ups
+
+
+def test_a_caller_speaking_does_not_cancel_a_transfer(monkeypatch):
+    redirected = []
+
+    async def redirect(*_args):
+        redirected.append(True)
+
+    client, store, params, _said, _hang_ups = _transfer_on_start(monkeypatch, (0, 0), redirect, interrupted=True)
+    with client.websocket_connect("/ws/twilio") as ws:
+        _handshake(ws, params)
+        for _ in range(50):
+            if redirected:
+                break
+            time.sleep(0.1)
+    call = _wait_until_ended(store, params["callId"])
+    assert redirected and call["endedReason"] == "assistant-forwarded-call"
 
 
 def test_a_transfer_whose_stream_never_closes_still_ends(monkeypatch):

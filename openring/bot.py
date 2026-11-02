@@ -35,8 +35,9 @@ CALLER_ENDED = "customer-ended-call"
 # How long a call past its limit may take to finish what it is saying: a provider that hangs must not keep the
 # line, and the bill, open.
 END_GRACE_SECONDS = 30
-# How long the limits wait for a transfer: the line going quiet (30 s at most), Twilio's answer, the stream closing.
-TRANSFER_SECONDS = 60
+# How long the limits wait for a transfer: the line going quiet (30 s at most), the carrier's answer (a SIP transfer
+# rings the other line, sip.REFER_SECONDS), the stream closing.
+TRANSFER_SECONDS = 90
 
 
 def turn_latency(breakdown: Any) -> dict[str, int]:
@@ -352,6 +353,7 @@ async def run_call(
         FunctionCallsStartedFrame,
         LLMFullResponseEndFrame,
         LLMFullResponseStartFrame,
+        LLMMessagesAppendFrame,
         LLMRunFrame,
         MetricsFrame,
         TTSSpeakFrame,
@@ -393,7 +395,7 @@ async def run_call(
     said_before: list[dict[str, Any]] = []  # the conversation with the assistants before the current one
     inherited = 0  # how much of the current assistant's context came from them
     variables: dict[str, Any] = {}  # what handoffs added to the call's variables
-    handing_off: set[asyncio.Task] = set()
+    handing_off: set[asyncio.Task] = set()  # a handoff or a transfer under way
     passed_over: set[str] = set()  # handoffs asked for while another was under way
     outbox =server_messages.Outbox(plan.assistant, lambda: store.get("calls", call_id))
     # The setup runs inside the try as well, so the call record ends however the call does: a caller
@@ -487,13 +489,24 @@ async def run_call(
             except Exception:  # the caller is still here with the assistant, and the limits apply again
                 keep_phone_line_open(transport, False)
                 ended_reason, transfer_until = CALLER_ENDED, 0.0
+                outbox.send("status-update", status="in-progress")
                 raise
+
+        async def tell_model(text: str) -> None:
+            await task.queue_frames([LLMMessagesAppendFrame([{"role": "system", "content": text}], run_llm=True)])
+
+        async def uninterrupted(work: Any) -> None:
+            """Apart from the tool call that asked for it: a caller's "okay" cancels the tool's handler, and the
+            transfer has to go on. Ends with the call, like a handoff."""
+            moving = asyncio.ensure_future(work)
+            handing_off.add(moving)
+            moving.add_done_callback(handing_off.discard)
+            await asyncio.shield(moving)
 
         def conversation() -> list[dict[str, Any]]:
             """Everything said on this call, whatever each assistant was given of it."""
-            messages = [m for m in context.get_messages() if isinstance(m, dict)]
-            prompt = sum(m.get("role") == "system" for m in messages)
-            return [*said_before, *messages[prompt + inherited:]]
+            said = [m for m in context.get_messages() if isinstance(m, dict) and m.get("role") != "system"]
+            return [*said_before, *said[inherited:]]
 
         def hand_off(destination: dict[str, Any], arguments: dict[str, Any], message: str | None,
                      tool_call_id: str) -> str | None:
@@ -568,6 +581,9 @@ async def run_call(
                 store=store,
                 messages=lambda: [m for m in context.get_messages() if isinstance(m, dict)],
                 hand_off=hand_off if plan.team else None,
+                in_charge=lambda member=member: who["plan"] is member and not handing_off,
+                tell_model=tell_model,
+                uninterrupted=uninterrupted,
             )
             groups = getattr(getattr(llm, "strategy", None), "groups", None)
             schema = None
@@ -639,6 +655,11 @@ async def run_call(
                 elif isinstance(data.frame, (FunctionCallResultFrame, FunctionCallCancelFrame)):
                     if limits:
                         limits.tool(data.frame.tool_call_id, False, time.monotonic())
+                    if isinstance(data.frame, FunctionCallResultFrame):
+                        # A tool from before a handoff: the next assistant may not have it, the record must.
+                        for row in said_before:
+                            if row.get("role") == "tool" and row.get("tool_call_id") == data.frame.tool_call_id:
+                                row["content"] = json.dumps(data.frame.result, ensure_ascii=False)
                 elif isinstance(data.frame, MetricsFrame):
                     usage.add(data.frame.data)
                     for item in data.frame.data:  # how long each model took to start answering

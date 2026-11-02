@@ -1,6 +1,10 @@
 import ipaddress
+import json
 import socket
 import sys
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -33,6 +37,50 @@ def no_internet(monkeypatch):
         return real(host, *args, **kwargs)
 
     monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+
+
+SLOW_TOOL_SECONDS = 1.8
+
+
+@pytest.fixture
+def model_server():
+    """A little OpenAI-style server on this computer, for Pipecat's real model service: it answers each path's requests
+    from its script, in order, and keeps what it was asked. `/tool` is a function tool's server, and takes a while."""
+    scripts, asked = {}, []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            who = self.path.split("/")[1]
+            if who == "tool":
+                time.sleep(SLOW_TOOL_SECONDS)
+                results = [{"toolCallId": c["id"], "result": "Found it"} for c in body["message"]["toolCallList"]]
+                answer = json.dumps({"results": results}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(answer)))
+                self.end_headers()
+                self.wfile.write(answer)
+                return
+            asked.append((who, body))
+            default = {"id": "c1", "object": "chat.completion.chunk", "created": 1, "model": "m", "choices": [
+                {"index": 0, "delta": {"role": "assistant", "content": "Okay."}, "finish_reason": "stop"}]}
+            chunks = scripts[who].pop(0) if scripts.get(who) else [default]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            for chunk in chunks:
+                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+            self.wfile.write(b"data: [DONE]\n\n")
+
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_port}", scripts, asked
+    server.shutdown()
 
 
 @pytest.fixture

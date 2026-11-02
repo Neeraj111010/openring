@@ -14,7 +14,7 @@ import asyncio
 import json
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
@@ -34,6 +34,7 @@ MAX_RESULT_CHARS = 4_000  # what the model reads of it: every word costs tokens,
 MAX_NAME_CHARS = 64  # what model APIs accept for a tool's name
 MAX_HANDOFF_VALUE_CHARS = 500  # of one value a handoff passes along
 HANDOFF_UNDER_WAY = "The call is already moving to another assistant."
+TRANSFER_FAILED = "The transfer did not go through, and the caller is still on the line with you. Tell them so."
 HEADER_NAME = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
 # What a tool's server or a webhook has no need to see of an assistant: other tools' keys and addresses, its own.
 PRIVATE_FIELDS = {"headers", "secret", "credentials", "credentialId", "credentialIds", "url", "server", "value"}
@@ -451,6 +452,10 @@ async def call_api(
     return text or "Done."
 
 
+async def _just_run(work: Coroutine[Any, Any, None]) -> None:
+    await work
+
+
 @dataclass
 class CallControls:
     """What tools can do to the live call; run_call fills these in."""
@@ -466,6 +471,12 @@ class CallControls:
     messages: Callable[[], list[dict[str, Any]]] = list  # the conversation so far
     # Moves the call to another assistant; answers why it can't, or None. Only calls with more than one assistant.
     hand_off: Callable[[dict[str, Any], dict[str, Any], str | None, str], str | None] | None = None
+    # Whether this assistant still has the call. A tool that finishes after a handoff answers no model.
+    in_charge: Callable[[], bool] = lambda: True
+    # Gives the model something to answer, in the caller's language.
+    tell_model: Callable[[str], Awaitable[None]] | None = None
+    # Runs what a caller's interruption must not stop, which cancels a tool's handler.
+    uninterrupted: Callable[[Coroutine[Any, Any, None]], Awaitable[None]] = _just_run
 
 
 def make_handler(tool: dict[str, Any], controls: CallControls):
@@ -475,7 +486,8 @@ def make_handler(tool: dict[str, Any], controls: CallControls):
     async def say_when_late() -> None:
         late = _message(tool, "request-response-delayed") or {}
         await asyncio.sleep(float(late.get("timingMilliseconds") or 5000) / 1000)
-        await controls.speak(str(late["content"]))
+        if controls.in_charge():
+            await controls.speak(str(late["content"]))
 
     async def run_function(params) -> None:
         if start := tool_message(tool, "request-start"):
@@ -509,13 +521,16 @@ def make_handler(tool: dict[str, Any], controls: CallControls):
             failed = _message(tool, "request-failed")
             if failed and failed.get("role") == "system":  # written for the model: never read out to the caller
                 result = f"{result} {failed['content']}"
-            elif failed:
+            elif failed and controls.in_charge():
                 await controls.speak(str(failed["content"]))
                 result = f"{what} The caller was just told, so don't apologize again."
         finally:
             if late is not None:
                 late.cancel()
-        await params.result_callback(result)
+        if controls.in_charge():
+            await params.result_callback(result)
+        else:  # for the record; the next assistant wouldn't know why it's being asked to speak
+            await params.result_callback(result, properties=FunctionCallResultProperties(run_llm=False))
 
     async def end_call(params) -> None:
         if start := tool_message(tool, "request-start") or controls.assistant.get("endCallMessage"):
@@ -541,7 +556,19 @@ def make_handler(tool: dict[str, Any], controls: CallControls):
             "Transferring the call.", properties=FunctionCallResultProperties(run_llm=False)
         )
         message = destination.get("message") or tool_message(tool, "request-start")
-        await controls.transfer(destination["number"], message)
+
+        async def move() -> None:
+            try:
+                await controls.transfer(destination["number"], message)
+            except Exception as exc:  # the caller is still here, waiting to hear something
+                logger.warning("the transfer to {} failed: {}", destination["number"], exc)
+                failed = _message(tool, "request-failed")
+                if failed and failed.get("role") != "system":
+                    await controls.speak(str(failed["content"]))
+                elif controls.tell_model is not None:
+                    await controls.tell_model(f"{TRANSFER_FAILED} {failed['content']}" if failed else TRANSFER_FAILED)
+
+        await controls.uninterrupted(move())
 
     async def hand_off(params) -> None:
         arguments = _arguments(params.arguments)

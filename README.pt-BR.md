@@ -220,7 +220,7 @@ tudo em `handoffs` e na transcrição. Limites, gravação e webhooks vêm do pr
 Qualquer operadora que fale SIP, sem Twilio no meio, pagando o preço da operadora. O OpenRing fala SIP e RTP (G.711, por
 UDP) sozinho. O mesmo JSON do Vapi: uma credencial `byo-sip-trunk` em `POST /credential` e um número `byo-phone-number`,
 ou **Phone numbers > SIP trunks** no painel. Ligações entram e saem pelo tronco, campanhas também, e `transferCall` usa
-SIP REFER.
+SIP REFER; se a outra linha não atender, a pessoa volta para o assistente.
 
 **A operadora precisa alcançar seu computador por UDP**, na porta 5060 e nas portas de áudio 40000-40999: precisa de
 servidor com endereço público ou redirecionamento de portas; túnel web não serve. Nada escuta até salvar um tronco, e o

@@ -238,6 +238,55 @@ def test_transfer_handler_moves_the_call_or_explains_why_not():
     assert "only work on Twilio phone calls" in params.results[0][0] and log == []
 
 
+def test_a_transfer_that_fails_gets_an_answer():
+    told = []
+
+    async def fail(_number, _message):
+        raise RuntimeError("busy")
+
+    async def tell(text):
+        told.append(text)
+
+    controls, log = _controls()
+    controls.transfer, controls.tell_model = fail, tell
+    _run(tools.make_handler(TRANSFER, controls)(Params({"destination": "+5511900000001"})))
+    assert len(told) == 1 and "did not go through" in told[0] and log == []
+
+    # The tool's own words for it, as with any tool: said to the caller, or, with role system, for the model.
+    told.clear()
+    said = {**TRANSFER, "messages": [{"type": "request-failed", "content": "That line is busy."}]}
+    _run(tools.make_handler(said, controls)(Params({"destination": "+5511900000001"})))
+    assert log == [("speak", "That line is busy.")] and told == []
+    log.clear()
+    written = {**TRANSFER, "messages": [{"type": "request-failed", "role": "system", "content": "Offer a callback."}]}
+    _run(tools.make_handler(written, controls)(Params({"destination": "+5511900000001"})))
+    assert log == [] and "Offer a callback." in told[0]
+
+
+def test_a_result_after_the_call_moved_on_wakes_no_model(monkeypatch):
+    async def answer(*_args, **_kwargs):
+        return "Found"
+
+    monkeypatch.setattr(tools, "call_server", answer)
+    controls, log = _controls()
+    params = Params({})
+    _run(tools.make_handler(BOOK, controls)(params))
+    assert params.results == [("Found", None)]  # the assistant is still on: it reads the answer as usual
+
+    controls.in_charge = lambda: False
+    params = Params({})
+    _run(tools.make_handler(BOOK, controls)(params))
+    assert params.results[0][0] == "Found" and params.results[0][1].run_llm is False
+
+    async def fails(*_args, **_kwargs):
+        raise tools.ToolError("down")
+
+    monkeypatch.setattr(tools, "call_server", fails)
+    said = {**BOOK, "messages": [{"type": "request-failed", "content": "It failed."}]}
+    _run(tools.make_handler(said, controls)(Params({})))
+    assert ("speak", "It failed.") not in log  # another assistant is talking now: not in this one's words
+
+
 def test_tools_register_on_the_real_llm_service():
     from pipecat.services.openai.llm import OpenAILLMService
 

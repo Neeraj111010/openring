@@ -42,6 +42,7 @@ STOP_SECONDS = 2  # how long shutting down waits for carriers to answer our good
 T1 = 0.5  # RFC 3261's retransmission timer
 TRANSACTION_SECONDS = 32  # its 64*T1: how long a request is resent for
 RING_SECONDS = 60  # how long an outgoing call rings before it's given up on
+REFER_SECONDS = 45  # how long a transfer may take to connect before the caller goes back to the assistant
 REGISTER_SECONDS = 300
 RETRY_REGISTER_SECONDS = 30
 REFRESH_SECONDS = 300  # gateways are hostnames: their addresses are looked up again this often
@@ -386,6 +387,7 @@ class Session:
             return
         self.over = True
         self.server.forget(self)
+        self.transfer_settled(0)
         if self.rtp is not None:
             self.rtp.close()
         data, branch = self._in_dialog("BYE")
@@ -399,13 +401,19 @@ class Session:
             return
         self.over = True
         self.server.forget(self)
+        self.transfer_settled(0)
         if self.rtp is not None:
             self.rtp.close()
         if self.on_peer_left is not None:
             await self.on_peer_left()
 
+    def transfer_settled(self, status: int) -> None:
+        if self.refer_done is not None and not self.refer_done.done():
+            self.refer_done.set_result(status)
+
     async def transfer(self, number: str) -> None:
-        """Has the carrier move the call to `number` (SIP REFER). The carrier then ends this side of it."""
+        """Has the carrier move the call to `number` (SIP REFER), and waits to hear how it went. Connected, or the
+        carrier hung up on us as it moved the call: this side is over. SipError: the caller is still here."""
         number = re.sub(r"[\s().-]", "", number)
         if not NUMBER.fullmatch(number):
             raise SipError("a SIP transfer goes to a phone number")
@@ -414,9 +422,22 @@ class Session:
         self.refer_done = loop.create_future()
         data, branch = self._in_dialog("REFER", [("Refer-To", f"<sip:{number}@{host}>"),
                                                  ("Referred-By", f"<{_uri_in(self.local_header)}>")])
-        answer = await self.server.request(data, self.address, branch)
-        if not 200 <= answer.status < 300:
-            raise SipError(f"the carrier refused the transfer ({answer.first[8:]})")
+        try:
+            answer = await self.server.request(data, self.address, branch)
+            if not 200 <= answer.status < 300:
+                raise SipError(f"the carrier refused the transfer ({answer.first[8:]})")
+            status = await asyncio.wait_for(self.refer_done, REFER_SECONDS)
+        except TimeoutError:
+            raise SipError("the carrier didn't say how the transfer went") from None
+        finally:
+            self.refer_done = None
+        if self.over:
+            return
+        if status >= 300:
+            raise SipError(f"the other line answered {status}")
+        await self.hang_up()
+        if self.on_peer_left is not None:  # the call's pipeline ends with this side of it
+            await self.on_peer_left()
 
 
 def _build(first: str, headers: list[tuple[str, str]], body: bytes = b"") -> bytes:
@@ -638,9 +659,10 @@ class Server(asyncio.DatagramProtocol):
             self.spawn(session.peer_left())
         elif method == "NOTIFY":
             self.send(_response(message, 200, "OK", addr), addr)
-            # How the transfer went: once the other line picked up, this side is done.
-            if b"SIP/2.0 2" in message.body and session.refer_done is not None:
-                self.spawn(session.hang_up())
+            # How a transfer is going, as the first line of a SIP answer: `SIP/2.0 180 Ringing`, and then the final one.
+            found = re.match(rb"\s*SIP/2\.0 (\d{3})", message.body)
+            if found and int(found.group(1)) >= 200:
+                session.transfer_settled(int(found.group(1)))
         else:
             self.send(_response(message, 405, "Method Not Allowed", addr), addr)
 

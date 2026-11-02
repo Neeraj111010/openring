@@ -413,6 +413,7 @@ and works on an assistant with no squad; whoever it names by `assistantId` comes
   `userAndAssistantMessages`, `previousAssistantMessages` or `none`. The call's record always keeps everything.
 - On taking over, it follows its own `firstMessageMode`: it says its `firstMessage`, or, with none, answers with the
   model. `assistant-waits-for-user` waits for the caller.
+- A tool still running at a handoff finishes for the record, and no model answers it.
 - The call's `handoffs` lists each change. `membersOverrides`, a member's `assistantOverrides` and `tools:append` work.
 
 The call's limits, idle messages, recording and webhooks come from the first assistant. If an assistant's providers all
@@ -438,7 +439,7 @@ curl -X POST http://localhost:8000/phone-number -H "Authorization: Bearer $OPENR
 ```
 
 Calls to the number reach the assistant, `POST /call` and campaigns dial out through the trunk, and `transferCall`
-sends a SIP REFER. A carrier that wants registration gets it with `sipRegisterPlan: {"domain": "sip.carrier.example"}`
+sends a SIP REFER; if the other line doesn't pick up, the caller goes back to the assistant. A carrier that wants registration gets it with `sipRegisterPlan: {"domain": "sip.carrier.example"}`
 in the authentication plan. `numberE164CheckEnabled: false` allows an extension like `1000`, and `customer.sipUri`
 calls a `sip:` address directly. The trunk's login goes only to its own gateways, so an address elsewhere that asks for
 one is refused.

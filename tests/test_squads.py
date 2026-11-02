@@ -234,6 +234,24 @@ def test_failover_stays_with_the_assistant_while_it_can():
     asyncio.run(go())
 
 
+def test_a_reserve_voice_that_hiccups_still_takes_over():
+    """An idle voice's socket can drop during the call. The switcher keeps that from counting against it, so the handoff
+    gets the assistant's own voice (Pipecat's services reconnect by themselves)."""
+    async def go():
+        from pipecat.processors.frame_processor import FrameDirection
+
+        ana, bia = Service("ana"), Service("bia")
+        switcher = fallback.switcher([ana, bia])
+        switcher.strategy.groups = [[ana], [bia]]
+        hiccup = ErrorFrame("socket closed", processor=bia, category=fallback.ErrorCategory.CONNECTIVITY)
+        await switcher.push_frame(hiccup, FrameDirection.UPSTREAM)
+        assert switcher.strategy.active_service is ana  # Ana goes on talking
+        await switcher.strategy.enter(1)
+        assert switcher.strategy.active_service is bia
+
+    asyncio.run(go())
+
+
 def test_team_services_share_what_they_have_in_common(monkeypatch):
     for key in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "ELEVENLABS_API_KEY"):
         monkeypatch.setenv(key, "fake")

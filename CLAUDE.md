@@ -109,7 +109,8 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
   assistant's `server.url`, reads `{"results": [{"toolCallId", "result"|"error"}]}`), `endCall`
   (endedReason `assistant-ended-call`), `transferCall` (waits until the bot stops speaking, keeps Pipecat's
   Twilio serializer from hanging up, then redirects the call with `<Dial>` TwiML; endedReason
-  `assistant-forwarded-call`; browser calls can't transfer). `model.tools` + saved `/tool` docs via
+  `assistant-forwarded-call`; browser calls can't transfer; runs apart from its handler, which an interruption cancels;
+  a failure tells the model or says `request-failed`). `model.tools` + saved `/tool` docs via
   `model.toolIds`; unsupported types are skipped with a warning. `apiRequest` (`tools.call_api`): the model fills in
   `body`, OpenRing sends it through `netguard.client()`; url, headers and `parameters` are server-side, with
   `{{variables}}` (`overrides.call_context`; percent-encoded in the URL, never in its host); only 2xx counts, no retries
@@ -133,11 +134,13 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
   member (shared STT/TTS when identical, own LLM for its tools); `Failover.enter` switches on a handoff (`entered` tells
   the switch event it's no failure; events run in tasks). `bot.run_call`'s `finish_hand_off` waits for quiet, switches layers, replaces
   the context per `carry_over`, sets tools, keeps the full transcript in `said_before`, records `call.handoffs`.
+  A tool that finishes after a handoff answers no model (`CallControls.in_charge`).
 - SIP trunks (`openring/sip.py`, `/credential`, beta): SIP over UDP and RTP (G.711) with no dependency. `sip.Server` starts when a
   `byo-sip-trunk` exists (`SIP_HOST`, `SIP_PORT`, `SIP_RTP_PORTS`, `SIP_PUBLIC_IP`). Anything not from a saved gateway is dropped
   silently; `run` (pipeline, cost) starts only on an ACK with our tag. `transport_for` is the Pipecat transport (a packet every 20 ms,
   silence included). `api.run_sip_call` runs it like any phone call; `dial` branches on `byo-phone-number`. Digest login,
-  REGISTER (`sipRegisterPlan`), REFER for `transferCall`. Passwords never leave through the API. Never tried with a real carrier.
+  REGISTER (`sipRegisterPlan`), REFER for `transferCall` (`Session.transfer` waits for the NOTIFY with the final answer,
+  `REFER_SECONDS`, and a failure comes back to the assistant). Passwords never leave through the API. Never tried with a real carrier.
 - `openring/store.py` SQLite document store (JSON docs) for assistants, phone_numbers, calls, tools, campaigns, routes, files,
   knowledge_bases, squads, credentials.
 - `openring/static/index.html` single-file dashboard (vanilla JS, no build step), styled after OmniRoute:

@@ -2,12 +2,11 @@
 computer: what the model is really sent, turn by turn. Only speech-to-text and the voice are stubs."""
 
 import json
-import threading
 import time
 import xml.etree.ElementTree as ET
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from conftest import SLOW_TOOL_SECONDS
 from fastapi.testclient import TestClient
 from pipecat.processors.frame_processor import FrameProcessor
 
@@ -25,42 +24,19 @@ def _chunk(delta, finish=None):
             "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
 
 
+def _tool_calls(*calls):
+    rows = [{"index": i, "id": f"call_{name}", "type": "function",
+             "function": {"name": name, "arguments": json.dumps(arguments)}}
+            for i, (name, arguments) in enumerate(calls)]
+    return [*[_chunk({"role": "assistant", "tool_calls": [row]}) for row in rows], _chunk({}, "tool_calls")]
+
+
 def _tool_call(name, arguments):
-    call = {"index": 0, "id": f"call_{name}", "type": "function",
-            "function": {"name": name, "arguments": json.dumps(arguments)}}
-    return [_chunk({"role": "assistant", "tool_calls": [call]}), _chunk({}, "tool_calls")]
+    return _tool_calls((name, arguments))
 
 
 def _text(words):
     return [_chunk({"role": "assistant", "content": words}), _chunk({}, "stop")]
-
-
-@pytest.fixture
-def model_server():
-    """Answers each path's requests from its script, in order, and keeps what it was asked."""
-    scripts, asked = {}, []
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_POST(self):
-            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            who = self.path.split("/")[1]
-            asked.append((who, body))
-            chunks = scripts[who].pop(0) if scripts.get(who) else _text("Okay.")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.end_headers()
-            for chunk in chunks:
-                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
-            self.wfile.write(b"data: [DONE]\n\n")
-
-        def log_message(self, *_):
-            pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    yield f"http://127.0.0.1:{server.server_port}", scripts, asked
-    server.shutdown()
 
 
 class Stub(FrameProcessor):
@@ -136,3 +112,53 @@ def test_a_call_searches_its_files_then_hands_off(monkeypatch, model_server):
     assert any(m.get("message") == "Hi, this is Bia." for m in call["messages"])
     names = [c["function"]["name"] for m in call["messages"] if m["role"] == "tool_calls" for c in m["toolCalls"]]
     assert names == ["knowledge-search", "to_bia"]  # the record keeps it all
+
+
+@pytest.mark.parametrize("plan, mode, bia_runs", [
+    ({"type": "none"}, "assistant-waits-for-user", 0),
+    ({"type": "all"}, "assistant-waits-for-user", 0),
+    ({"type": "all"}, "assistant-speaks-first-with-model-generated-message", 1),
+])
+def test_a_tool_still_running_at_a_handoff_wakes_nobody(monkeypatch, model_server, plan, mode, bia_runs):
+    """Its result arrives once the next assistant has the call. It goes in the record, and no model answers it: that
+    assistant would speak up unprompted, or answer twice."""
+    url, scripts, asked = model_server
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "fake")
+    monkeypatch.setattr(providers, "_build_stt", lambda plan: Stub())
+    monkeypatch.setattr(providers, "_build_tts", lambda plan: Stub())
+    settings = Settings(api_key="test-key", public_url="https://x.test", db_path=":memory:",
+                        validate_twilio_signature=False)
+    client = TestClient(create_app(settings, Store(":memory:")))
+
+    def assistant(name, **model):
+        return {"name": name, "voice": {"provider": "deepgram", "voiceId": "thalia"},
+                "model": {"provider": "custom-llm", "model": "m", "url": f"{url}/{name.lower()}",
+                          "messages": [{"role": "system", "content": f"You are {name}."}], **model}}
+
+    slow = {"type": "function", "server": {"url": f"{url}/tool"},
+            "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}}}
+    move = {"type": "handoff", "function": {"name": "to_bia"},
+            "destinations": [{"type": "assistant", "assistantName": "Bia", "contextEngineeringPlan": plan}]}
+    squad = client.post("/squad", json={"members": [
+        {"assistant": assistant("Ana", tools=[slow, move])},
+        {"assistant": assistant("Bia"), "assistantOverrides": {"firstMessageMode": mode}},
+    ]}, headers=AUTH)
+    assert squad.status_code == 201, squad.text
+    client.post("/phone-number", json={"number": "+15551234567", "squadId": squad.json()["id"]}, headers=AUTH)
+    scripts["ana"] = [_tool_calls(("lookup", {}), ("to_bia", {"destination": "Bia"}))]
+
+    twiml = client.post("/twilio/voice", data={"To": "+15551234567", "From": "+5511999990000", "CallSid": "CA1"}).text
+    params = {p.get("name"): p.get("value") for p in ET.fromstring(twiml).find("./Connect/Stream").findall("Parameter")}
+    with client.websocket_connect("/ws/twilio") as ws:
+        _handshake(ws, params)
+        assert _wait(lambda: asked)
+        time.sleep(SLOW_TOOL_SECONDS + 1)  # the handoff takes about a second; the tool's answer comes after it
+    store = client.app.state.store
+    assert _wait(lambda: store.get("calls", params["callId"])["status"] == "ended")
+
+    who = [name for name, _ in asked]
+    assert who.count("ana") == 1 and who.count("bia") == bia_runs, who
+    call = store.get("calls", params["callId"])
+    assert [h["to"] for h in call["handoffs"]] == ["Bia"]
+    results = {m["toolCallId"]: m["result"] for m in call["messages"] if m["role"] == "tool_call_result"}
+    assert results["call_lookup"] == "Found it"  # whatever the next assistant was given, the record has the answer
