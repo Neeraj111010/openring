@@ -253,6 +253,11 @@ textarea.code { font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace;
 .route-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
 .route-row .route-meta { flex-basis: 100%; padding-left: 26px; margin-top: -2px; font-size: 12.5px; color: var(--muted); }
 .route-row .route-meta .bad { color: var(--bad); }
+.call-recording { margin-bottom: 14px; }
+.call-recording .body { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.call-recording .muted { display: inline-flex; align-items: center; gap: 6px; }
+.call-recording .spacer { flex: 1; }
+.call-recording audio { height: 36px; max-width: 100%; }
 .route-how { border: 0; padding: 0; margin: 16px 0 0; min-width: 0; }
 .route-how legend { font-weight: 600; padding: 0; margin-bottom: 4px; }
 .route-how .hint { font-size: 13px; margin: 8px 0 0; }
@@ -792,6 +797,7 @@ async function viewAssistant(id) {
       <div class="field narrow"><label for="silence">Silence limit</label><p class="hint">Seconds</p><input id="silence" name="silence" type="number" min="5" max="3600" value="${esc(limitsShown.silence)}"></div>
       <div class="field"><label for="idle">If the caller goes quiet, say</label><p class="hint">Optional. After ${esc(a.messagePlan?.idleTimeoutSeconds ?? 10)} s without an answer, up to ${esc(a.messagePlan?.idleMessageMaxSpokenCount ?? 3)} times.</p><input id="idle" name="idle" value="${esc((a.messagePlan?.idleMessages || [])[0] || "")}" placeholder="Are you still there?"></div>
     </div>
+    <label class="consent"><input type="checkbox" name="recOn" ${a.artifactPlan?.recordingEnabled === true ? "checked" : ""}><span>Record calls, on this server. About 2 MB per minute. Many places require telling people they are being recorded, so say it in the greeting.</span></label>
     <label class="consent"><input type="checkbox" name="vmOn" ${voicemailOn ? "checked" : ""}><span>On outgoing calls, detect voicemail. A person hears the greeting a few seconds later, and Twilio charges a small fee per call.</span></label>
     <div class="field"><label for="vmMsg">Message to leave on voicemail</label><p class="hint">Optional. A sentence in the assistant's voice, or the URL of a .wav or .mp3. Without one, the call hangs up.</p><input id="vmMsg" name="vmMsg" value="${esc(a.voicemailMessage || "")}" placeholder="Hi, this is Ava from the clinic. Please call us back."></div>
     <div class="field"><label for="hook">Call report URL</label><p class="hint">Optional. We send the transcript here when a call ends.</p><input id="hook" name="hook" value="${esc((a.server || {}).url || "")}" placeholder="https://your-app.com/webhook"></div>
@@ -842,6 +848,7 @@ async function viewAssistant(id) {
         model: { ...m, ...routeModel(routes.find(r => r.id === f.get("mr")), f), messages: [...(m.messages || []).filter(x => x.role !== "system"), ...(f.get("sys") ? [{ role: "system", content: f.get("sys") }] : [])] },
         voice: { ...vo, provider: f.get("vp"), voiceId: f.get("vv") || undefined, model: f.get("vp") === (vo.provider || "kokoro") ? vo.model : undefined },
         server: f.get("hook") ? { ...(a.server || {}), url: f.get("hook") } : undefined,
+        artifactPlan: f.get("recOn") ? { ...(a.artifactPlan || {}), recordingEnabled: true } : a.artifactPlan?.recordingEnabled ? { ...a.artifactPlan, recordingEnabled: false } : a.artifactPlan,
         voicemailDetection: f.get("vmOn") ? (voicemailOn && typeof a.voicemailDetection === "object" && a.voicemailDetection) || { provider: "twilio" } : voicemailOn || a.voicemailDetection ? "off" : undefined,
         voicemailMessage: f.get("vmMsg") || (a.voicemailMessage ? "" : undefined),
         // Vapi's call limits, in seconds; untouched fields keep what was saved (or Vapi's defaults).
@@ -1349,9 +1356,28 @@ async function viewCall(id) {
   v.innerHTML = `<div class="toolbar"><a class="btn ghost" href="#calls">← All calls</a><span class="spacer"></span>${statusBadge(c)}</div>
   <div class="cards compact" style="--cols:${Math.ceil(cards.length / Math.ceil(cards.length / 4))}">${cards.join("")}</div>
   ${(c.providerFallbacks || []).map(f => `<p class="muted fallback-note">${ICON.bolt}${esc(LAYER_NAMES[f.layer] || f.layer)} switched to <b>${esc(f.to)}</b> at ${esc(new Date(f.at).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit", second: "2-digit" }))}${f.reason && f.reason !== "failed" ? ` (${esc(f.reason)})` : ""}</p>`).join("")}
+  ${c.artifact?.recordingUrl ? `<section class="panel call-recording"><div class="body"><span class="muted">${ICON.mic}Recording</span><button class="btn ghost small" id="recPlay">Load and play</button><span class="spacer"></span><button class="btn danger small" id="recDel">Delete recording</button></div></section>` : ""}
   <div class="toolbar">${tabs([["transcript", "Transcript"], ["latency", "Response time"], ["json", "JSON"]], callTab)}</div>
   <section class="panel"><div class="body">${panes[callTab]()}</div></section>`;
   v.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { callTab = b.dataset.tab; viewCall(id); });
+  // The recording needs the dashboard's header, which an <audio src> can't send, so it comes through fetch.
+  if ($("#recPlay")) $("#recPlay").onclick = async e => {
+    const b = e.currentTarget;
+    b.disabled = true; b.textContent = "Loading…";
+    try {
+      const res = await fetch("/call/" + encodeURIComponent(id) + "/recording", { headers: { "X-OpenRing": "dashboard" } });
+      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      const src = URL.createObjectURL(await res.blob());
+      const audio = Object.assign(document.createElement("audio"), { controls: true, autoplay: true, src });
+      const save = Object.assign(document.createElement("a"), { href: src, download: `call-${id}.wav`, textContent: "Download", className: "btn ghost small" });
+      b.replaceWith(audio, save);
+    } catch (err) { b.disabled = false; b.textContent = err.message; }
+  };
+  if ($("#recDel")) $("#recDel").onclick = async () => {
+    if (!confirm("Delete this call's recording for good? The transcript stays.")) return;
+    try { await api("/call/" + encodeURIComponent(id) + "/recording", { method: "DELETE" }); viewCall(id); }
+    catch (err) { alert(err.message); }
+  };
   // Follow a live call until it ends, as long as it is still on screen.
   if (c.status !== "ended") setTimeout(() => location.hash === "#calls/" + id && viewCall(id).catch(() => {}), 2000);
 }

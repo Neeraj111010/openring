@@ -42,4 +42,4 @@ select = ["E", "F", "W", "I"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["openring"]
-known-local-folder = ["test_api"]  # tests import shared fixtures from each other
+known-local-folder = ["test_api", "test_call_flow"]  # tests import shared fixtures from each other

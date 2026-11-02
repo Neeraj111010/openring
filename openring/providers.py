@@ -301,6 +301,8 @@ class StackPlan:
     idle_reset_on_speech: bool = False
     # A voicemail answered: say `first_message` (the assistant's `voicemailMessage`) and hang up.
     leave_message: bool = False
+    # Vapi's artifactPlan.recordingEnabled, off unless asked for (see recordings.py).
+    record: bool = False
 
 
 def _require_key(env_name: str | None, what: str) -> None:
@@ -361,11 +363,15 @@ def call_limits(assistant: dict[str, Any]) -> dict[str, Any]:
         raise ProviderError("voicemailMessage is a sentence, or the URL of a .wav or .mp3")
     if assistant.get("endCallMessage") is not None and not isinstance(assistant["endCallMessage"], str):
         raise ProviderError("endCallMessage must be a sentence")
+    artifact = assistant.get("artifactPlan")
+    if artifact is not None and not isinstance(artifact, dict):
+        raise ProviderError("artifactPlan must be an object")
     limits = {f: number(assistant, f, low, high) for f, low, high in LIMITS}
     idle = {f: number(plan, f, low, high) for f, low, high in IDLE_LIMITS}
     out: dict[str, Any] = {"idle_messages": [m.strip() for m in messages if m.strip()],
                            "idle_reset_on_speech": bool(plan.get("idleMessageResetCountOnUserSpeechEnabled")),
-                           "end_call_message": assistant.get("endCallMessage") or None}
+                           "end_call_message": assistant.get("endCallMessage") or None,
+                           "record": (artifact or {}).get("recordingEnabled") is True}
     for key, value in (("max_duration_seconds", limits["maxDurationSeconds"]),
                        ("silence_timeout_seconds", limits["silenceTimeoutSeconds"]),
                        ("idle_timeout_seconds", idle["idleTimeoutSeconds"]),

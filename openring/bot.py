@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import WebSocket
 from loguru import logger
 
-from . import prices, routes, server_messages
+from . import prices, recordings, routes, server_messages
 from .config import Settings
 from .providers import StackPlan, build_services
 from .store import Store, now_iso
@@ -373,6 +373,9 @@ async def run_call(
     watching: asyncio.Task | None = None
     transfer_until = 0.0  # the limits wait for a transfer in progress
     idle = {"spoken": 0}
+    recorder = recordings.Recorder(call_id) if plan.record else None
+    recording = None
+    recording_over = asyncio.Event()
     outbox = server_messages.Outbox(plan.assistant, lambda: store.get("calls", call_id))
     # The setup runs inside the try as well, so the call record ends however the call does: a caller
     # who hangs up while the services are still being built, or a provider that fails to start.
@@ -481,6 +484,19 @@ async def run_call(
                 user_idle_timeout=plan.idle_timeout_seconds if plan.idle_messages else 0,
             )
         )
+        if recorder:
+            from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
+
+            recording = AudioBufferProcessor(num_channels=2, buffer_size=recordings.BUFFER_BYTES)
+
+            @recording.event_handler("on_audio_data")
+            async def _on_audio(_buffer, audio, audio_sample_rate, channels):
+                recorder.write(bytes(audio), audio_sample_rate, channels)
+
+            @recording.event_handler("on_recording_stopped")  # comes after the last on_audio_data
+            async def _on_recording_over(_buffer):
+                recording_over.set()
+
         pipeline = Pipeline(
             [
                 transport.input(),
@@ -490,6 +506,7 @@ async def run_call(
                 *([watch] if watch is not None else []),
                 tts,
                 transport.output(),
+                *([recording] if recording is not None else []),  # after the output: what the caller really heard
                 aggregators.assistant(),
             ]
         )
@@ -592,6 +609,8 @@ async def run_call(
         async def _on_connected(_transport, _client):
             nonlocal ended_reason, limits, watching
             first_word["connected"] = time.monotonic()
+            if recording is not None:
+                await recording.start_recording()
             limits = CallLimits(plan.max_duration_seconds, plan.silence_timeout_seconds, time.monotonic())
             watching = asyncio.ensure_future(watch_limits())
             outbox.send("status-update", status="in-progress")
@@ -636,6 +655,17 @@ async def run_call(
         transcript = transcript_messages(context.get_messages()) if context is not None else []
         breakdown = usage.cost_breakdown(services)
         routes.save_speed(store)
+        recorded = False
+        if recorder:
+            if recording is not None and first_word["connected"]:
+                # What's left of the audio goes out in a task of its own: a caller who hangs up shouldn't lose it.
+                try:
+                    await recording.stop_recording()
+                    await asyncio.wait_for(recording_over.wait(), 2)
+                except Exception as exc:
+                    logger.warning("call {}: the end of the recording may be missing: {}", call_id, exc)
+            recorded = recorder.close()
+        recording_urls = {key: recordings.url_for(call_id) for key in ("recordingUrl", "stereoRecordingUrl")}
         spoke, connected = first_word["spoke"], first_word["connected"]
         first_word_ms = round((spoke - connected) * 1000) if spoke and connected else None
         call = store.update(
@@ -647,7 +677,8 @@ async def run_call(
                 "endedReason": ended_reason,
                 "durationSeconds": round(time.monotonic() - started, 1),
                 "messages": transcript,
-                "artifact": {"messages": transcript, "performanceMetrics": performance_metrics(turns, first_word_ms)},
+                "artifact": {"messages": transcript, "performanceMetrics": performance_metrics(turns, first_word_ms),
+                             **(recording_urls if recorded else {})},
                 "cost": breakdown["total"],
                 "costBreakdown": breakdown,
                 **({"providerFallbacks": switches} if switches else {}),

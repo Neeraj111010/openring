@@ -28,6 +28,7 @@ from . import (
     overrides,
     prices,
     providers,
+    recordings,
     routes,
     stats,
     telnyx,
@@ -541,6 +542,25 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     @app.get("/call", dependencies=auth_deps)
     def list_calls(limit: int = 100) -> list[dict[str, Any]]:
         return store.list("calls", limit)
+
+    @app.get("/call/{call_id}/recording", dependencies=auth_deps)
+    def call_recording(call_id: str) -> Response:
+        path = recordings.path_for(_get_or_404("calls", call_id)["id"])
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="this call has no recording")
+        # A conversation: no copies in caches along the way, and browsers play it as audio, nothing else.
+        headers = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+        return FileResponse(path, media_type="audio/wav", headers=headers)
+
+    @app.delete("/call/{call_id}/recording", dependencies=auth_deps)
+    def delete_call_recording(call_id: str) -> dict[str, Any]:
+        """Delete the audio for good (someone asked, or the disk is filling up). The transcript stays."""
+        call = _get_or_404("calls", call_id)
+        path = recordings.path_for(call["id"])
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="this call has no recording")
+        path.unlink()
+        return store.update("calls", call["id"], {"artifact": {"recordingUrl": None, "stereoRecordingUrl": None}})
 
     @app.get("/call/{call_id}", dependencies=auth_deps)
     def get_call(call_id: str) -> dict[str, Any]:

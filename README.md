@@ -171,6 +171,19 @@ quiet after the assistant spoke,
  "messagePlan": {"idleMessages": ["Are you still there?"], "idleTimeoutSeconds": 8}}
 ```
 
+### Recording calls
+
+With `"artifactPlan": {"recordingEnabled": true}`, or **Record calls** in the assistant editor, each call is saved
+as a WAV file on your server, the caller on the left and the assistant on the right, about 2 MB per minute. It's in
+a `recordings` folder next to the database (`OPENRING_RECORDINGS_DIR` moves it). The call page plays it, and
+`artifact.recordingUrl` is in the call and in the `end-of-call-report`. Fetching it needs your API key
+(`GET /call/{id}/recording`), and `DELETE /call/{id}/recording` deletes it for good. Nothing deletes old recordings
+by itself yet, so keep an eye on the disk.
+
+It's **off by default**, unlike on Vapi, where it's on. Many places require telling people they are being recorded,
+and some require their consent, so say it in the greeting and check the rules where you and your callers are.
+WAV is the only format for now: `recordingFormat` is ignored.
+
 ### Phone calls
 
 Twilio has to reach your server, so it needs a public https URL. On your own computer, start a tunnel

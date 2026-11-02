@@ -207,6 +207,17 @@ diz o `endCallMessage`. Se a pessoa fica quieta depois que o assistente falou, e
 `messagePlan.idleMessages` ("Você ainda está aí?"), até `idleMessageMaxSpokenCount` vezes. No painel, ficam
 no editor do assistente.
 
+### Gravar ligações
+
+Com `"artifactPlan": {"recordingEnabled": true}`, ou **Record calls** no editor do assistente, cada ligação vira um
+arquivo WAV no seu servidor, com quem ligou à esquerda e o assistente à direita, cerca de 2 MB por minuto. Fica numa
+pasta `recordings` ao lado do banco. A página da ligação toca o áudio; `GET /call/{id}/recording` pede a chave da
+API, e `DELETE /call/{id}/recording` apaga de vez. Nada apaga gravações antigas sozinho por enquanto: fique de olho
+no disco.
+
+Vem **desligada**, ao contrário do Vapi. A LGPD e leis de outros países podem exigir avisar a pessoa ou pedir o
+consentimento dela: diga isso na saudação e confira as regras de onde você e quem liga estão.
+
 ### Ligações por telefone
 
 O Twilio precisa alcançar o seu servidor por uma URL https pública. No seu computador, abra um túnel

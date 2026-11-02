@@ -95,6 +95,9 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
   into `MachineDetection=DetectMessageEnd` on the Calls API (synchronous: Twilio fetches the voice URL after the
   beep, with `AnsweredBy`). `api.left_on_voicemail` hangs up or `<Play>`s a recording, or sets `answeredBy` on the call
   so `run_phone_call` makes the message the (uninterruptible) greeting with `plan.leave_message`, then ends the call.
+- Recordings (`openring/recordings.py`, `artifactPlan.recordingEnabled`, off by default): Pipecat's
+  `AudioBufferProcessor` after `transport.output()`, written to `<db dir>/recordings/<call id>.wav` as it comes;
+  `GET`/`DELETE /call/{id}/recording` are behind the API key or a session. A disk error loses the recording, not the call.
 - `openring/overrides.py`: Vapi's `assistantOverrides` (deep merge) and `{{variables}}` (`customer.*`,
   `variableValues`) in `firstMessage` and `model.messages`, applied per call in `media_stream`.
 - `openring/tools.py` Vapi tools: `function` (POSTs Vapi's `tool-calls` message to `tool.server.url` or the
