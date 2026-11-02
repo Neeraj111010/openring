@@ -271,3 +271,13 @@ def test_a_broken_setting_falls_back_to_the_default(folder):
     client = make_client()
     client.app.state.store.set_setting(recordings.RETENTION_KEY, "soon")
     assert client.get("/settings/recordings", headers=AUTH).json()["retentionDays"] == 365
+
+
+def test_a_file_that_vanished_does_not_stop_the_counting_or_the_cleaning(folder):
+    client, store, call, path = _client_with_call(5000, folder)
+    try:
+        os.symlink(folder / "gone", folder / "dangling.wav")  # what a deletion in the middle of a round looks like
+    except OSError:
+        pytest.skip("symlinks need a privilege here")
+    assert client.get("/settings/recordings", headers=AUTH).json()["files"] == 1
+    assert recordings.old_recordings(365, lambda c: True) == [call["id"]]

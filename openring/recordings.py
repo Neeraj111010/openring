@@ -53,8 +53,22 @@ def retention_days(store: Any) -> int:
 
 def usage() -> dict[str, Any]:
     """The folder and what's in it, for the dashboard."""
-    files = list(directory().glob("*.wav"))
-    return {"folder": str(directory()), "files": len(files), "bytes": sum(f.stat().st_size for f in files)}
+    sizes = [size for path in directory().glob("*.wav") if (size := _size(path)) is not None]
+    return {"folder": str(directory()), "files": len(sizes), "bytes": sum(sizes)}
+
+
+def _mtime_and_size(path: Path) -> tuple[float, int] | None:
+    """None when the file is gone (deleted a moment ago, or a link to nothing): it is not there to count or clean."""
+    try:
+        info = path.stat()
+    except OSError:
+        return None
+    return info.st_mtime, info.st_size
+
+
+def _size(path: Path) -> int | None:
+    found = _mtime_and_size(path)
+    return None if found is None else found[1]
 
 
 def old_recordings(days: int, is_call: Callable[[str], bool], now: float | None = None) -> list[str]:
@@ -66,7 +80,8 @@ def old_recordings(days: int, is_call: Callable[[str], bool], now: float | None 
     found = []
     for path in directory().glob("*.wav"):
         call_id = path.stem
-        if call_id not in _writing and path.stat().st_mtime < limit and is_call(call_id):
+        found_file = _mtime_and_size(path)
+        if found_file and call_id not in _writing and found_file[0] < limit and is_call(call_id):
             found.append(call_id)
     return found
 
