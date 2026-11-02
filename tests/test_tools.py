@@ -210,6 +210,17 @@ def test_end_call_handler_hangs_up_without_another_answer():
     assert params.results[0][1].run_llm is False
 
 
+def test_end_call_says_the_end_call_message_unless_the_tool_has_its_own():
+    controls, log = _controls()
+    controls.assistant = {"endCallMessage": "Thanks for calling!"}
+    _run(tools.make_handler(END, controls)(Params({})))
+    assert log == [("speak", "Thanks for calling!"), ("end",)]
+    log.clear()
+    own = {**END, "messages": [{"type": "request-start", "content": "Bye."}]}
+    _run(tools.make_handler(own, controls)(Params({})))
+    assert log == [("speak", "Bye."), ("end",)]
+
+
 def test_transfer_handler_moves_the_call_or_explains_why_not():
     controls, log = _controls()
     params = Params({"destination": "+5511900000001"})

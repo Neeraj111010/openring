@@ -64,4 +64,8 @@ def apply(
             else m
             for m in model["messages"]
         ]}
+    plan = out.get("messagePlan")
+    if isinstance(plan, dict) and isinstance(plan.get("idleMessages"), list):
+        out["messagePlan"] = {**plan, "idleMessages": [fill(m, context) if isinstance(m, str) else m
+                                                       for m in plan["idleMessages"]]}
     return out

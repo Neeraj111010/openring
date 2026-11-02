@@ -71,9 +71,24 @@ def test_call_limits_end_a_long_call_and_a_silent_caller():
     limits.user(True, 31)
     assert limits.due(100) is None  # the caller is talking: never cut them off for silence
     limits.user(False, 100)
-    limits.bot(True)
+    limits.bot(True, 101)
     assert limits.due(140) is None  # nor while the assistant talks
-    limits.bot(False)
-    assert limits.due(129) is None and limits.due(130) == "silence-timed-out"  # 30 s after the caller's last word
-    assert limits.due(600) == "exceeded-max-duration"
+    limits.bot(False, 140)
+    assert limits.due(169) is None  # however long it talked, the caller gets the whole limit to answer
+    assert limits.due(170) == "silence-timed-out"
+    limits.model(True, 170)
+    assert limits.due(300) is None  # nor while the model works on an answer
+    limits.model(False, 300)
+    limits.tool("t1", True, 300)
+    limits.tool("t2", True, 300)
+    limits.tool("t1", False, 400)
+    assert limits.due(500) is None  # nor while a tool still runs
+    limits.tool("t2", False, 500)
+    limits.tool("t2", False, 500)  # a tool's end is seen once per direction
+    assert limits.due(529) is None and limits.due(530) == "silence-timed-out"
+    limits.model(True, 530)
+    limits.user(True, 531)  # a caller who starts talking interrupts the model
+    limits.user(False, 540)
+    assert limits.due(570) == "silence-timed-out"
+    assert limits.due(600) == "exceeded-max-duration"  # the length is a ceiling, whoever is talking
     assert CallLimits(max_duration=0, silence_timeout=0, now=0).due(10**6) is None  # 0 turns a limit off

@@ -105,6 +105,12 @@ def test_unanswered_outbound_call_is_closed_by_the_status_callback(placed):
     ({"voicemailDetection": {"provider": "vapi", "beepMaxAwaitSeconds": 20}}, "20"),
     ({"voicemailDetection": {"provider": "twilio", "beepMaxAwaitSeconds": 0}}, "3"),  # Twilio's lowest
     ({"voicemailDetection": {"provider": "twilio", "beepMaxAwaitSeconds": 60}}, "59"),  # and highest
+    ({"voicemailDetection": {"provider": "twilio", "machineDetectionTimeout": 12}}, "12"),
+    ({"voicemailDetection": {"provider": "twilio", "beepMaxAwaitSeconds": None}}, "30"),  # null is "not set"
+    ({"voicemailDetection": {"provider": "twilio", "machineDetectionTimeout": None}}, "30"),
+    ({"voicemailDetection": {"provider": "twilio", "enabled": False}}, None),  # Vapi's own way to turn it off
+    ({"voicemailDetection": {"provider": "twilio", "enabled": False}, "voicemailMessage": "Call us back."}, None),
+    ({"voicemailDetection": {"provider": "twilio", "enabled": True}}, "30"),
 ])
 def test_voicemail_detection_goes_to_twilio_when_the_assistant_asks(placed, fields, expected):
     client, a, n = _setup()
@@ -120,6 +126,7 @@ def test_voicemail_detection_goes_to_twilio_when_the_assistant_asks(placed, fiel
 @pytest.mark.parametrize("fields, words", [
     ({"voicemailDetection": "on"}, "voicemailDetection"),
     ({"voicemailDetection": {"beepMaxAwaitSeconds": 90}}, "beepMaxAwaitSeconds"),
+    ({"voicemailDetection": {"machineDetectionTimeout": "soon"}}, "machineDetectionTimeout"),
     ({"voicemailMessage": 5}, "voicemailMessage"),
 ])
 def test_voicemail_settings_are_checked(placed, fields, words):
@@ -165,6 +172,37 @@ def test_voicemail_with_a_sentence_goes_to_the_assistant_to_say_it(placed):
     twiml, call = _answered(client, a, n, "machine_end_beep", voicemailMessage="Please call us back.")
     assert "<Stream" in twiml
     assert (call["status"], call["answeredBy"]) == ("queued", "machine_end_beep")  # the stream ends the call
+
+
+@pytest.mark.parametrize("message, played", [
+    ("https://example.com/message", "https://example.com/message"),  # a link and nothing else: a recording
+    (" https://example.com/message.mp3 ", "https://example.com/message.mp3"),  # never read aloud for a stray space
+    ("https://example.com/a.wav?who=Ana Maria", "https://example.com/a.wav?who=Ana%20Maria"),  # a variable may do this
+    ("https://example.com is our site, call us.", None),  # a sentence that starts with a link is said
+])
+def test_voicemail_tells_a_recording_from_a_sentence(placed, message, played):
+    client, a, n = _setup()
+    twiml, call = _answered(client, a, n, "machine_end_beep", voicemailMessage=message)
+    if played:
+        assert ET.fromstring(twiml).find("./Play").text == played and call["endedReason"] == "voicemail"
+    else:
+        assert "<Stream" in twiml and call["status"] == "queued"
+
+
+def test_voicemail_with_only_blanks_in_the_message_hangs_up(placed):
+    client, a, n = _setup()
+    twiml, call = _answered(client, a, n, "machine_end_beep", voicemailMessage="   ")
+    assert ET.fromstring(twiml).find("./Hangup") is not None and call["endedReason"] == "voicemail"
+
+
+def test_a_replayed_machine_webhook_leaves_a_finished_call_alone(placed):
+    client, a, n = _setup()
+    client.patch(f"/assistant/{a['id']}", json={"voicemailMessage": "Call us back."}, headers=AUTH)
+    call = _call(client, n).json()
+    client.app.state.store.update("calls", call["id"], {"status": "ended", "endedReason": "customer-ended-call"})
+    _signed(client, f"/twilio/voice?callId={call['id']}", {"CallSid": "CA-out-1", "AnsweredBy": "machine_end_beep"})
+    after = client.get(f"/call/{call['id']}", headers=AUTH).json()
+    assert after["endedReason"] == "customer-ended-call" and "answeredBy" not in after
 
 
 def test_a_fax_gets_no_message(placed):

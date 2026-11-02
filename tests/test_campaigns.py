@@ -199,6 +199,9 @@ def test_variables_fill_the_greeting_and_prompt():
     assert out["firstMessage"] == "Oi Maria, aqui é da Clínica Sol."
     assert out["model"]["messages"][0]["content"] == "Fale com Maria."
     assert overrides.apply(assistant)["firstMessage"] == "Oi , aqui é da ."  # unknown variables say nothing
+    idle = {"messagePlan": {"idleMessages": ["{{customer.name}}, ainda aí?"], "idleTimeoutSeconds": 8}}
+    assert overrides.apply(idle, None, {"name": "Maria"})["messagePlan"] == {  # never read aloud with the braces
+        "idleMessages": ["Maria, ainda aí?"], "idleTimeoutSeconds": 8}
     assert assistant["firstMessage"].startswith("Oi {{")  # the saved assistant is untouched
     merged = overrides.apply(assistant, {"model": {"temperature": 0.2}})
     assert merged["model"]["temperature"] == 0.2 and merged["model"]["provider"] == "groq"

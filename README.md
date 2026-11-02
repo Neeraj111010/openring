@@ -159,9 +159,10 @@ curl -X POST http://localhost:8000/assistant \
   }'
 ```
 
-A call ends by itself after `maxDurationSeconds` (10 minutes by default), or when the caller has said nothing
-for `silenceTimeoutSeconds` (30 seconds by default), with Vapi's `endedReason` (`exceeded-max-duration`,
-`silence-timed-out`); `endCallMessage` is said first. When the caller goes quiet after the assistant spoke,
+A call ends by itself after `maxDurationSeconds` (10 minutes by default), or after `silenceTimeoutSeconds` without
+activity (30 seconds by default; the clock waits while someone talks, the model thinks or a tool runs), with Vapi's
+`endedReason` (`exceeded-max-duration`, `silence-timed-out`); `endCallMessage` is said first. When the caller goes
+quiet after the assistant spoke,
 `messagePlan.idleMessages` are said (one at random, after `idleTimeoutSeconds`, up to
 `idleMessageMaxSpokenCount` times), as on Vapi:
 

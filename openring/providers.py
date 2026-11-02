@@ -331,7 +331,7 @@ MULTILINGUAL_VOICES = {"elevenlabs", "openai"}
 
 
 # Vapi's ranges for the call limits: (field, lowest, highest).
-LIMITS = (("maxDurationSeconds", 10, 43_200), ("silenceTimeoutSeconds", 10, 3_600))
+LIMITS = (("maxDurationSeconds", 10, 43_200), ("silenceTimeoutSeconds", 5, 3_600))
 IDLE_LIMITS = (("idleTimeoutSeconds", 5, 60), ("idleMessageMaxSpokenCount", 1, 10))
 
 
@@ -356,8 +356,11 @@ def call_limits(assistant: dict[str, Any]) -> dict[str, Any]:
         raise ProviderError('voicemailDetection is "off" or an object, like {"provider": "twilio"}')
     if isinstance(detection, dict):
         number(detection, "beepMaxAwaitSeconds", 0, 60)
+        number(detection, "machineDetectionTimeout", 0, 600)
     if assistant.get("voicemailMessage") is not None and not isinstance(assistant["voicemailMessage"], str):
         raise ProviderError("voicemailMessage is a sentence, or the URL of a .wav or .mp3")
+    if assistant.get("endCallMessage") is not None and not isinstance(assistant["endCallMessage"], str):
+        raise ProviderError("endCallMessage must be a sentence")
     limits = {f: number(assistant, f, low, high) for f, low, high in LIMITS}
     idle = {f: number(plan, f, low, high) for f, low, high in IDLE_LIMITS}
     out: dict[str, Any] = {"idle_messages": [m.strip() for m in messages if m.strip()],

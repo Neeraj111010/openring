@@ -238,7 +238,7 @@ def make_handler(tool: dict[str, Any], controls: CallControls):
         await params.result_callback(result)
 
     async def end_call(params) -> None:
-        if start := tool_message(tool, "request-start"):
+        if start := tool_message(tool, "request-start") or controls.assistant.get("endCallMessage"):
             await controls.speak(start)
         await params.result_callback("The call is ending.", properties=FunctionCallResultProperties(run_llm=False))
         await controls.end_call()

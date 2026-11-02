@@ -30,6 +30,13 @@ LATENCY_PARTS = {
 LATENCY_FIELDS = (*dict.fromkeys(LATENCY_PARTS.values()), "turnLatency")
 # Phone audio is 8 kHz; browser calls keep Pipecat's defaults (16 kHz in, 24 kHz out).
 PHONE_SAMPLE_RATE = 8000
+# How a call ended, as long as nothing has said otherwise.
+CALLER_ENDED = "customer-ended-call"
+# How long a call past its limit may take to finish what it is saying: a provider that hangs must not keep the
+# line, and the bill, open.
+END_GRACE_SECONDS = 30
+# How long the limits wait for a transfer: the line going quiet (30 s at most), Twilio's answer, the stream closing.
+TRANSFER_SECONDS = 60
 
 
 def turn_latency(breakdown: Any) -> dict[str, int]:
@@ -59,26 +66,37 @@ def performance_metrics(turns: list[dict[str, int]], first_word_ms: int | None =
 class CallLimits:
     """Vapi's `maxDurationSeconds` and `silenceTimeoutSeconds`: the reason a call should end now, if any.
 
-    The clock starts when the caller connects. Silence is counted from the caller's last word (or from the
-    start), and never ends a call while someone is talking.
+    The clock starts when the caller connects. Silence is time without activity, as on Vapi: it doesn't run while
+    someone is talking, the model is working on an answer or a tool is running, and it starts over when they stop,
+    so the caller always gets the whole limit to answer.
     """
 
     def __init__(self, max_duration: float, silence_timeout: float, now: float):
         self.max_duration, self.silence_timeout = max_duration, silence_timeout
-        self.started = self.last_heard = now
-        self.user_speaking = self.bot_speaking = False
+        self.started = self.last_activity = now
+        self.user_speaking = self.bot_speaking = self.model_working = False
+        self.tools: set[str] = set()  # the tool calls still running
 
     def user(self, speaking: bool, now: float) -> None:
-        self.user_speaking, self.last_heard = speaking, now
+        self.user_speaking, self.last_activity = speaking, now
+        if speaking:  # a caller who starts talking interrupts the model
+            self.model_working = False
 
-    def bot(self, speaking: bool) -> None:
-        self.bot_speaking = speaking
+    def bot(self, speaking: bool, now: float) -> None:
+        self.bot_speaking, self.last_activity = speaking, now
+
+    def model(self, working: bool, now: float) -> None:
+        self.model_working, self.last_activity = working, now
+
+    def tool(self, call_id: str, running: bool, now: float) -> None:
+        (self.tools.add if running else self.tools.discard)(call_id)
+        self.last_activity = now
 
     def due(self, now: float) -> str | None:
         if self.max_duration and now - self.started >= self.max_duration:
             return "exceeded-max-duration"
-        quiet = not (self.user_speaking or self.bot_speaking)
-        if self.silence_timeout and quiet and now - self.last_heard >= self.silence_timeout:
+        working = self.user_speaking or self.bot_speaking or self.model_working or self.tools
+        if self.silence_timeout and not working and now - self.last_activity >= self.silence_timeout:
             return "silence-timed-out"
         return None
 
@@ -206,11 +224,11 @@ def _plain(content: Any) -> Any:
     return content
 
 
-def keep_phone_line_open(transport: Any) -> None:
+def keep_phone_line_open(transport: Any, keep: bool = True) -> None:
     """Pipecat's Twilio serializer hangs up when the pipeline stops; a transferred call must stay up."""
     serializer = getattr(getattr(transport, "_params", None), "serializer", None)
     if serializer is not None and hasattr(serializer, "_hangup_attempted"):
-        serializer._hangup_attempted = True
+        serializer._hangup_attempted = keep
 
 
 def twilio_transport(websocket: WebSocket, call_data: dict[str, Any], settings: Settings) -> Any:
@@ -316,7 +334,13 @@ async def run_call(
     from pipecat.frames.frames import (
         BotStartedSpeakingFrame,
         BotStoppedSpeakingFrame,
+        CancelFrame,
         EndFrame,
+        FunctionCallCancelFrame,
+        FunctionCallResultFrame,
+        FunctionCallsStartedFrame,
+        LLMFullResponseEndFrame,
+        LLMFullResponseStartFrame,
         LLMRunFrame,
         MetricsFrame,
         TTSSpeakFrame,
@@ -338,7 +362,7 @@ async def run_call(
     )
 
     started = time.monotonic()  # the caller already marked the call in-progress
-    ended_reason = "customer-ended-call"
+    ended_reason = CALLER_ENDED
     context = None
     turns: list[dict[str, int]] = []
     usage = Usage()
@@ -347,6 +371,7 @@ async def run_call(
     first_word: dict[str, float | None] = {"connected": None, "spoke": None}
     limits: CallLimits | None = None  # set when the caller connects
     watching: asyncio.Task | None = None
+    transfer_until = 0.0  # the limits wait for a transfer in progress
     idle = {"spoken": 0}
     outbox = server_messages.Outbox(plan.assistant, lambda: store.get("calls", call_id))
     # The setup runs inside the try as well, so the call record ends however the call does: a caller
@@ -422,15 +447,21 @@ async def run_call(
             await asyncio.sleep(0.3)
 
         async def transfer_to(number: str, message: str | None) -> None:
-            nonlocal ended_reason
-            if message:
-                await speak(message)
-            await wait_until_quiet(expect_speech=bool(message))
-            keep_phone_line_open(transport)
-            ended_reason = "assistant-forwarded-call"
-            logger.info("call {} transferred to {}", call_id, number)
-            outbox.send("status-update", status="forwarding", destination={"type": "number", "number": number})
-            await transfer(number)
+            nonlocal ended_reason, transfer_until
+            transfer_until = time.monotonic() + TRANSFER_SECONDS  # a limit must not hang up on a caller being moved
+            try:
+                if message:
+                    await speak(message)
+                await wait_until_quiet(expect_speech=bool(message))
+                keep_phone_line_open(transport)
+                ended_reason = "assistant-forwarded-call"
+                logger.info("call {} transferred to {}", call_id, number)
+                outbox.send("status-update", status="forwarding", destination={"type": "number", "number": number})
+                await transfer(number)
+            except Exception:  # the caller is still here with the assistant, and the limits apply again
+                keep_phone_line_open(transport, False)
+                ended_reason, transfer_until = CALLER_ENDED, 0.0
+                raise
 
 
         controls = CallControls(
@@ -469,19 +500,28 @@ async def run_call(
                 if isinstance(data.frame, BotStartedSpeakingFrame):
                     speech["speaking"] = True
                     if limits:
-                        limits.bot(True)
+                        limits.bot(True, time.monotonic())
                     if first_word["connected"] and not first_word["spoke"]:
                         first_word["spoke"] = time.monotonic()
                 elif isinstance(data.frame, BotStoppedSpeakingFrame):
                     speech.update(speaking=False, last_stop=time.monotonic())
                     if limits:
-                        limits.bot(False)
+                        limits.bot(False, time.monotonic())
                 elif isinstance(data.frame, (UserStartedSpeakingFrame, UserStoppedSpeakingFrame)):
                     started = isinstance(data.frame, UserStartedSpeakingFrame)
                     if limits:
                         limits.user(started, time.monotonic())
                     if started and plan.idle_reset_on_speech:
                         idle["spoken"] = 0
+                elif isinstance(data.frame, (LLMFullResponseStartFrame, LLMFullResponseEndFrame)):
+                    if limits:
+                        limits.model(isinstance(data.frame, LLMFullResponseStartFrame), time.monotonic())
+                elif isinstance(data.frame, FunctionCallsStartedFrame):
+                    for function_call in data.frame.function_calls if limits else ():
+                        limits.tool(function_call.tool_call_id, True, time.monotonic())
+                elif isinstance(data.frame, (FunctionCallResultFrame, FunctionCallCancelFrame)):
+                    if limits:
+                        limits.tool(data.frame.tool_call_id, False, time.monotonic())
                 elif isinstance(data.frame, MetricsFrame):
                     usage.add(data.frame.data)
                     for item in data.frame.data:  # how long each model took to start answering
@@ -500,6 +540,8 @@ async def run_call(
             pipeline,
             params=PipelineParams(enable_metrics=True, enable_usage_metrics=True, **rates),
             observers=[latency, SpeechObserver(observe_every_push=False)],
+            # Pipecat gives up on a call with no activity after 5 minutes: never before the silence limit.
+            idle_timeout_secs=max(300, plan.silence_timeout_seconds + 60),
             # A layer that can no longer work (a rejected key, no credit, an outage) with no fallback left to take
             # over ends the call: Pipecat's default carries on, leaving the caller in silence.
             processor_unusable_policy=ProcessorUnusablePolicy.END,
@@ -513,19 +555,31 @@ async def run_call(
                 ended_reason = f"pipeline-error: {what_failed(failed)} stopped working: {short_error(frame.error)}"
                 logger.warning("call {} ends: {}", call_id, ended_reason)
 
+        @task.event_handler("on_idle_timeout")
+        async def _on_idle_timeout(_task):
+            nonlocal ended_reason
+            if ended_reason == CALLER_ENDED:
+                ended_reason = "silence-timed-out"
+
         async def watch_limits() -> None:
-            """End the call when it has lasted too long, or the caller has been silent too long."""
+            """End the call when it has lasted too long or had no activity for too long, and see that it does end."""
             nonlocal ended_reason
             while True:
                 await asyncio.sleep(0.5)
                 reason = limits.due(time.monotonic()) if limits else None
-                if reason:
-                    ended_reason = reason
-                    logger.info("call {} ending: {}", call_id, reason)
-                    if plan.end_call_message:
-                        await speak(plan.end_call_message)
-                    await task.queue_frames([EndFrame()])  # after whatever is still being said
-                    return
+                if reason and time.monotonic() >= transfer_until:
+                    break
+            if ended_reason == CALLER_ENDED:  # a call already ending for another reason keeps that reason
+                ended_reason = reason
+                logger.info("call {} ending: {}", call_id, reason)
+                if plan.end_call_message:
+                    await speak(plan.end_call_message)
+                await task.queue_frames([EndFrame()])  # after whatever is still being said
+            await asyncio.sleep(END_GRACE_SECONDS)
+            logger.warning("call {}: not finished {} s after {}; cutting it off", call_id, END_GRACE_SECONDS, reason)
+            await task.cancel()
+            # That waits forever behind an EndFrame a provider is holding up, so the pipeline hears it directly too.
+            await task.pipeline.queue_frame(CancelFrame())
 
         if plan.idle_messages:
             @aggregators.user().event_handler("on_user_turn_idle")

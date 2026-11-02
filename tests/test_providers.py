@@ -203,8 +203,11 @@ def test_call_limits_follow_vapi_fields_and_defaults():
     assert (plan.max_duration_seconds, plan.silence_timeout_seconds, plan.end_call_message) == (120, 15, "Bye for now.")
     assert (plan.idle_messages, plan.idle_timeout_seconds, plan.idle_max_spoken, plan.idle_reset_on_speech) == (
         ["Are you still there?"], 8, 2, True)
+    assert resolve_plan({**assistant(), "silenceTimeoutSeconds": 5}, check_keys=False).silence_timeout_seconds == 5
     for change, words in (({"maxDurationSeconds": 5}, "maxDurationSeconds"),
                           ({"silenceTimeoutSeconds": "30"}, "silenceTimeoutSeconds"),
+                          ({"silenceTimeoutSeconds": 4}, "silenceTimeoutSeconds"),
+                          ({"endCallMessage": 123}, "endCallMessage"),
                           ({"messagePlan": {"idleTimeoutSeconds": 1}}, "idleTimeoutSeconds"),
                           ({"messagePlan": {"idleMessages": "hello"}}, "idleMessages")):
         with pytest.raises(ProviderError, match=words):

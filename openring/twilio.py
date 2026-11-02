@@ -5,8 +5,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import re
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 from xml.sax.saxutils import escape, quoteattr
 
 import httpx
@@ -24,10 +25,11 @@ def machine_detection(assistant: dict[str, Any]) -> dict[str, str]:
     `voicemailDetection` object or a `voicemailMessage`, off with "off". Twilio waits for the beep before it asks
     what to play, so a message lands in the recording; a person gets the greeting a few seconds later."""
     detection = assistant.get("voicemailDetection")
-    if detection == "off" or not (isinstance(detection, dict) or assistant.get("voicemailMessage")):
-        return {}
     plan = detection if isinstance(detection, dict) else {}
-    wait = plan.get("beepMaxAwaitSeconds", plan.get("machineDetectionTimeout", 30))
+    asked = isinstance(detection, dict) or assistant.get("voicemailMessage")
+    if detection == "off" or plan.get("enabled") is False or not asked:
+        return {}
+    wait = next((plan[k] for k in ("beepMaxAwaitSeconds", "machineDetectionTimeout") if plan.get(k) is not None), 30)
     return {"MachineDetection": "DetectMessageEnd", "MachineDetectionTimeout": str(min(max(round(wait), 3), 59))}
 
 
@@ -93,7 +95,14 @@ def dial_twiml(number: str) -> str:
     return f'<?xml version="1.0" encoding="UTF-8"?><Response><Dial>{escape(number)}</Dial></Response>'
 
 
+def is_recording(message: str) -> bool:
+    """Whether a `voicemailMessage` is a recording to play, not a sentence that happens to start with a link."""
+    return bool(re.fullmatch(r"https?://\S+", message) or re.match(r"https?://\S+\.(wav|mp3)\b", message, re.I))
+
+
 def play_twiml(url: str) -> str:
+    # A {{variable}} in the URL may hold spaces and other characters a URL can't carry.
+    url = quote(url, safe="/:?&=#%+,;@!$'()*[]~")
     return f'<?xml version="1.0" encoding="UTF-8"?><Response><Play>{escape(url)}</Play><Hangup/></Response>'
 
 

@@ -5,6 +5,7 @@ call is still tracked from start to finish and the transcript is saved. The othe
 tests swap the pipeline for a stub to check which media streams are accepted.
 """
 
+import asyncio
 import json
 import time
 import xml.etree.ElementTree as ET
@@ -20,13 +21,13 @@ from openring.store import Store
 from test_api import ASSISTANT, AUTH
 
 
-def _answered_call(monkeypatch):
+def _answered_call(monkeypatch, **server):
     """A server with one assistant on +15551234567 whose Twilio webhook already answered a call."""
     for k in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "ELEVENLABS_API_KEY"):
         monkeypatch.setenv(k, "fake")
     store = Store(":memory:")
     settings = Settings(api_key="test-key", public_url="https://x.test", db_path=":memory:",
-                        validate_twilio_signature=False)
+                        validate_twilio_signature=False, **server)
     client = TestClient(create_app(settings, store))
     a = client.post("/assistant", json=ASSISTANT, headers=AUTH).json()
     client.post("/phone-number", json={"number": "+15551234567", "assistantId": a["id"]}, headers=AUTH)
@@ -242,15 +243,22 @@ def test_a_call_ends_itself_when_the_caller_is_silent_or_it_runs_too_long(monkey
     assert time.monotonic() - started < 10
 
 
-def _scripted_call(monkeypatch, limits, on_start=(), frames=None):
-    """A call through stub providers: the transcriber pushes `on_start` when the call starts, and the voice "says"
-    each sentence at once, recording it (and its frame, in `frames`). Returns (client, store, params, sentences)."""
+class _Said(list):
+    """The sentences a call said, and when the last one finished."""
+
+    stopped_at = 0.0
+
+
+def _scripted_call(monkeypatch, limits, on_start=(), frames=None, speaking=0.0, stuck=False, then=None, **server):
+    """A call through stub providers: the transcriber pushes `on_start` when the call starts (and runs `then()`), and
+    the voice "says" each sentence in `speaking` seconds, recording it (and its frame, in `frames`). With `stuck`, the
+    model never gets past the first sentence. Returns (client, store, params, sentences)."""
     from pipecat.frames.frames import BotStartedSpeakingFrame, BotStoppedSpeakingFrame, StartFrame, TTSSpeakFrame
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
     from openring import bot
 
-    said = []
+    said = _Said()
 
     class Stub(FrameProcessor):
         def __init__(self, layer):
@@ -263,28 +271,172 @@ def _scripted_call(monkeypatch, limits, on_start=(), frames=None):
             if self.layer == "transcriber" and isinstance(frame, StartFrame):
                 for early in on_start:
                     await self.push_frame(early)
+                if then:
+                    self.create_task(then())
+            if self.layer == "model" and stuck and isinstance(frame, TTSSpeakFrame):
+                await asyncio.sleep(60)
             if self.layer == "voice" and isinstance(frame, TTSSpeakFrame):
                 said.append(frame.text)
                 if frames is not None:
                     frames.append(frame)
                 await self.push_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+                await asyncio.sleep(speaking)
                 await self.push_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+                said.stopped_at = time.monotonic()
 
     real = bot.CallLimits
     monkeypatch.setattr(bot, "CallLimits", lambda _duration, _silence, now: real(*limits, now))
     monkeypatch.setattr(bot, "build_services", lambda plan: (Stub("transcriber"), Stub("model"), Stub("voice")))
     _pipeline_started(monkeypatch)
-    return (*_answered_call(monkeypatch), said)
+    return (*_answered_call(monkeypatch, **server), said)
 
 
-def test_a_caller_who_is_talking_is_not_hung_up_on_for_silence(monkeypatch):
-    from pipecat.frames.frames import UserStartedSpeakingFrame
+def _working_frames():
+    from pipecat.frames.frames import (
+        FunctionCallFromLLM,
+        FunctionCallsStartedFrame,
+        LLMFullResponseStartFrame,
+        UserStartedSpeakingFrame,
+    )
 
-    client, store, params, _said = _scripted_call(monkeypatch, (2.0, 0.5), on_start=[UserStartedSpeakingFrame()])
+    tool = FunctionCallFromLLM(function_name="lookup", tool_call_id="t1", arguments={}, context=None)
+    return {"caller talking": UserStartedSpeakingFrame(), "model thinking": LLMFullResponseStartFrame(),
+            "tool running": FunctionCallsStartedFrame(function_calls=[tool])}
+
+
+@pytest.mark.parametrize("what", ["caller talking", "model thinking", "tool running"])
+def test_silence_never_ends_a_call_while_someone_is_working(monkeypatch, what):
+    frame = _working_frames()[what]
+    client, store, params, _said = _scripted_call(monkeypatch, (2.0, 0.5), on_start=[frame])
     with client.websocket_connect("/ws/twilio") as ws:
         _handshake(ws, params)
         call = _wait_until_ended(store, params["callId"])
     assert call["endedReason"] == "exceeded-max-duration"  # the silence limit (0.5 s) never fired
+
+
+def test_the_caller_gets_the_whole_silence_limit_after_the_assistant_stops_talking(monkeypatch):
+    """A greeting or an answer longer than the limit must not hang up the moment it ends."""
+    client, store, params, said = _scripted_call(monkeypatch, (600, 1.0), speaking=1.5)
+    with client.websocket_connect("/ws/twilio") as ws:
+        _handshake(ws, params)
+        call = _wait_until_ended(store, params["callId"])
+    assert call["endedReason"] == "silence-timed-out"
+    assert time.monotonic() - said.stopped_at >= 0.9
+
+
+def test_a_call_past_its_limit_ends_even_if_a_provider_hangs(monkeypatch):
+    from openring import bot
+
+    monkeypatch.setattr(bot, "END_GRACE_SECONDS", 0.5)
+    client, store, params, _said = _scripted_call(monkeypatch, (0.5, 0), stuck=True)
+    with client.websocket_connect("/ws/twilio") as ws:
+        _handshake(ws, params)
+        call = _wait_until_ended(store, params["callId"], seconds=10)
+    assert call["status"] == "ended" and call["endedReason"] == "exceeded-max-duration"
+
+
+def test_a_limit_keeps_the_reason_of_a_call_already_ending(monkeypatch):
+    """A voicemail message that outlasts the limit is still a voicemail, with no goodbye recorded after it."""
+    client, store, params, said = _scripted_call(monkeypatch, (0.5, 0), speaking=1.5)
+    assistant = store.list("assistants")[0]
+    store.update("assistants", assistant["id"], {"voicemailMessage": "Please call us back.", "endCallMessage": "Bye."})
+    store.update("calls", params["callId"], {"answeredBy": "machine_end_beep"})
+    with client.websocket_connect("/ws/twilio") as ws:
+        _handshake(ws, params)
+        call = _wait_until_ended(store, params["callId"])
+    assert call["endedReason"] == "voicemail" and said == ["Please call us back."]
+
+
+def test_pipecats_own_idle_limit_waits_for_the_silence_limit_and_says_why(monkeypatch):
+    """Pipecat cancels a call with no activity after 5 minutes: an hour of allowed silence must get its hour."""
+    from pipecat.pipeline import task
+
+    real, idle = task.PipelineTask, []
+
+    def patient(*args, **kwargs):
+        idle.append(kwargs["idle_timeout_secs"])
+        return real(*args, **{**kwargs, "idle_timeout_secs": 0.5})
+
+    monkeypatch.setattr(task, "PipelineTask", patient)
+    client, store, params, _said = _scripted_call(monkeypatch, (600, 0))
+    store.update("assistants", store.list("assistants")[0]["id"], {"silenceTimeoutSeconds": 3600})
+    with client.websocket_connect("/ws/twilio") as ws:
+        _handshake(ws, params)
+        call = _wait_until_ended(store, params["callId"])
+    assert idle == [3660]
+    assert call["endedReason"] == "silence-timed-out"  # not "customer-ended-call", which reads as a normal call
+
+
+def _transfer_on_start(monkeypatch, limits, redirect):
+    """A call whose assistant asks for a transfer as soon as it starts. Returns _scripted_call's and the hang-ups."""
+    from pipecat.serializers.twilio import TwilioFrameSerializer
+
+    from openring import bot, twilio
+
+    controls, hang_ups = {}, []
+
+    async def transfer():
+        try:
+            await controls["call"].transfer("+15557654321", None)
+        except twilio.TwilioError:
+            pass
+
+    async def hang_up(_serializer):
+        hang_ups.append(True)
+
+    monkeypatch.setattr(bot, "register_tools", lambda _llm, _tools, given: controls.update(call=given))
+    monkeypatch.setattr(twilio, "redirect_call", redirect)
+    monkeypatch.setattr(TwilioFrameSerializer, "_hang_up_call", hang_up)
+    return (*_scripted_call(monkeypatch, limits, then=transfer, twilio_account_sid="AC1", twilio_auth_token="tok"),
+            hang_ups)
+
+
+def test_a_limit_reached_during_a_transfer_does_not_hang_up_on_the_caller(monkeypatch):
+    redirected = []
+
+    async def redirect(*_args):
+        redirected.append(True)
+
+    client, store, params, said, hang_ups = _transfer_on_start(monkeypatch, (0.5, 0), redirect)
+    store.update("assistants", store.list("assistants")[0]["id"], {"endCallMessage": "Bye."})
+    with client.websocket_connect("/ws/twilio") as ws:
+        _handshake(ws, params)
+        for _ in range(100):  # the transfer waits until the line is quiet, past the limit
+            if redirected:
+                break
+            time.sleep(0.1)
+        # Twilio closes the media stream as it moves the call.
+    call = _wait_until_ended(store, params["callId"])
+    assert redirected and call["endedReason"] == "assistant-forwarded-call"
+    assert "Bye." not in said and not hang_ups
+
+
+def test_a_transfer_whose_stream_never_closes_still_ends(monkeypatch):
+    from openring import bot
+
+    async def redirect(*_args):
+        pass
+
+    monkeypatch.setattr(bot, "TRANSFER_SECONDS", 1.5)
+    monkeypatch.setattr(bot, "END_GRACE_SECONDS", 0.5)
+    client, store, params, _said, hang_ups = _transfer_on_start(monkeypatch, (0.5, 0), redirect)
+    with client.websocket_connect("/ws/twilio") as ws:
+        _handshake(ws, params)
+        call = _wait_until_ended(store, params["callId"], seconds=10)
+    assert call["endedReason"] == "assistant-forwarded-call" and not hang_ups  # the caller stays with the new line
+
+
+def test_the_limits_apply_again_when_a_transfer_fails(monkeypatch):
+    from openring import twilio
+
+    async def redirect(*_args):
+        raise twilio.TwilioError("no such number")
+
+    client, store, params, _said, hang_ups = _transfer_on_start(monkeypatch, (0.5, 0), redirect)
+    with client.websocket_connect("/ws/twilio") as ws:
+        _handshake(ws, params)
+        call = _wait_until_ended(store, params["callId"])
+    assert call["endedReason"] == "exceeded-max-duration" and hang_ups
 
 
 def test_a_quiet_caller_hears_the_idle_message_then_the_call_ends(monkeypatch):

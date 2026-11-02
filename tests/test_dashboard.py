@@ -50,6 +50,27 @@ def test_campaigns_warn_about_calls_outside_8am_to_9pm_where_the_person_is():
     assert got["london"] == []
 
 
+def test_the_assistant_editor_escapes_call_limits_from_an_imported_assistant():
+    """An import saves what the other account has, even a value OpenRing would refuse: it must not run as HTML."""
+    assert not re.findall(r"\$\{a\.messagePlan\?\.idle(?:TimeoutSeconds|MessageMaxSpokenCount)", PAGE)
+    assert 'value="${limitsShown.silence}"' not in PAGE and 'value="${esc(limitsShown.silence)}"' in PAGE
+
+
+def test_the_assistant_editor_keeps_a_limit_left_as_shown():
+    line = next(x for x in PAGE.splitlines() if "const limitTyped" in x)
+    got = run_js(line + """
+    console.log(JSON.stringify({
+      rounded: limitTyped("2", 2, 60, 90),  // 90 s, shown as 2 minutes and left alone
+      unset: limitTyped("10", 10, 60, undefined) ?? "unset",
+      emptied: limitTyped("", 2, 60, 90),
+      typed: limitTyped("5", 2, 60, 90),
+      seconds: limitTyped("20", 30, 1, undefined),
+    }));""")
+    assert got == {"rounded": 90, "unset": "unset", "emptied": 90, "typed": 300, "seconds": 20}
+    # A limit under 30 s would round to 0 minutes, which the field refuses: nothing on the page could be saved.
+    assert "minutes: Math.max(1, Math.round(" in PAGE
+
+
 def test_dates_use_the_interface_language():
     # The page is in English; dates in the browser's language read "30 de out." among English words.
     assert not re.search(r"toLocale(Date|Time)?String\(\s*(\[\]|undefined)?\s*[,)]", PAGE)

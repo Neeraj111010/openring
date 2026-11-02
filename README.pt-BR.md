@@ -194,8 +194,9 @@ usar os seus preços, escreva `~/.openring/prices.json` ([formato no README em i
 
 ### Limites da ligação
 
-A ligação termina sozinha depois de `maxDurationSeconds` (10 minutos por padrão) ou quando quem ligou fica
-`silenceTimeoutSeconds` sem falar (30 segundos por padrão), com o `endedReason` do Vapi; antes, o assistente
+A ligação termina sozinha depois de `maxDurationSeconds` (10 minutos por padrão) ou depois de
+`silenceTimeoutSeconds` sem atividade (30 segundos por padrão; o relógio espera enquanto alguém fala, o modelo pensa
+ou uma ferramenta roda), com o `endedReason` do Vapi; antes, o assistente
 diz o `endCallMessage`. Se a pessoa fica quieta depois que o assistente falou, ele diz uma das
 `messagePlan.idleMessages` ("Você ainda está aí?"), até `idleMessageMaxSpokenCount` vezes. No painel, ficam
 no editor do assistente.

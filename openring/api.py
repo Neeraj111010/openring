@@ -879,11 +879,10 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         None when the assistant has a sentence to leave: the call goes on to it, with `answeredBy` on the record."""
         assistant = call.get("assistant") or store.get("assistants", call.get("assistantId") or "") or {}
         assistant = overrides.apply(assistant, call.get("assistantOverrides"), call.get("customer"))
-        message = assistant.get("voicemailMessage")
-        is_recording = str(message or "").startswith(("http://", "https://"))
+        message = str(assistant.get("voicemailMessage") or "").strip()
         logger.info("call {}: answered by {}", call["id"], answered_by)
-        if message and answered_by != "fax" and not is_recording:
-            store.update("calls", call["id"], {"answeredBy": answered_by})
+        if message and answered_by != "fax" and not twilio.is_recording(message):
+            store.claim("calls", call["id"], "queued", {"answeredBy": answered_by})  # so a replay changes nothing
             return None
         patch = {"status": "ended", "endedReason": "voicemail", "endedAt": now_iso(), "answeredBy": answered_by}
         store.claim("calls", call["id"], "queued", patch)

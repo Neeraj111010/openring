@@ -86,8 +86,10 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
   Vapi's `callsCounter*`, saves after every dial so a restart never calls anyone twice, and ends calls cut off
   by a restart (`worker-shutdown`). Cancel claims the status atomically (`Store.update` is atomic too).
 - Call limits (`bot.CallLimits`, `providers.call_limits`): Vapi's `maxDurationSeconds` (600) and
-  `silenceTimeoutSeconds` (30, from the caller's last word, never while someone talks) end the call from a
-  watcher task started on connect (`exceeded-max-duration`, `silence-timed-out`, saying `endCallMessage`);
+  `silenceTimeoutSeconds` (30, without activity: the clock waits while someone talks, the model thinks or a tool
+  runs) end the call from a watcher task started on connect (`exceeded-max-duration`, `silence-timed-out`, saying
+  `endCallMessage`). The watcher keeps another ending's reason, waits for a transfer, and cuts off a call still
+  unfinished `END_GRACE_SECONDS` later;
   `messagePlan.idleMessages` use Pipecat's `user_idle_timeout` (`on_user_turn_idle`) on the user aggregator.
 - Voicemail (beta, outbound, Twilio only): `twilio.machine_detection` turns `voicemailDetection`/`voicemailMessage`
   into `MachineDetection=DetectMessageEnd` on the Calls API (synchronous: Twilio fetches the voice URL after the
