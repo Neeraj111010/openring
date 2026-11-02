@@ -111,7 +111,7 @@ empresa em outubro de 2026; confira antes de decidir. O OpenRing não tem víncu
 | Ligações do Genesys Cloud pelo Audio Connector, dentro dos seus fluxos do Architect (**beta**) | |
 | APIs `/assistant`, `/phone-number`, `/call`, `/campaign` e `/tool` no formato do Vapi | |
 | Custo por ligação em dólares, por provedor, a preço de tabela (`cost` e `costBreakdown`) | Custo da linha telefônica |
-| Ferramentas do Vapi: `function`, `endCall`, `transferCall` | |
+| Ferramentas do Vapi: `function`, `apiRequest` (n8n, Make, Zapier), `endCall`, `transferCall` | |
 | Webhooks do Vapi: `status-update`, `conversation-update`, `end-of-call-report`, `assistant-request` | Ligações pelo WhatsApp |
 | Importação de assistentes, ferramentas e números de uma conta do Vapi | |
 | 16 modelos, 6 transcrições e 9 vozes, com os nomes do Vapi | |
@@ -139,6 +139,12 @@ de cada número do Twilio importado para `$PUBLIC_URL/twilio/voice`.
 
 Toda requisição leva `Authorization: Bearer $OPENRING_API_KEY`. Os exemplos completos (ferramentas, mensagens
 para o servidor, ligações feitas) estão no [guia em inglês](README.md#-api-guide).
+
+**Sem servidor próprio? Use `apiRequest`.** O modelo preenche o `body` e o OpenRing envia para a sua URL: um
+webhook do n8n, Make ou Zapier, a API do seu CRM. A URL, os `headers` e os `parameters` são seus, não do modelo, e
+aceitam `{{variáveis}}` (menos no host da URL). A chave vai nos `headers`, que ficam no seu servidor: o `credentialId`
+do Vapi não existe aqui. Resposta fora de 2xx conta como falha, e nada é repetido nem redirecionado, para uma
+reserva não sair duas vezes. Exemplo no [README em inglês](README.md#tools).
 
 **Ferramentas: trate os argumentos como entrada não confiável.** Quem escolhe os argumentos é o modelo, durante a
 conversa com quem ligou, e quem liga consegue induzi-lo ("cancele todos os horários"). O seu servidor deve

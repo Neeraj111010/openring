@@ -139,3 +139,12 @@ def test_import_endpoint(monkeypatch):
     monkeypatch.setattr("openring.api.import_account", refused)
     r = client.post("/import", json={"apiKey": "bad"}, headers=AUTH)
     assert r.status_code == 400 and "private key" in json.loads(r.text)["detail"]
+
+
+def test_an_imported_api_request_tool_says_its_credential_stayed_behind():
+    store = Store(":memory:")
+    tool = {"id": "t-9", "type": "apiRequest", "name": "crm", "method": "POST", "url": "https://crm.example.com/x",
+            "credentialId": "cred-1", "createdAt": "2026-10-01T00:00:00Z"}
+    report = run(store, {"tool": [tool], "assistant": [], "phone-number": []})
+    assert "credential" in report["tools"][0]["problems"][0]
+    assert "credentialId" not in store.list("tools")[0]  # never copied

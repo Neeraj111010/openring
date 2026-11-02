@@ -112,7 +112,7 @@ affiliated with any of them.
 | Genesys Cloud calls through its Audio Connector, inside your Architect flows (**beta**, see [Genesys](#genesys-cloud-beta)) | |
 | Vapi-style `/assistant`, `/phone-number`, `/call`, `/campaign` and `/tool` APIs | |
 | Cost per call in dollars, per provider, at list prices (`cost` and `costBreakdown`) | The phone line's cost |
-| Vapi tools: `function`, `endCall`, `transferCall` | |
+| Vapi tools: `function`, `apiRequest` (n8n, Make, Zapier), `endCall`, `transferCall` | |
 | Vapi webhooks: `status-update`, `conversation-update`, `end-of-call-report`, `assistant-request` | Calls over WhatsApp |
 | Import assistants, tools and numbers from a Vapi account | |
 | 16 models, 6 speech-to-text and 9 voice providers, with Vapi's names | |
@@ -263,6 +263,29 @@ When the model calls `book_appointment`, OpenRing POSTs `{"message": {"type": "t
 messages work as on Vapi. `endCall` hangs up after the goodbye; `transferCall` moves a phone call to the
 chosen number (Twilio) once the assistant stops talking. Tool calls and results show up in the call's
 transcript.
+
+**No server of your own? Use `apiRequest`.** The model fills in the `body`, and OpenRing sends it to your URL: an
+n8n, Make or Zapier webhook, your CRM's API. There's no Vapi envelope, and the model reads the answer as it comes:
+
+```json
+{"type": "apiRequest", "name": "book_visit", "description": "Book a visit once the caller confirms the day",
+ "method": "POST", "url": "https://hook.make.com/your-webhook",
+ "headers": {"type": "object", "properties": {"Authorization": {"type": "string", "value": "Bearer YOUR_KEY"}}},
+ "body": {"type": "object", "properties": {"day": {"type": "string", "description": "The day they chose"}},
+          "required": ["day"]},
+ "parameters": [{"key": "phone", "value": "{{customer.number}}"}],
+ "timeoutSeconds": 20,
+ "messages": [{"type": "request-start", "content": "One moment."},
+              {"type": "request-response-delayed", "timingMilliseconds": 5000, "content": "Still checking."},
+              {"type": "request-failed", "role": "system", "content": "Apologize, and don't promise it was booked."}]}
+```
+
+The URL, the headers and `parameters` are yours, not the model's, and `parameters` win over what it fills in. They
+can use `{{variables}}`, though not in the URL's host and not Liquid filters; a GET or DELETE carries the values
+in its query. Vapi's `credentialId` isn't available: the key goes in `headers`, which stay on your server. A non-2xx
+answer counts as a failure, and nothing is retried or redirected, so a booking isn't sent twice. Link-local and
+cloud metadata addresses are refused; addresses on your own network work. The model reads the first 4,000
+characters of the answer.
 
 **Treat tool arguments as untrusted input.** The model chooses them during a conversation with whoever
 called, and a caller can talk it into almost anything ("cancel every appointment", "my account number is

@@ -102,7 +102,10 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
   (endedReason `assistant-ended-call`), `transferCall` (waits until the bot stops speaking, keeps Pipecat's
   Twilio serializer from hanging up, then redirects the call with `<Dial>` TwiML; endedReason
   `assistant-forwarded-call`; browser calls can't transfer). `model.tools` + saved `/tool` docs via
-  `model.toolIds`; unsupported types are skipped with a warning. Registered with `llm.register_function`
+  `model.toolIds`; unsupported types are skipped with a warning. `apiRequest` (`tools.call_api`): the model fills in
+  `body`, OpenRing sends it through `netguard.client()`; url, headers and `parameters` are server-side, with
+  `{{variables}}` (`overrides.call_context`; percent-encoded in the URL, never in its host); only 2xx counts, no retries
+  or redirects, answer capped, not cancelled by an interruption; errors never carry the URL. Registered with `llm.register_function`
   and `ToolsSchema` on the LLMContext; the transcript keeps `tool_calls` / `tool_call_result` rows.
 - `openring/importer.py` + `POST /import {baseUrl, apiKey}`: copies tools, assistants and Twilio numbers from
   any Vapi-compatible API (pages back with `createdAtLt`), drops source-owned fields and secrets, remaps

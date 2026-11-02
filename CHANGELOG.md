@@ -23,6 +23,13 @@ All notable changes to OpenRing are listed here. The format follows
   "voicemail"`, which campaigns count in `callsCounterEndedVoicemail`; without a message it just hangs up. It stays
   off unless asked for. The assistant editor has the switch and the message.
 
+- The `apiRequest` tool, in Vapi's format: the model fills in the `body` and OpenRing sends it to your URL, such as
+  an n8n, Make or Zapier webhook, with no server of your own. The URL, `headers` and `parameters` stay yours and
+  can use `{{variables}}`. Only a 2xx answer counts; nothing is retried or redirected, a caller's interruption doesn't
+  cancel a request already sent, and cloud metadata addresses are refused. Vapi's `credentialId` isn't available.
+- Tools: `request-response-delayed` messages are said when a tool runs late, and a `request-failed` message with
+  `"role": "system"` now goes to the model instead of being read out to the caller.
+
 ### Changed
 
 - Calls now have Vapi's default limits: 10 minutes at most, and 30 seconds of silence from the caller. Before,

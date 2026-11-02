@@ -1,28 +1,36 @@
-"""Assistant tools in Vapi's format: functions on your server, ending the call and transferring it.
+"""Assistant tools in Vapi's format: functions on your server, plain HTTP requests, ending the call and
+transferring it.
 
 An assistant lists tools in `model.tools`, or saves them with `POST /tool` and lists their ids in
 `model.toolIds`. When the model calls a `function` tool, OpenRing POSTs Vapi's `tool-calls` message
 to the tool's server (or the assistant's) and hands the model the `results` it answers with, so a
-server written for Vapi works unchanged.
+server written for Vapi works unchanged. An `apiRequest` tool needs no such server: the model fills in
+the `body`, and OpenRing sends it to the tool's `url` (an n8n, Make or Zapier webhook, say).
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
 from loguru import logger
 
-from . import netguard
+from . import netguard, overrides
 from .store import Store
 
 # Tool types OpenRing runs. Assistants imported with other types still load; those tools are skipped.
-SUPPORTED = ("function", "endCall", "transferCall")
+SUPPORTED = ("function", "apiRequest", "endCall", "transferCall")
 DEFAULT_TIMEOUT = 20  # seconds, like Vapi's server.timeoutSeconds default
+METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
+MAX_RESPONSE_BYTES = 100_000  # what's read of an apiRequest's answer; the rest is never downloaded
+MAX_RESULT_CHARS = 4_000  # what the model reads of it: every word costs tokens, on every turn after
 
 
 class ToolError(ValueError):
@@ -33,20 +41,58 @@ def tool_name(tool: dict[str, Any]) -> str:
     """The function name the model sees."""
     if tool.get("type") == "function":
         return str((tool.get("function") or {}).get("name") or "")
+    if tool.get("type") == "apiRequest":
+        return str(tool.get("name") or (tool.get("function") or {}).get("name") or "")
     return str(tool.get("type"))  # Vapi exposes endCall and transferCall under their type names
+
+
+def _check_name(name: str, where: str) -> None:
+    if not name:
+        raise ToolError(f"{where} is required")
+    if not name.replace("_", "").replace("-", "").isalnum():
+        raise ToolError(f"{where} may only have letters, digits, '_' and '-'")
+
+
+def _check_api_request(tool: dict[str, Any]) -> None:
+    _check_name(tool_name(tool), "an apiRequest tool's name")
+    if tool.get("credentialId"):
+        raise ToolError("credentialId is not available here: put the key in the tool's headers, which stay on "
+                        'your server: {"type": "object", "properties": {"Authorization": {"type": "string", '
+                        '"value": "Bearer ..."}}}')
+    if str(tool.get("method") or "").upper() not in METHODS:
+        raise ToolError(f"an apiRequest tool's method is one of {', '.join(METHODS)}")
+    url = str(tool.get("url") or "")
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        raise ToolError("an apiRequest tool's url must start with https:// or http://")
+    if "{{" in parts.netloc:  # a caller's data must never choose where the request goes
+        raise ToolError("an apiRequest tool's url can use {{variables}} in its path and query, not in its host")
+    timeout = tool.get("timeoutSeconds")
+    if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                                or not 1 <= timeout <= 300):
+        raise ToolError("an apiRequest tool's timeoutSeconds goes from 1 to 300")
+    for field in ("body", "headers"):
+        if tool.get(field) is not None and not isinstance(tool[field], dict):
+            raise ToolError(f"an apiRequest tool's {field} must be a JSON schema object")
+    static = tool.get("parameters")
+    if static is not None and not (isinstance(static, list)
+                                   and all(isinstance(p, dict) and p.get("key") for p in static)):
+        raise ToolError('an apiRequest tool\'s parameters must be a list of {"key": ..., "value": ...}')
 
 
 def check_tool(tool: dict[str, Any]) -> None:
     """Refuse a tool that cannot work; unknown types are allowed (and skipped on calls)."""
     kind = tool.get("type")
     if not kind:
-        raise ToolError("tool.type is required, e.g. 'function', 'endCall' or 'transferCall'")
+        raise ToolError("tool.type is required, e.g. 'function', 'apiRequest', 'endCall' or 'transferCall'")
     if kind == "function":
         fn = tool.get("function") or {}
         if not fn.get("name"):
             raise ToolError("a function tool needs function.name")
         if not str(fn["name"]).replace("_", "").replace("-", "").isalnum():
             raise ToolError("function.name may only have letters, digits, '_' and '-'")
+    if kind == "apiRequest":
+        _check_api_request(tool)
     if kind == "transferCall":
         if not any(d.get("number") for d in tool.get("destinations") or []):
             raise ToolError("a transferCall tool needs destinations with a phone number")
@@ -83,6 +129,14 @@ def function_schema(tool: dict[str, Any]) -> dict[str, Any]:
             "properties": params.get("properties") or {},
             "required": list(params.get("required") or []),
         }
+    if tool["type"] == "apiRequest":  # Vapi derives what the model fills in from the body
+        body = tool.get("body") or {}
+        return {
+            "name": tool_name(tool),
+            "description": tool.get("description") or (tool.get("function") or {}).get("description") or "",
+            "properties": body.get("properties") or {},
+            "required": list(body.get("required") or []),
+        }
     if tool["type"] == "endCall":
         return {
             "name": "endCall",
@@ -108,12 +162,17 @@ def function_schema(tool: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _message(tool: dict[str, Any], kind: str) -> dict[str, Any] | None:
+    for message in tool.get("messages") or []:
+        if isinstance(message, dict) and message.get("type") == kind and message.get("content"):
+            return message
+    return None
+
+
 def tool_message(tool: dict[str, Any], kind: str) -> str | None:
     """What the assistant says at a moment of the tool call, e.g. 'request-start' or 'request-failed'."""
-    for message in tool.get("messages") or []:
-        if message.get("type") == kind and message.get("content"):
-            return str(message["content"])
-    return None
+    message = _message(tool, kind)
+    return str(message["content"]) if message else None
 
 
 def _arguments(raw: Any) -> dict[str, Any]:
@@ -201,6 +260,76 @@ async def call_server(
     return _result_text(body, tool_call_id, r.text)
 
 
+def _one_line(value: str) -> str:
+    return re.sub(r"[\x00-\x1f\x7f]+", " ", value)
+
+
+def _with_query(url: str, arguments: dict[str, Any]) -> str:
+    """Where a GET or DELETE, which have no body, carries what the model filled in."""
+    values = {k: v if isinstance(v, str) else json.dumps(v) for k, v in arguments.items() if v is not None}
+    return f"{url}{'&' if urlsplit(url).query else '?'}{urlencode(values)}" if values else url
+
+
+async def call_api(
+    tool: dict[str, Any],
+    arguments: dict[str, Any],
+    *,
+    call: dict | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> str:
+    """Send an apiRequest tool's request and return what the model should read.
+
+    The model only fills in the body: the URL, the headers and the `parameters` (which win over the model's
+    values) are yours. Errors never contain the URL or headers, which often carry secrets: the model reads them and
+    may say them to the caller. Nothing is retried or followed, since a repeated POST could book something twice.
+    """
+    context = overrides.call_context(call)
+    url = overrides.fill(str(tool["url"]), context, lambda value: quote(value, safe=""))
+    method = str(tool["method"]).upper()
+    # A value stays on one line, so a caller's data can't add headers; UTF-8, so "João" doesn't break the request.
+    headers = {str(k): overrides.fill(str(p["value"]), context, _one_line).encode("utf-8")
+               for k, p in ((tool.get("headers") or {}).get("properties") or {}).items()
+               if isinstance(p, dict) and p.get("value") is not None}
+    static = {str(p["key"]): overrides.fill(p["value"], context) if isinstance(p.get("value"), str) else p.get("value")
+              for p in tool.get("parameters") or []}
+    payload = {**arguments, **static}
+    timeout = float(tool.get("timeoutSeconds") or DEFAULT_TIMEOUT)
+    send: dict[str, Any] = {"json": payload} if method in ("POST", "PUT", "PATCH") else {}
+    if not send:
+        url = _with_query(url, payload)
+    try:
+        await netguard.check_url_async(url)
+    except netguard.UnsafeURL as exc:
+        raise ToolError("the tool's address is refused: it points to a cloud metadata or link-local address") from exc
+    owned = client is None
+    client = client or netguard.client()
+    received = bytearray()
+    try:
+        async with asyncio.timeout(timeout):  # the whole exchange: a server that drips out bytes doesn't get longer
+            async with client.stream(method, url, headers=headers, timeout=timeout, **send) as r:
+                if not 200 <= r.status_code < 300:  # a redirect is not followed: the guard wouldn't have seen it
+                    raise ToolError(f"the request failed with HTTP {r.status_code}")
+                async for chunk in r.aiter_bytes():
+                    received += chunk
+                    if len(received) >= MAX_RESPONSE_BYTES:
+                        break
+    except ToolError:
+        raise
+    except TimeoutError as exc:
+        raise ToolError(f"no answer after {timeout:g} s, so it may or may not have gone through") from exc
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
+        raise ToolError(f"could not send the request ({exc.__class__.__name__})") from exc
+    finally:
+        if owned:
+            await client.aclose()
+    if b"\0" in received:
+        return "Done. The answer is not text."
+    text = bytes(received).decode("utf-8", "replace").strip()
+    if len(text) > MAX_RESULT_CHARS or len(received) >= MAX_RESPONSE_BYTES:
+        return text[:MAX_RESULT_CHARS] + " [answer cut short]"
+    return text or "Done."
+
+
 @dataclass
 class CallControls:
     """What tools can do to the live call; run_call fills these in."""
@@ -218,23 +347,38 @@ def make_handler(tool: dict[str, Any], controls: CallControls):
     """The Pipecat function-call handler for one tool."""
     from pipecat.frames.frames import FunctionCallResultProperties
 
+    async def say_when_late() -> None:
+        late = _message(tool, "request-response-delayed") or {}
+        await asyncio.sleep(float(late.get("timingMilliseconds") or 5000) / 1000)
+        await controls.speak(str(late["content"]))
+
     async def run_function(params) -> None:
         if start := tool_message(tool, "request-start"):
             await controls.speak(start)
+        late = asyncio.ensure_future(say_when_late()) if _message(tool, "request-response-delayed") else None
         try:
-            result = await call_server(
-                tool,
-                params.tool_call_id,
-                _arguments(params.arguments),
-                default_url=controls.default_url,
-                call=controls.current_call(),
-                assistant=controls.assistant,
-            )
+            if tool["type"] == "apiRequest":
+                result = await call_api(tool, _arguments(params.arguments), call=controls.current_call())
+            else:
+                result = await call_server(
+                    tool,
+                    params.tool_call_id,
+                    _arguments(params.arguments),
+                    default_url=controls.default_url,
+                    call=controls.current_call(),
+                    assistant=controls.assistant,
+                )
         except ToolError as exc:
             logger.warning("tool {} failed: {}", tool_name(tool), exc)
-            if failed := tool_message(tool, "request-failed"):
-                await controls.speak(failed)
             result = f"The tool failed: {exc}. Tell the caller you could not complete it."
+            failed = _message(tool, "request-failed")
+            if failed and failed.get("role") == "system":  # written for the model: never read out to the caller
+                result = f"{result} {failed['content']}"
+            elif failed:
+                await controls.speak(str(failed["content"]))
+        finally:
+            if late is not None:
+                late.cancel()
         await params.result_callback(result)
 
     async def end_call(params) -> None:
@@ -263,7 +407,8 @@ def make_handler(tool: dict[str, Any], controls: CallControls):
         message = destination.get("message") or tool_message(tool, "request-start")
         await controls.transfer(destination["number"], message)
 
-    return {"function": run_function, "endCall": end_call, "transferCall": transfer_call}[tool["type"]]
+    return {"function": run_function, "apiRequest": run_function, "endCall": end_call,
+            "transferCall": transfer_call}[tool["type"]]
 
 
 def register_tools(llm: Any, tools: list[dict[str, Any]], controls: CallControls) -> Any:
@@ -276,12 +421,14 @@ def register_tools(llm: Any, tools: list[dict[str, Any]], controls: CallControls
     schemas = []
     for tool in tools:
         schemas.append(FunctionSchema(**function_schema(tool)))
-        timeout = float((tool.get("server") or {}).get("timeoutSeconds") or DEFAULT_TIMEOUT) + 5
-        # Vapi's async tools don't hold the conversation while the server works.
+        timeout = float(tool.get("timeoutSeconds") or (tool.get("server") or {}).get("timeoutSeconds")
+                        or DEFAULT_TIMEOUT) + 5
+        # Vapi's async tools don't hold the conversation while the server works. A caller who interrupts doesn't
+        # cancel an apiRequest either: it may already have gone through, and the model would just send it again.
         llm.register_function(
             tool_name(tool),
             make_handler(tool, controls),
-            cancel_on_interruption=not tool.get("async"),
+            cancel_on_interruption=not tool.get("async") and tool["type"] != "apiRequest",
             timeout_secs=timeout,
         )
     return ToolsSchema(standard_tools=schemas)

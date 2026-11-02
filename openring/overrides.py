@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Any
 
 # `{{ name }}` or `{{customer.name}}`. Liquid filters (`{{ x | upcase }}`) are not supported and stay as written.
@@ -28,8 +29,17 @@ def _lookup(context: dict[str, Any], path: str) -> str:
     return "" if value is None or isinstance(value, (dict, list)) else str(value)
 
 
-def fill(text: str, context: dict[str, Any]) -> str:
-    return VARIABLE.sub(lambda m: _lookup(context, m.group(1)), text)
+def fill(text: str, context: dict[str, Any], encode: Callable[[str], str] = str) -> str:
+    """The text with its variables' values in; `encode` makes a value safe where it lands (in a URL, say)."""
+    return VARIABLE.sub(lambda m: encode(_lookup(context, m.group(1))), text)
+
+
+def call_context(call: dict[str, Any] | None) -> dict[str, Any]:
+    """The variables of a live call: `variableValues`, `{{customer.number}}` and `{{call.id}}`, `{{call.type}}`..."""
+    call = call or {}
+    values = (call.get("assistantOverrides") or {}).get("variableValues")
+    return {**(values if isinstance(values, dict) else {}), "customer": call.get("customer") or {},
+            "call": {k: v for k, v in call.items() if isinstance(v, (str, int, float))}}
 
 
 def combine(*overrides: dict[str, Any] | None) -> dict[str, Any]:

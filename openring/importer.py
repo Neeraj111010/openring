@@ -15,7 +15,7 @@ import httpx
 from . import netguard
 from .providers import ProviderError, resolve_plan
 from .store import Store, is_phone_number
-from .tools import ToolError, check_tool
+from .tools import SUPPORTED, ToolError, check_tool
 
 PAGE = 100
 # Fields the source server owns, or secrets that should not be copied.
@@ -79,7 +79,7 @@ def _assistant_problems(assistant: dict[str, Any]) -> list[str]:
             check_tool(tool)
         except ToolError as exc:
             problems.append(f"tool: {exc}")
-        if tool.get("type") not in ("function", "endCall", "transferCall"):
+        if tool.get("type") not in SUPPORTED:
             problems.append(f"tool type '{tool.get('type')}' is not supported yet; calls run without it")
     return problems
 
@@ -118,8 +118,10 @@ async def import_account(
             check_tool(doc)
         except ToolError as exc:
             problems.append(str(exc))
-        if doc.get("type") not in ("function", "endCall", "transferCall"):
+        if doc.get("type") not in SUPPORTED:
             problems.append(f"tool type '{doc.get('type')}' is not supported yet")
+        if doc.get("type") == "apiRequest" and tool.get("credentialId"):
+            problems.append("its credential was not copied: put the key in the tool's headers")
         report["tools"].append({"id": doc["id"], "name": _tool_label(doc), "created": created, "problems": problems})
 
     assistant_ids: dict[str, str] = {}
