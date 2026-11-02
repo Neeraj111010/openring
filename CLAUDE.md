@@ -121,10 +121,26 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
   any Vapi-compatible API (pages back with `createdAtLt`), drops source-owned fields and secrets, remaps
   `model.toolIds`, marks docs with `importedFrom` so a re-import updates them; reports per-assistant problems
   (unsupported providers/tools) without refusing the import. Dashboard: **Import** on the Assistants page.
-- `openring/store.py` SQLite document store (JSON docs) for assistants, phone_numbers, calls, tools, campaigns, routes.
+- Knowledge bases (`openring/knowledge.py`, `/file`, `/knowledge-base`, beta): uploads keep only the text, cut into passages,
+  in the FTS5 table `file_chunks` (`Store.index_file`, `search_chunks`). The `query` tool's handler is `knowledge.answer`:
+  word search (word starts, bm25) on this server, and when nothing matches and the files are short, all of it, so the model
+  reads meanings. `custom-knowledge-base` POSTs Vapi's `knowledge-base-request`; `model.knowledgeBaseId` becomes a query tool.
+- Squads (`openring/squads.py`, `/squad`, beta): `squads.cast` is everyone a call can reach (members, `assistantDestinations`,
+  whoever a `handoff` names), first is who answers; later members keep unknown `{{variables}}` for what a handoff adds.
+  `plan.team` holds their plans. `providers._build_team` makes one switcher per layer whose `Failover` has `groups`, one per
+  member (shared STT/TTS when identical, own LLM for its tools); `Failover.enter` switches on a handoff (`entered` tells
+  the switch event it's no failure; events run in tasks). `bot.run_call`'s `finish_hand_off` waits for quiet, switches layers, replaces
+  the context per `carry_over`, sets tools, keeps the full transcript in `said_before`, records `call.handoffs`.
+- SIP trunks (`openring/sip.py`, `/credential`, beta): SIP over UDP and RTP (G.711) with no dependency. `sip.Server` starts when a
+  `byo-sip-trunk` exists (`SIP_HOST`, `SIP_PORT`, `SIP_RTP_PORTS`, `SIP_PUBLIC_IP`). Anything not from a saved gateway is dropped
+  silently; `run` (pipeline, cost) starts only on an ACK with our tag. `transport_for` is the Pipecat transport (a packet every 20 ms,
+  silence included). `api.run_sip_call` runs it like any phone call; `dial` branches on `byo-phone-number`. Digest login,
+  REGISTER (`sipRegisterPlan`), REFER for `transferCall`. Passwords never leave through the API. Never tried with a real carrier.
+- `openring/store.py` SQLite document store (JSON docs) for assistants, phone_numbers, calls, tools, campaigns, routes, files,
+  knowledge_bases, squads, credentials.
 - `openring/static/index.html` single-file dashboard (vanilla JS, no build step), styled after OmniRoute:
   sidebar with sections, dark/light theme, big-number cards, tabs. Pages: Home (overview + get started),
-  Assistants (tiles; editor with Setup/JSON tabs), Phone numbers, Model routes, Calls (filters; detail with transcript,
+  Assistants (tiles; editor with Setup/JSON tabs), Squads, Knowledge, Phone numbers (with SIP trunks), Model routes, Calls (filters; detail with transcript,
   per-turn latency, JSON), Campaigns (list/CSV, consent checkbox, progress), Providers, Settings (API
   access, password).
 - `openring/__main__.py` `openring` command: first run creates `~/.openring/.env` with a generated

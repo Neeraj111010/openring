@@ -423,6 +423,18 @@ def test_outgoing_numbers_keep_the_plus_when_the_trunk_says_so(server, phone):
     assert invite.uri.startswith("sip:+5511988887777@")
 
 
+def test_a_campaign_dials_through_the_trunk(server, phone):
+    number, _, assistant = _line(server, phone)
+    created = server.post("/campaign", json={"name": "Trunk", "phoneNumberId": number["id"],
+                                             "assistantId": assistant["id"],
+                                             "customers": [{"number": "+5511988887777"}]}, headers=AUTH)
+    assert created.status_code == 201, created.text
+    invite, addr = phone.until(lambda m: not m.is_response and m.method == "INVITE")
+    assert invite.uri.startswith("sip:5511988887777@")
+    _reply(phone, invite, addr, 486)
+    assert _ended(server)[0]["endedReason"] == "customer-busy"
+
+
 def test_a_trunk_is_refused_with_the_reason(server):
     for body, why in [
         ({"provider": "11labs"}, "byo-sip-trunk"),

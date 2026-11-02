@@ -15,6 +15,9 @@ something, or pick an item and say you're on it. Shipped work moves to the [chan
 - **Campaigns, next steps:** retrying busy and unanswered numbers, calling hours per time zone, and Vapi's
   campaign webhooks. Campaigns themselves are in (beta).
 - **Calls over WhatsApp.**
+- **Knowledge base by meaning:** embeddings next to the word search (the knowledge base itself is in beta).
+- **Squads, next steps:** destinations chosen by your server, handing off to a whole squad, and squads in campaigns.
+- **SIP, next steps:** TCP and TLS, and voicemail detection (SIP trunks over UDP are in beta).
 - **Deploy in one click:** a published Docker image and templates for Railway and Render.
 
 ## Later

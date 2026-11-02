@@ -87,13 +87,27 @@ etapa por etapa, e aparece no painel.
 
 |  | OpenRing | Vapi | Retell | Dograh |
 |---|---|---|---|---|
-| Código | ✅ Aberto (MIT) | ❌ Fechado | ❌ Fechado | ✅ Open core (BSD-2) |
-| Taxa de plataforma | ✅ Nenhuma | US$ 0,05/min | Preço por minuto | Nenhuma no self-hosted, US$ 0,01/min na nuvem dele |
-| API compatível com o Vapi | ✅ | (é o Vapi) | ❌ | ❌ |
-| Rodar no seu servidor | ✅ `npx openring`, sem precisar de Docker (Docker também funciona) | Cadastro na nuvem deles | Cadastro na nuvem deles | ✅ Com Docker |
+| Código | ✅ Aberto (MIT) | ❌ Fechado | ❌ Fechado | ✅ Aberto (BSD-2) |
+| Taxa de plataforma | ✅ Nenhuma | US$ 0,05/min | US$ 0,055/min | Nenhuma no self-hosted, US$ 0,01/min na nuvem dele |
+| Rodar no seu servidor | ✅ `npx openring`, sem precisar de Docker (Docker também funciona) | ❌ Nuvem deles | Nuvem deles; on-premise nos planos Enterprise | ✅ Com Docker |
+| Ligações e transcrições | ✅ No seu servidor, sem telemetria | Nuvem deles | Nuvem deles; on-premise nos planos Enterprise | No seu servidor quando self-hosted; telemetria anônima, a não ser que você desligue |
+| API compatível com o Vapi | ✅ Troque a base URL, importe uma conta | (é o Vapi) | ❌ | ❌ |
+| Stack local grátis | ✅ Whisper, Ollama, Kokoro | ❌ | ❌ | ✅ Modelos abertos hospedados por você |
+| Ligações simultâneas | Sem limite próprio, seu servidor decide (**beta**) | 4, depois US$ 10 por linha ao mês | 20, depois US$ 8 por ligação ao mês | 10 por padrão no self-hosted, dá para aumentar; 10 na nuvem dele |
+| Modelo reserva | ✅ De qualquer provedor, quando um falha ou fica lento (**beta**) | Só do mesmo provedor, na OpenAI e no Bedrock | ✅ Assume quando o modelo principal falha ou fica lento | — |
+| Linhas telefônicas | Twilio (saída em **beta**); só entrada na Telnyx e no Genesys (**beta**); troncos SIP por UDP (**beta**) | ✅ Twilio, Vonage, Telnyx, SIP | ✅ Twilio, Telnyx, SIP | ✅ Twilio, Vonage, Telnyx, Plivo, Vobiz, Cloudonix, Asterisk |
+| Campanhas | Twilio e SIP (**beta**), sem nova tentativa por enquanto | ✅ | ✅ | ✅ Com nova tentativa |
+| Base de conhecimento (RAG) | ✅ Grátis, no seu servidor, por palavras; ou a sua própria busca (**beta**) | ✅ Google Gemini, ou o seu servidor | ✅ | ✅ |
+| Vários assistentes numa ligação | ✅ Squads, no formato do Vapi (**beta**) | ✅ Squads | ✅ | ✅ |
+| Editor visual de fluxos | ❌ Fora dos planos por enquanto | Canvas para squads | ✅ | ✅ |
+| Ligações pelo WhatsApp | ❌ Ainda não | — | — | ✅ Só entrada |
 
-Em todas você também paga transcrição, modelo, voz e linha telefônica. Preços das páginas públicas de cada
-empresa em outubro de 2026; confira antes de decidir. O OpenRing não tem vínculo com nenhuma delas.
+— significa que não encontramos na documentação pública deles. Em todas você também paga modelo, voz e linha
+telefônica, e transcrição também, exceto que a página de preços do Retell não lista cobrança separada por ela. Com o
+OpenRing, o servidor, a disponibilidade e qualquer trabalho de compliance ficam com você; as plataformas hospedadas
+cuidam dos dois primeiros e ajudam com o terceiro (para HIPAA, o Vapi cobra US$ 2.000 por mês e o Retell diz que não há
+custo extra). Preços e recursos das páginas públicas e da documentação de cada empresa em 2 de novembro de 2026; confira
+antes de decidir. O OpenRing não tem vínculo com nenhuma delas.
 
 ## ✨ O que já funciona
 
@@ -104,7 +118,10 @@ empresa em outubro de 2026; confira antes de decidir. O OpenRing não tem víncu
 | Stack 100% local e grátis: Whisper, Ollama e Kokoro, com um clique no editor | |
 | Provedor reserva no formato do Vapi, inclusive de outro provedor (**beta**) | |
 | Quem liga em qualquer idioma: o assistente responde no idioma dele (`"language": "multi"`) | |
+| Vários assistentes numa ligação, passando a pessoa de um para o outro: squads e a ferramenta `handoff` (**beta**) | Handoff escolhido pelo seu servidor, e para um squad inteiro |
+| Base de conhecimento: arquivos que o assistente consulta durante a ligação, de graça e no seu servidor, ou a sua própria busca (**beta**) | Busca por significado, embutida |
 | Ligações recebidas pelo Twilio, confirmadas numa ligação real | Ligações de saída pela Telnyx e pelo Genesys; Plivo |
+| Troncos SIP: qualquer operadora, sem Twilio no meio, entrada e saída (**beta**) | SIP por TCP e TLS |
 | Ligações feitas pelo Twilio (**beta**: conte como foi) | |
 | Campanhas: um assistente liga para uma lista ou CSV, algumas ligações por vez, chamando cada pessoa pelo nome (**beta**) | |
 | Ligações recebidas pela Telnyx (**beta**) | |
@@ -165,6 +182,49 @@ curl -X POST http://localhost:8000/assistant \
     "transcriber": {"provider": "deepgram", "model": "nova-3", "language": "pt-BR"}
   }'
 ```
+
+### Base de conhecimento (beta)
+
+Envie arquivos e o assistente consulta durante a ligação. As mesmas chamadas do Vapi: `POST /file` e uma ferramenta
+`query`, ou **Knowledge** no painel e as caixas no editor do assistente. Aceita PDF, .docx, texto, Markdown, CSV, JSON,
+YAML, XML e logs, até 20 MB cada. PDF escaneado não tem texto para ler, e .doc antigo precisa virar .docx.
+
+A busca roda no seu servidor, de graça, em milissegundos e sem baixar nada. Ela **procura palavras, não significados**: o
+modelo escolhe as palavras e tenta outras quando nada volta, e um arquivo curto vai inteiro para o modelo. Em documentos
+longos, diga nas instruções quando buscar e use os termos dos arquivos. Para busca por significado, use a sua:
+`provider: "custom-knowledge-base"` com `server.url`, que recebe o `knowledge-base-request` do Vapi. A importação copia as
+ferramentas `query`, mas não os arquivos: envie de novo e liste os novos ids.
+
+### Squads (beta)
+
+Vários assistentes numa ligação, cada um com suas instruções, ferramentas, modelo e voz: um atende e passa a pessoa para
+um especialista, que recebe a conversa até ali. O mesmo JSON do Vapi em `POST /squad`, ou **Squads** no painel:
+
+```json
+{"name": "Recepção", "members": [
+  {"assistantId": "ID_RECEPCAO", "assistantDestinations": [
+    {"type": "assistant", "assistantName": "Financeiro", "description": "a pessoa pergunta sobre uma fatura",
+     "message": "Um momento, vou passar para o financeiro."}]},
+  {"assistantId": "ID_FINANCEIRO"}
+]}
+```
+
+O primeiro atende. Use `squadId` num número ou em `POST /call`. A ferramenta `handoff` faz o mesmo com mais controle e
+funciona sem squad; `contextEngineeringPlan` define o que o próximo recebe da conversa, e o registro da ligação guarda
+tudo em `handoffs` e na transcrição. Limites, gravação e webhooks vêm do primeiro assistente. Ainda não: destinos
+`dynamic`, handoff para um squad inteiro, `variableExtractionPlan` e squads em campanhas.
+
+### Troncos SIP (beta)
+
+Qualquer operadora que fale SIP, sem Twilio no meio, pagando o preço da operadora. O OpenRing fala SIP e RTP (G.711, por
+UDP) sozinho. O mesmo JSON do Vapi: uma credencial `byo-sip-trunk` em `POST /credential` e um número `byo-phone-number`,
+ou **Phone numbers > SIP trunks** no painel. Ligações entram e saem pelo tronco, campanhas também, e `transferCall` usa
+SIP REFER.
+
+**A operadora precisa alcançar seu computador por UDP**, na porta 5060 e nas portas de áudio 40000-40999: precisa de
+servidor com endereço público ou redirecionamento de portas; túnel web não serve. Nada escuta até salvar um tronco, e o
+OpenRing só responde aos gateways dos seus troncos, para não virar alvo de fraude. Ainda não: SIP por TCP ou TLS, detecção
+de caixa postal e outros codecs. Nenhuma operadora real passou por aqui ainda, então conte como foi.
 
 ### Provedor reserva (beta)
 

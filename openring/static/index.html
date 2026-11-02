@@ -826,7 +826,7 @@ async function viewSquad(id) {
       return `<section class="panel" style="margin-bottom:12px"><div class="body">
         <div class="field"><label for="m${i}">${i ? "Assistant " + (i + 1) : "Answers the call"}</label><select id="m${i}" data-member="${i}">${assistants.map(a => option(a.id, label(a), m.assistantId)).join("")}</select></div>
         ${others.map(o => { const n = label(assistants.find(a => a.id === o.assistantId) || {}); const d = to.find(x => x.assistantName === n); return `<label class="consent" style="margin:4px 0"><input type="checkbox" data-to="${i}" value="${esc(n)}" ${d ? "checked" : ""}><span>Can hand off to ${esc(n)}</span></label>
-          <input aria-label="When to hand off to ${esc(n)}" data-why="${i}" data-name="${esc(n)}" value="${esc(d?.description || "")}" placeholder="When: the caller asks about billing" style="margin-bottom:8px">`; }).join("")}
+          <div class="field" style="margin:4px 0 10px"><input aria-label="When to hand off to ${esc(n)}" data-why="${i}" data-name="${esc(n)}" value="${esc(d?.description || "")}" placeholder="When: the caller asks about billing"></div>`; }).join("")}
         <div class="actions" style="margin-top:8px"><button type="button" class="btn ghost small" data-remove="${i}">Remove</button></div>
       </div></section>`;
     }).join("")}

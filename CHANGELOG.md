@@ -8,6 +8,16 @@ All notable changes to OpenRing are listed here. The format follows
 
 ### Added
 
+- Squads (beta), in Vapi's format: several assistants on one call, each with its own prompt, tools, model and voice.
+  `/squad`, the `handoff` tool and `assistantDestinations`, `squadId` on numbers, calls and `assistant-request`,
+  `contextEngineeringPlan`, `firstMessageMode` and `tools:append`; the call's `handoffs` lists each change. The import
+  brings squads.
+- Knowledge bases (beta), in Vapi's format: `POST /file`, the `query` tool, `/knowledge-base` and
+  `model.knowledgeBaseId`. The search runs on your server with SQLite's full-text index, matching words, or asks your
+  own with `custom-knowledge-base`. PDFs are read with pypdf, a new dependency.
+- SIP trunks (beta), in Vapi's format: `byo-sip-trunk` credentials in `/credential` and `byo-phone-number` numbers, in and
+  out, with login, registration and transfers, over UDP with G.711. Only your trunks' gateways get an answer.
+  `customer.sipUri` works, and Twilio and Telnyx SIP calls find their number.
 - Words the transcriber should get right, in Vapi's `transcriber.keyterm`, `keytermsPrompt` and `keywords`, or
   **Words to recognize** in the assistant editor. Each goes to the field its transcriber and model take, since Deepgram
   refuses a connection given the wrong one.

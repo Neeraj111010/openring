@@ -4,6 +4,9 @@ services:
     env_file: .env
     ports:
       - "8000:8000"
+      # SIP trunks: the carrier reaches these by UDP (set SIP_PUBLIC_IP to the server's address).
+      # - "5060:5060/udp"
+      # - "40000-40999:40000-40999/udp"
     volumes:
       - openring-data:/data
     restart: unless-stopped

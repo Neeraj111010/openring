@@ -87,14 +87,27 @@ latency is recorded, step by step, and shown in the dashboard.
 
 |  | OpenRing | Vapi | Retell | Dograh |
 |---|---|---|---|---|
-| Source code | ✅ Open (MIT) | ❌ Closed | ❌ Closed | ✅ Open core (BSD-2) |
-| Platform fee | ✅ None | US$0.05/min | Per-minute pricing | None self-hosted, US$0.01/min in its cloud |
-| Vapi-compatible API | ✅ | (it's Vapi) | ❌ | ❌ |
-| Run it yourself | ✅ `npx openring`, no Docker needed (Docker works too) | Sign up for their cloud | Sign up for their cloud | ✅ With Docker |
+| Source code | ✅ Open (MIT) | ❌ Closed | ❌ Closed | ✅ Open (BSD-2) |
+| Platform fee | ✅ None | US$0.05/min | US$0.055/min | None self-hosted, US$0.01/min in its cloud |
+| Run it on your server | ✅ `npx openring`, no Docker needed (Docker works too) | ❌ Their cloud | Their cloud; on-premise on Enterprise plans | ✅ With Docker |
+| Calls and transcripts | ✅ On your server, no telemetry | Their cloud | Their cloud; on-premise on Enterprise plans | On your server when self-hosted; anonymous telemetry unless you turn it off |
+| Vapi-compatible API | ✅ Change the base URL, import an account | (it's Vapi) | ❌ | ❌ |
+| Free local stack | ✅ Whisper, Ollama, Kokoro | ❌ | ❌ | ✅ Open models you host |
+| Calls at once | No limit of its own, your server decides (**beta**) | 4, then US$10 per line a month | 20, then US$8 per call a month | 10 by default when self-hosted, you can raise it; 10 in its cloud |
+| Backup model | ✅ From any provider, when one fails or is slow (**beta**) | Same provider only, on OpenAI and Bedrock | ✅ Takes over when the main model fails or is slow | — |
+| Phone lines | Twilio (outgoing in **beta**); incoming only on Telnyx and Genesys (**beta**); SIP trunks over UDP (**beta**) | ✅ Twilio, Vonage, Telnyx, SIP | ✅ Twilio, Telnyx, SIP | ✅ Twilio, Vonage, Telnyx, Plivo, Vobiz, Cloudonix, Asterisk |
+| Campaigns | Twilio and SIP (**beta**), no retries yet | ✅ | ✅ | ✅ With retries |
+| Knowledge base (RAG) | ✅ Free, on your server, matching words; or your own search (**beta**) | ✅ Google Gemini, or your own server | ✅ | ✅ |
+| Several assistants in one call | ✅ Squads, in Vapi's format (**beta**) | ✅ Squads | ✅ | ✅ |
+| Visual flow builder | ❌ Not planned for now | Canvas for squads | ✅ | ✅ |
+| Calls over WhatsApp | ❌ Not yet | — | — | ✅ Incoming only |
 
-On every platform you also pay for speech-to-text, the model, the voice and the phone line. Prices are
-from each company's public pricing page in October 2026; check them before you decide. OpenRing isn't
-affiliated with any of them.
+— means we didn't find it in their public docs. On every platform you also pay for the model, the voice and the
+phone line, and for speech-to-text too, except that Retell's pricing page lists no separate charge for it. With
+OpenRing, the server, its uptime and any compliance work are yours; hosted platforms take on the first two and help
+with the third (for HIPAA, Vapi charges US$2,000 a month and Retell says there's no extra fee). Prices and features are
+from each company's public pages and docs on November 2, 2026; check them before you decide. OpenRing isn't affiliated
+with any of them.
 
 ## ✨ What works today
 
@@ -105,7 +118,10 @@ affiliated with any of them.
 | A 100% local, free stack: Whisper, Ollama and Kokoro, one click in the editor | |
 | Provider fallback in Vapi's format, across providers (**beta**) | |
 | Callers in any language: the assistant answers in theirs (`"language": "multi"`) | |
+| Several assistants on one call, handing the caller to one another: squads and the `handoff` tool (**beta**) | Handoffs chosen by your server, and to a whole squad |
+| A knowledge base: files the assistant searches during a call, free and on your server, or your own search (**beta**) | Search by meaning, built in |
 | Incoming phone calls through Twilio, confirmed on a real call | Outbound calls through Telnyx and Genesys; Plivo |
+| SIP trunks: any carrier, no Twilio in between, in and out (**beta**) | SIP over TCP and TLS |
 | Outgoing calls through Twilio (**beta**: tell us how it goes) | |
 | Campaigns: one assistant calls a list or CSV, a few at a time, greeting each person by name (**beta**) | |
 | Incoming calls through Telnyx (**beta**, see [Telnyx](#telnyx-beta)) | |
@@ -124,7 +140,7 @@ The full plan is in the [roadmap](ROADMAP.md).
 
 ## 🔁 Moving from Vapi
 
-Copy every assistant, tool and Twilio number of an account in one request, or press **Import** on the
+Copy every assistant, squad, tool and Twilio number of an account in one request, or press **Import** on the
 Assistants page. The key is used once and never stored; importing again updates what came in before.
 
 ```bash
@@ -338,6 +354,106 @@ with `server.headers` and `server.secret` (as `X-Vapi-Secret`):
 Pick which ones with `serverMessages`, as on Vapi. A phone number without an assistant but with its own
 `server.url` asks it on each incoming call (`assistant-request`) and uses the `assistantId` or the transient
 `assistant` it answers. `POST /call` also takes a transient `assistant` instead of an `assistantId`.
+
+### Knowledge base (beta)
+
+Upload files, and the assistant looks things up in them during a call. Same calls as Vapi: `POST /file`, then a `query`
+tool, or **Knowledge** in the dashboard and the boxes in the assistant editor.
+
+```bash
+curl -H "Authorization: Bearer $OPENRING_API_KEY" -F file=@prices.pdf http://localhost:8000/file
+```
+
+```json
+{"model": {"tools": [{"type": "query", "function": {"name": "faq"},
+  "knowledgeBases": [{"name": "faq", "description": "Prices and opening hours", "fileIds": ["FILE_ID"]}]}]}}
+```
+
+PDF, .docx, text, Markdown, CSV, JSON, YAML, XML and logs, up to 20 MB each. A scanned PDF has no text to read, and old
+.doc files need saving as .docx. Only the text is kept, in OpenRing's database.
+
+The search runs on your server, for free, in a few milliseconds and with nothing to download. It **matches words, not
+meanings**: the model picks the words, and tries others when nothing comes back, and a short file goes to the model
+whole, so it can read what the search can't. For long documents, say in the instructions when to search and use the
+files' own terms. For search by meaning, use your own: `provider: "custom-knowledge-base"` with a `server.url`, as a
+`knowledgeBases` entry or through `POST /knowledge-base` and `model.knowledgeBaseId`. It gets Vapi's
+`knowledge-base-request` and answers `documents` or a `custom-message`. Unlike on Vapi, where it's asked on every turn,
+the model asks it when it needs to, and the message also has the `query`.
+
+The import copies `query` tools, but not their files: upload them again and list the new ids.
+
+### Squads (beta)
+
+Several assistants on one call, each with its own instructions, tools, model and voice: one answers and hands the caller
+to a specialist, who has the conversation so far. Same JSON as Vapi, in `POST /squad`, or **Squads** in the dashboard:
+
+```json
+{"name": "Front desk", "members": [
+  {"assistantId": "RECEPTION_ID", "assistantDestinations": [
+    {"type": "assistant", "assistantName": "Billing", "description": "the caller asks about an invoice",
+     "message": "One moment, I'll pass you to billing."}]},
+  {"assistantId": "BILLING_ID"}
+]}
+```
+
+The first member answers. Put `squadId` on a phone number or in `POST /call` (or an inline `squad`), and an
+`assistant-request` can answer with either. A `handoff` tool does the same as `assistantDestinations` with more control,
+and works on an assistant with no squad; whoever it names by `assistantId` comes along to the call:
+
+```json
+{"type": "handoff", "function": {"name": "to_billing", "parameters": {"type": "object",
+   "properties": {"reason": {"type": "string"}}}},
+ "destinations": [{"type": "assistant", "assistantName": "Billing",
+   "contextEngineeringPlan": {"type": "lastNMessages", "maxMessages": 10}}]}
+```
+
+- What the model fills in (`reason`) becomes a variable: the next assistant's prompt can say `{{reason}}`.
+- `contextEngineeringPlan` is what the next assistant is given: `all` (the default), `lastNMessages`,
+  `userAndAssistantMessages`, `previousAssistantMessages` or `none`. The call's record always keeps everything.
+- On taking over, it follows its own `firstMessageMode`: it says its `firstMessage`, or, with none, answers with the
+  model. `assistant-waits-for-user` waits for the caller.
+- The call's `handoffs` lists each change. `membersOverrides`, a member's `assistantOverrides` and `tools:append` work.
+
+The call's limits, idle messages, recording and webhooks come from the first assistant. If an assistant's providers all
+fail, another's take over rather than leaving the caller in silence. The switch waits for the assistant to finish
+talking, about a second of quiet. Not available yet: `dynamic` destinations, handing off to a whole squad,
+`variableExtractionPlan`, rejection plans, and squads in campaigns. Assistants with different transcribers or voices
+keep a connection open to each during the call.
+
+### SIP trunks (beta)
+
+Any carrier that speaks SIP, with no Twilio in between, so you pay the carrier's price. OpenRing speaks SIP and RTP
+(G.711, over UDP) itself. Same JSON as Vapi, or **Phone numbers > SIP trunks** in the dashboard:
+
+```bash
+curl -X POST http://localhost:8000/credential -H "Authorization: Bearer $OPENRING_API_KEY" \
+  -H "Content-Type: application/json" -d '{"provider": "byo-sip-trunk", "name": "My carrier",
+    "gateways": [{"ip": "sip.carrier.example"}], "outboundLeadingPlusEnabled": true,
+    "outboundAuthenticationPlan": {"authUsername": "USER", "authPassword": "PASSWORD"}}'
+
+curl -X POST http://localhost:8000/phone-number -H "Authorization: Bearer $OPENRING_API_KEY" \
+  -H "Content-Type: application/json" -d '{"provider": "byo-phone-number", "number": "+15551234567",
+    "credentialId": "CREDENTIAL_ID", "assistantId": "ASSISTANT_ID"}'
+```
+
+Calls to the number reach the assistant, `POST /call` and campaigns dial out through the trunk, and `transferCall`
+sends a SIP REFER. A carrier that wants registration gets it with `sipRegisterPlan: {"domain": "sip.carrier.example"}`
+in the authentication plan. `numberE164CheckEnabled: false` allows an extension like `1000`, and `customer.sipUri`
+calls a SIP address directly.
+
+**The carrier has to reach your computer by UDP**, on port 5060 and on the audio ports 40000-40999, so this needs a server
+with a public address or port forwarding: a web tunnel won't do. `SIP_PORT` and `SIP_RTP_PORTS` change them, and
+behind a NAT `SIP_PUBLIC_IP` says what address to give the carrier.
+
+Nothing listens until a trunk is saved. SIP servers on the internet get probed all day by people looking to make calls on
+someone else's bill, so OpenRing answers only the gateways of your trunks and ignores everyone else without a word; a
+softphone on your network works by listing its address as a gateway. The password goes in and never comes back
+through the API. It's kept in OpenRing's database, and SIP over UDP isn't encrypted, as is usual with carriers.
+
+Not available yet: SIP over TCP or TLS, voicemail detection, and codecs other than G.711. On Twilio or Telnyx, SIP
+domains and trunks already reach their webhooks: the number in the `sip:` address finds the assistant, and
+`customer.sipUri` dials out through Twilio. No real carrier has carried a call through this yet, so please tell us how
+it goes.
 
 ### Provider fallback (beta)
 
