@@ -6,6 +6,13 @@ All notable changes to OpenRing are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- When a provider stopped working during a call (a rejected key, no credit left, an outage) and no fallback could
+  take over, the caller heard silence until they hung up, and the call was recorded as `customer-ended-call`,
+  a success. The call now ends right away with `pipeline-error: the voice (11labs ...) stopped working: ...`,
+  naming the layer, the provider and its error.
+
 ## [0.1.5] - 2026-11-01
 
 ### Added

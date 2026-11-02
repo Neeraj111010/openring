@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -133,6 +134,19 @@ class Usage:
 def members(service: Any) -> list[Any]:
     """The provider services behind one pipeline step: a switcher's, or the service itself."""
     return list(getattr(service, "services", None) or [service]) if service is not None else []
+
+
+def what_failed(processor: Any) -> str:
+    """'the voice (11labs rachel)': the call's layer a failing service (or a switcher out of fallbacks) stands for."""
+    labeled = [s for s in members(processor) if hasattr(s, "openring_price")]
+    if not labeled:
+        return str(processor)
+    return f"the {labeled[0].openring_price[0]} ({', '.join(s.openring_label for s in labeled)})"
+
+
+def short_error(error: Any) -> str:
+    """A provider's error without the source location Pipecat adds to it ('... (client.py:474): ...')."""
+    return re.sub(r" \([^()]*\.py:\d+\)", "", str(error))[:200]
 
 
 def transcript_messages(messages: list[Any]) -> list[dict[str, Any]]:
@@ -286,6 +300,7 @@ async def run_call(
     from pipecat.pipeline.runner import PipelineRunner
     from pipecat.pipeline.service_switcher import ServiceSwitcher
     from pipecat.pipeline.task import PipelineParams, PipelineTask
+    from pipecat.pipeline.worker import ProcessorUnusablePolicy
     from pipecat.processors.aggregators.llm_context import LLMContext
     from pipecat.processors.aggregators.llm_response_universal import (
         LLMContextAggregatorPair,
@@ -438,7 +453,18 @@ async def run_call(
             pipeline,
             params=PipelineParams(enable_metrics=True, enable_usage_metrics=True, **rates),
             observers=[latency, SpeechObserver(observe_every_push=False)],
+            # A layer that can no longer work (a rejected key, no credit, an outage) with no fallback left to take
+            # over ends the call: Pipecat's default carries on, leaving the caller in silence.
+            processor_unusable_policy=ProcessorUnusablePolicy.END,
         )
+
+        @task.event_handler("on_pipeline_error")
+        async def _on_error(_task, frame):
+            nonlocal ended_reason
+            failed = getattr(frame, "processor", None)
+            if failed is not None and not failed.is_usable and not ended_reason.startswith("pipeline-error"):
+                ended_reason = f"pipeline-error: {what_failed(failed)} stopped working: {short_error(frame.error)}"
+                logger.warning("call {} ends: {}", call_id, ended_reason)
 
         @transport.event_handler("on_client_connected")
         async def _on_connected(_transport, _client):

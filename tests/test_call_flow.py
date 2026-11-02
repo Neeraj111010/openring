@@ -161,6 +161,36 @@ def test_caller_who_hangs_up_at_once_ends_the_call(monkeypatch):
     assert (call["status"], call["endedReason"]) == ("ended", "customer-ended-call")
 
 
+def test_a_provider_that_stops_working_mid_call_ends_the_call_with_the_reason(monkeypatch):
+    """A rejected key (or no credit, or an outage) left the caller in silence until they hung up, and the call was
+    recorded as 'customer-ended-call', a success."""
+    from pipecat.frames.frames import StartFrame
+    from pipecat.processors.frame_processor import FrameProcessor
+
+    from openring import bot
+
+    class RejectedTranscriber(FrameProcessor):
+        openring_price = ("transcriber", "deepgram", "nova-3", "pt-BR")
+        openring_label = "deepgram nova-3"
+
+        async def process_frame(self, frame, direction):
+            await super().process_frame(frame, direction)
+            await self.push_frame(frame, direction)
+            if isinstance(frame, StartFrame):  # as Deepgram answers a bad key: right when the call starts
+                await self.push_error("HTTP 401 (bad.py:12): Invalid credentials", force_treat_as_permanent=True)
+
+    real = bot.build_services
+    monkeypatch.setattr(bot, "build_services", lambda plan: (RejectedTranscriber(), *real(plan)[1:]))
+    _pipeline_started(monkeypatch)
+    client, store, params = _answered_call(monkeypatch)
+    with client.websocket_connect("/ws/twilio") as ws:
+        _handshake(ws, params)
+        call = _wait_until_ended(store, params["callId"])  # the caller stays on the line
+    assert call["status"] == "ended"
+    assert call["endedReason"] == ("pipeline-error: the transcriber (deepgram nova-3) stopped working: "
+                                   "HTTP 401: Invalid credentials")
+
+
 def test_a_provider_that_fails_to_start_ends_the_call(monkeypatch):
     import asyncio
 
