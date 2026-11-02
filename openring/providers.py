@@ -299,6 +299,8 @@ class StackPlan:
     idle_timeout_seconds: float = 10
     idle_max_spoken: int = 3
     idle_reset_on_speech: bool = False
+    # A voicemail answered: say `first_message` (the assistant's `voicemailMessage`) and hang up.
+    leave_message: bool = False
 
 
 def _require_key(env_name: str | None, what: str) -> None:
@@ -349,6 +351,13 @@ def call_limits(assistant: dict[str, Any]) -> dict[str, Any]:
     messages = plan.get("idleMessages") or []
     if not isinstance(messages, list) or not all(isinstance(m, str) for m in messages):
         raise ProviderError("messagePlan.idleMessages must be a list of sentences")
+    detection = assistant.get("voicemailDetection")
+    if detection is not None and detection != "off" and not isinstance(detection, dict):
+        raise ProviderError('voicemailDetection is "off" or an object, like {"provider": "twilio"}')
+    if isinstance(detection, dict):
+        number(detection, "beepMaxAwaitSeconds", 0, 60)
+    if assistant.get("voicemailMessage") is not None and not isinstance(assistant["voicemailMessage"], str):
+        raise ProviderError("voicemailMessage is a sentence, or the URL of a .wav or .mp3")
     limits = {f: number(assistant, f, low, high) for f, low, high in LIMITS}
     idle = {f: number(plan, f, low, high) for f, low, high in IDLE_LIMITS}
     out: dict[str, Any] = {"idle_messages": [m.strip() for m in messages if m.strip()],

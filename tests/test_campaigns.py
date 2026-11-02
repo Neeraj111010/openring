@@ -21,7 +21,7 @@ PEOPLE = [{"number": "+55 11 91234-0001", "name": "Maria"}, {"number": "+55 11 9
 def placed(monkeypatch):
     calls = []
 
-    async def create_call(account_sid, auth_token, *, to, from_, url, status_callback):
+    async def create_call(account_sid, auth_token, *, to, from_, url, status_callback, machine_detection=None):
         calls.append(to)
         if to.endswith("9999"):
             raise twilio.TwilioError("Trial accounts may only make calls to verified numbers. (Twilio error 21219)")

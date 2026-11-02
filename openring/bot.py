@@ -536,7 +536,7 @@ async def run_call(
 
         @transport.event_handler("on_client_connected")
         async def _on_connected(_transport, _client):
-            nonlocal limits, watching
+            nonlocal ended_reason, limits, watching
             first_word["connected"] = time.monotonic()
             limits = CallLimits(plan.max_duration_seconds, plan.silence_timeout_seconds, time.monotonic())
             watching = asyncio.ensure_future(watch_limits())
@@ -544,7 +544,11 @@ async def run_call(
             if plan.first_message:
                 # In the context (and transcript) right away, even if the voice fails to say it.
                 context.add_message({"role": "assistant", "content": plan.first_message})
-                await task.queue_frames([TTSSpeakFrame(plan.first_message, append_to_context=False)])
+                greeting = TTSSpeakFrame(plan.first_message, append_to_context=False)
+                if plan.leave_message:  # the beep or noise on the line must not cut the message off
+                    greeting.interruptible = False
+                    ended_reason = "voicemail"
+                await task.queue_frames([greeting, *([EndFrame()] if plan.leave_message else [])])
             else:
                 await task.queue_frames([LLMRunFrame()])
 

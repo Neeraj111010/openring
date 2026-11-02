@@ -14,6 +14,12 @@ All notable changes to OpenRing are listed here. The format follows
   `messagePlan.idleMessages` are said ("Are you still there?"), after `idleTimeoutSeconds`, up to
   `idleMessageMaxSpokenCount` times. The assistant editor has the length, the silence and the idle message.
 
+- Voicemail detection on outgoing calls (beta), in Vapi's fields: with `voicemailDetection` or a `voicemailMessage`,
+  Twilio's answering machine detection checks who picked up and waits for the beep. A voicemail gets the message, in
+  the assistant's voice (or a recording, from the URL of a .wav or .mp3), and the call ends with `endedReason:
+  "voicemail"`, which campaigns count in `callsCounterEndedVoicemail`; without a message it just hangs up. It stays
+  off unless asked for. The assistant editor has the switch and the message.
+
 ### Changed
 
 - Calls now have Vapi's default limits: 10 minutes at most, and 30 seconds of silence from the caller. Before,

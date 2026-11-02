@@ -14,8 +14,9 @@ from test_api import ASSISTANT, AUTH, make_client
 def placed(monkeypatch):
     calls = []
 
-    async def create_call(account_sid, auth_token, *, to, from_, url, status_callback):
-        calls.append({"to": to, "from": from_, "url": url, "status_callback": status_callback})
+    async def create_call(account_sid, auth_token, *, to, from_, url, status_callback, machine_detection=None):
+        calls.append({"to": to, "from": from_, "url": url, "status_callback": status_callback,
+                      **({"machine_detection": machine_detection} if machine_detection else {})})
         return "CA-out-1"
 
     monkeypatch.setattr(twilio, "create_call", create_call)
@@ -94,3 +95,101 @@ def test_unanswered_outbound_call_is_closed_by_the_status_callback(placed):
     assert _signed(client, path, {"CallSid": "CA-out-1", "CallStatus": "no-answer"}).status_code == 204
     ended = client.get(f"/call/{call['id']}", headers=AUTH).json()
     assert (ended["status"], ended["endedReason"]) == ("ended", "customer-did-not-answer")
+
+
+@pytest.mark.parametrize("fields, expected", [
+    ({}, None),
+    ({"voicemailDetection": "off", "voicemailMessage": "Call us back."}, None),
+    ({"voicemailDetection": {"provider": "twilio"}}, "30"),
+    ({"voicemailMessage": "Call us back."}, "30"),  # a message to leave turns it on, as on Vapi
+    ({"voicemailDetection": {"provider": "vapi", "beepMaxAwaitSeconds": 20}}, "20"),
+    ({"voicemailDetection": {"provider": "twilio", "beepMaxAwaitSeconds": 0}}, "3"),  # Twilio's lowest
+    ({"voicemailDetection": {"provider": "twilio", "beepMaxAwaitSeconds": 60}}, "59"),  # and highest
+])
+def test_voicemail_detection_goes_to_twilio_when_the_assistant_asks(placed, fields, expected):
+    client, a, n = _setup()
+    assert client.patch(f"/assistant/{a['id']}", json=fields, headers=AUTH).status_code == 200
+    assert _call(client, n).status_code == 201
+    detection = placed[0].get("machine_detection")
+    if expected is None:
+        assert detection is None  # it costs money and delays the greeting: never by default
+    else:
+        assert detection == {"MachineDetection": "DetectMessageEnd", "MachineDetectionTimeout": expected}
+
+
+@pytest.mark.parametrize("fields, words", [
+    ({"voicemailDetection": "on"}, "voicemailDetection"),
+    ({"voicemailDetection": {"beepMaxAwaitSeconds": 90}}, "beepMaxAwaitSeconds"),
+    ({"voicemailMessage": 5}, "voicemailMessage"),
+])
+def test_voicemail_settings_are_checked(placed, fields, words):
+    client, a, _ = _setup()
+    r = client.patch(f"/assistant/{a['id']}", json=fields, headers=AUTH)
+    assert r.status_code == 400 and words in r.json()["detail"]
+
+
+def _answered(client, a, n, answered_by, **fields):
+    """An outbound call whose callee was answered by `answered_by`: what Twilio is told, and the call afterwards."""
+    client.patch(f"/assistant/{a['id']}", json=fields, headers=AUTH)
+    call = _call(client, n).json()
+    form = {"CallSid": "CA-out-1", "AnsweredBy": answered_by}
+    twiml = _signed(client, f"/twilio/voice?callId={call['id']}", form).text
+    return twiml, client.get(f"/call/{call['id']}", headers=AUTH).json()
+
+
+def test_a_person_who_answers_reaches_the_assistant(placed):
+    client, a, n = _setup()
+    for answered_by in ("human", "unknown"):
+        twiml, call = _answered(client, a, n, answered_by, voicemailMessage="Call us back.")
+        assert "<Stream" in twiml and call["status"] == "queued" and "answeredBy" not in call
+
+
+def test_voicemail_without_a_message_hangs_up(placed):
+    client, a, n = _setup()
+    twiml, call = _answered(client, a, n, "machine_end_beep", voicemailDetection={"provider": "twilio"})
+    assert ET.fromstring(twiml).find("./Hangup") is not None and "<Stream" not in twiml
+    assert (call["status"], call["endedReason"], call["answeredBy"]) == ("ended", "voicemail", "machine_end_beep")
+
+
+def test_voicemail_with_a_recording_plays_it(placed):
+    client, a, n = _setup()
+    url = "https://example.com/message.mp3?a=1&b=2"
+    twiml, call = _answered(client, a, n, "machine_end_silence", voicemailMessage=url)
+    assert ET.fromstring(twiml).find("./Play").text == url
+    assert ET.fromstring(twiml).find("./Hangup") is not None
+    assert (call["status"], call["endedReason"]) == ("ended", "voicemail")
+
+
+def test_voicemail_with_a_sentence_goes_to_the_assistant_to_say_it(placed):
+    client, a, n = _setup()
+    twiml, call = _answered(client, a, n, "machine_end_beep", voicemailMessage="Please call us back.")
+    assert "<Stream" in twiml
+    assert (call["status"], call["answeredBy"]) == ("queued", "machine_end_beep")  # the stream ends the call
+
+
+def test_a_fax_gets_no_message(placed):
+    client, a, n = _setup()
+    twiml, call = _answered(client, a, n, "fax", voicemailMessage="Please call us back.")
+    assert ET.fromstring(twiml).find("./Hangup") is not None and "<Stream" not in twiml
+    assert call["endedReason"] == "voicemail"
+
+
+def test_twilio_is_asked_to_detect_machines_only_when_given_the_parameters(monkeypatch):
+    import asyncio
+
+    import httpx
+
+    sent = []
+
+    def handle(request):
+        sent.append(dict(httpx.QueryParams(request.content.decode())))
+        return httpx.Response(201, json={"sid": "CA1"})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(twilio.httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handle), **kw))
+    base = {"to": "+15550000001", "from_": "+15550000002", "url": "https://x.test/v", "status_callback": "https://x.test/s"}
+    asyncio.run(twilio.create_call("AC1", "tok", **base))
+    detection = twilio.machine_detection({"voicemailDetection": {"beepMaxAwaitSeconds": 25}})
+    asyncio.run(twilio.create_call("AC1", "tok", **base, machine_detection=detection))
+    assert "MachineDetection" not in sent[0]
+    assert (sent[1]["MachineDetection"], sent[1]["MachineDetectionTimeout"]) == ("DetectMessageEnd", "25")

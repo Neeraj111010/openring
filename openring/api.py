@@ -575,8 +575,11 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         if not settings.public_url:
             raise HTTPException(status_code=400, detail="outbound calls need PUBLIC_URL (where Twilio reaches you)")
 
-    async def dial(number: dict[str, Any], customer: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
-        """Has Twilio call `customer` from `number`. `record` names the assistant (and overrides) for the call."""
+    async def dial(
+        number: dict[str, Any], customer: dict[str, Any], record: dict[str, Any], assistant: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Has Twilio call `customer` from `number`. `record` names the assistant (and overrides) for the call;
+        `assistant` is it with those applied, for what Twilio does before anyone talks to it."""
         person = {k: v for k, v in customer.items() if k != "assistantOverrides"}
         call = store.create("calls", {"type": "outboundPhoneCall", "status": "queued", **record,
                                       "phoneNumberId": number["id"], "customer": person})
@@ -588,6 +591,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
                 from_=_e164(number["number"]),
                 url=f"{settings.public_url}/twilio/voice?callId={call['id']}",
                 status_callback=f"{settings.public_url}/twilio/status?callId={call['id']}",
+                machine_detection=twilio.machine_detection(assistant),
             )
         except (TwilioError, httpx.HTTPError) as exc:
             patch = {"status": "ended", "endedReason": "twilio-failed-to-connect-call", "endedAt": now_iso()}
@@ -606,13 +610,14 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         else:
             assistant = _get_or_404("assistants", str(body.get("assistantId") or number.get("assistantId") or ""))
         extra = overrides.combine(customer.get("assistantOverrides"), body.get("assistantOverrides"))
-        _check_outbound(overrides.apply(assistant, extra, customer))
+        applied = overrides.apply(assistant, extra, customer)
+        _check_outbound(applied)
         # A transient assistant lives in the call record, as on Vapi.
         record: dict[str, Any] = {"assistant": transient} if transient is not None else {"assistantId": assistant["id"]}
         if extra:
             record["assistantOverrides"] = extra
         try:
-            return await dial(number, customer, record)
+            return await dial(number, customer, record, applied)
         except Refused as exc:
             raise HTTPException(status_code=400, detail=f"Twilio did not place the call: {exc.detail}") from exc
 
@@ -702,13 +707,14 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             number = _outbound_number(number_id)
             assistant = _get_or_404("assistants", str(campaign.get("assistantId") or number.get("assistantId") or ""))
             extra = overrides.combine(campaign.get("assistantOverrides"), customer.get("assistantOverrides"))
-            _check_outbound(overrides.apply(assistant, extra, customer))
+            applied = overrides.apply(assistant, extra, customer)
+            _check_outbound(applied)
         except HTTPException as exc:
             raise campaigns.Stop(str(exc.detail)) from exc
         record = {"assistantId": assistant["id"], "campaignId": campaign["id"],
                   **({"assistantOverrides": extra} if extra else {})}
         try:
-            return await dial(number, customer, record)
+            return await dial(number, customer, record, applied)
         except Refused as exc:
             logger.warning("campaign {}: Twilio did not call {}: {}", campaign["id"], customer["number"], exc.detail)
             return exc.call
@@ -868,6 +874,21 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
                     call.get("assistantId") or "a transient assistant")
         return call
 
+    def left_on_voicemail(call: dict[str, Any], answered_by: str) -> str | None:
+        """A machine answered an outbound call. The TwiML that ends the call: a recording, or just hanging up.
+        None when the assistant has a sentence to leave: the call goes on to it, with `answeredBy` on the record."""
+        assistant = call.get("assistant") or store.get("assistants", call.get("assistantId") or "") or {}
+        assistant = overrides.apply(assistant, call.get("assistantOverrides"), call.get("customer"))
+        message = assistant.get("voicemailMessage")
+        is_recording = str(message or "").startswith(("http://", "https://"))
+        logger.info("call {}: answered by {}", call["id"], answered_by)
+        if message and answered_by != "fax" and not is_recording:
+            store.update("calls", call["id"], {"answeredBy": answered_by})
+            return None
+        patch = {"status": "ended", "endedReason": "voicemail", "endedAt": now_iso(), "answeredBy": answered_by}
+        store.claim("calls", call["id"], "queued", patch)
+        return twilio.play_twiml(message) if message and answered_by != "fax" else twilio.hangup_twiml()
+
     @app.post("/twilio/voice")
     async def twilio_voice(request: Request) -> Response:
         form = await twilio_form(request)
@@ -881,6 +902,8 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             if not call or call.get("phoneCallProviderId") not in (None, form.get("CallSid")):
                 logger.warning("call {}: Twilio call {} is not this call; not connecting", call_id, form.get("CallSid"))
                 return Response(say_twiml("Sorry, this call could not be connected."), media_type="application/xml")
+            if form.get("AnsweredBy") in twilio.MACHINE and (twiml := left_on_voicemail(call, form["AnsweredBy"])):
+                return Response(twiml, media_type="application/xml")
             logger.info("call {} answered; streaming it to its assistant", call_id)
             params = {"callId": call_id, **({"assistantId": call["assistantId"]} if call.get("assistantId") else {})}
             return Response(stream_twiml(settings.public_ws_url + "/ws/twilio", params), media_type="application/xml")
@@ -963,6 +986,8 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             store.update("calls", call_id, {"status": "ended", "endedReason": f"provider-error: {exc}"})
             await refuse(str(exc))
             return
+        if call.get("answeredBy"):  # a voicemail answered (see left_on_voicemail): leave the message and hang up
+            plan.first_message, plan.leave_message = assistant.get("voicemailMessage"), True
         await run_call(build(), plan=plan, call_id=call_id, store=store, sample_rate=PHONE_SAMPLE_RATE,
                        transfer=transfer)
 

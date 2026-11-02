@@ -507,6 +507,7 @@ const ENDED = {
   "twilio-failed-to-connect-call": "Twilio couldn't connect", "assistant-not-found": "Assistant was deleted",
   "assistant-ended-call": "Assistant ended the call", "assistant-forwarded-call": "Transferred",
   "worker-shutdown": "Server restarted", "silence-timed-out": "Silence timed out",
+  "exceeded-max-duration": "Reached the time limit", "voicemail": "Voicemail",
 };
 const endedLabel = r => ENDED[r] || (r.startsWith("pipeline-error") ? "Error during the call" : r.startsWith("provider-error") ? "Provider not set up"
   : r.startsWith("assistant-request") ? "Your server picked no assistant" : r);
@@ -746,6 +747,7 @@ async function viewAssistant(id) {
   const m = a.model || {}, vo = a.voice || {}, t = a.transcriber || {};
   const system = (m.messages || []).find(x => x.role === "system")?.content || "";
   // The call limits as the editor shows them (Vapi's defaults when unset: 10 minutes, 30 seconds of silence).
+  const voicemailOn = a.voicemailDetection !== "off" && !!(a.voicemailDetection || a.voicemailMessage);
   const limitsShown = { minutes: Math.round((a.maxDurationSeconds ?? 600) / 60), silence: a.silenceTimeoutSeconds ?? 30 };
   const base = "#assistants/" + (a.id || "new");
   const v = $("#view");
@@ -788,6 +790,8 @@ async function viewAssistant(id) {
       <div class="field narrow"><label for="silence">Silence limit</label><p class="hint">Seconds</p><input id="silence" name="silence" type="number" min="10" max="3600" value="${limitsShown.silence}"></div>
       <div class="field"><label for="idle">If the caller goes quiet, say</label><p class="hint">Optional. After ${a.messagePlan?.idleTimeoutSeconds ?? 10} s without an answer, up to ${a.messagePlan?.idleMessageMaxSpokenCount ?? 3} times.</p><input id="idle" name="idle" value="${esc((a.messagePlan?.idleMessages || [])[0] || "")}" placeholder="Are you still there?"></div>
     </div>
+    <label class="consent"><input type="checkbox" name="vmOn" ${voicemailOn ? "checked" : ""}><span>On outgoing calls, detect voicemail. A person hears the greeting a few seconds later, and Twilio charges a small fee per call.</span></label>
+    <div class="field"><label for="vmMsg">Message to leave on voicemail</label><p class="hint">Optional. A sentence in the assistant's voice, or the URL of a .wav or .mp3. Without one, the call hangs up.</p><input id="vmMsg" name="vmMsg" value="${esc(a.voicemailMessage || "")}" placeholder="Hi, this is Ava from the clinic. Please call us back."></div>
     <div class="field"><label for="hook">Call report URL</label><p class="hint">Optional. We send the transcript here when a call ends.</p><input id="hook" name="hook" value="${esc((a.server || {}).url || "")}" placeholder="https://your-app.com/webhook"></div>
     ${footer}</form>`;
     const mp = $("[name=mp]"), mm = $("[name=mm]");
@@ -836,6 +840,8 @@ async function viewAssistant(id) {
         model: { ...m, ...routeModel(routes.find(r => r.id === f.get("mr")), f), messages: [...(m.messages || []).filter(x => x.role !== "system"), ...(f.get("sys") ? [{ role: "system", content: f.get("sys") }] : [])] },
         voice: { ...vo, provider: f.get("vp"), voiceId: f.get("vv") || undefined, model: f.get("vp") === (vo.provider || "kokoro") ? vo.model : undefined },
         server: f.get("hook") ? { ...(a.server || {}), url: f.get("hook") } : undefined,
+        voicemailDetection: f.get("vmOn") ? (voicemailOn && typeof a.voicemailDetection === "object" && a.voicemailDetection) || { provider: "twilio" } : voicemailOn || a.voicemailDetection ? "off" : undefined,
+        voicemailMessage: f.get("vmMsg") || (a.voicemailMessage ? "" : undefined),
         // Vapi's call limits, in seconds; untouched fields keep what was saved (or Vapi's defaults).
         maxDurationSeconds: Number(f.get("maxmin")) !== limitsShown.minutes ? Number(f.get("maxmin")) * 60 : a.maxDurationSeconds,
         silenceTimeoutSeconds: Number(f.get("silence")) !== limitsShown.silence ? Number(f.get("silence")) : a.silenceTimeoutSeconds,
@@ -1122,7 +1128,7 @@ function routeModel(route, f) {
   return { routeId: undefined, provider: f.get("mp"), model: f.get("mm") };
 }
 
-const UNREACHED = /^(customer-busy|customer-did-not-answer|twilio-failed)/;
+const UNREACHED = /^(customer-busy|customer-did-not-answer|twilio-failed|voicemail)/;
 let campaignTab = "calls";
 async function viewCampaign(id) {
   const [c, assistants, nums] = await Promise.all([api("/campaign/" + id), api("/assistant"), api("/phone-number")]);

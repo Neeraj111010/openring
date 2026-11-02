@@ -5,18 +5,35 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 from xml.sax.saxutils import escape, quoteattr
 
 import httpx
+
+# What Twilio's answering machine detection says (`AnsweredBy`) when no person picked up.
+MACHINE = ("machine_start", "machine_end_beep", "machine_end_silence", "machine_end_other", "fax")
 
 
 class TwilioError(Exception):
     """Twilio refused a request; the message is Twilio's own explanation."""
 
 
+def machine_detection(assistant: dict[str, Any]) -> dict[str, str]:
+    """Vapi's `voicemailDetection` as Twilio's answering machine detection (Calls API parameters). On with a
+    `voicemailDetection` object or a `voicemailMessage`, off with "off". Twilio waits for the beep before it asks
+    what to play, so a message lands in the recording; a person gets the greeting a few seconds later."""
+    detection = assistant.get("voicemailDetection")
+    if detection == "off" or not (isinstance(detection, dict) or assistant.get("voicemailMessage")):
+        return {}
+    plan = detection if isinstance(detection, dict) else {}
+    wait = plan.get("beepMaxAwaitSeconds", plan.get("machineDetectionTimeout", 30))
+    return {"MachineDetection": "DetectMessageEnd", "MachineDetectionTimeout": str(min(max(round(wait), 3), 59))}
+
+
 async def create_call(
-    account_sid: str, auth_token: str, *, to: str, from_: str, url: str, status_callback: str
+    account_sid: str, auth_token: str, *, to: str, from_: str, url: str, status_callback: str,
+    machine_detection: dict[str, str] | None = None,
 ) -> str:
     """Start an outbound call. Twilio fetches `url` for instructions once it is answered. Returns the CallSid."""
     async with httpx.AsyncClient(timeout=15) as client:
@@ -24,7 +41,7 @@ async def create_call(
             f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Calls.json",
             auth=(account_sid, auth_token),
             # Twilio requests both URLs with POST by default; trial accounts refuse the Method parameters.
-            data={"To": to, "From": from_, "Url": url, "StatusCallback": status_callback},
+            data={"To": to, "From": from_, "Url": url, "StatusCallback": status_callback, **(machine_detection or {})},
         )
     body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
     if r.status_code >= 400:
@@ -74,6 +91,14 @@ def stream_twiml(ws_url: str, parameters: dict[str, str]) -> str:
 
 def dial_twiml(number: str) -> str:
     return f'<?xml version="1.0" encoding="UTF-8"?><Response><Dial>{escape(number)}</Dial></Response>'
+
+
+def play_twiml(url: str) -> str:
+    return f'<?xml version="1.0" encoding="UTF-8"?><Response><Play>{escape(url)}</Play><Hangup/></Response>'
+
+
+def hangup_twiml() -> str:
+    return '<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>'
 
 
 def say_twiml(text: str) -> str:

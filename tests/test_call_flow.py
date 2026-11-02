@@ -242,9 +242,9 @@ def test_a_call_ends_itself_when_the_caller_is_silent_or_it_runs_too_long(monkey
     assert time.monotonic() - started < 10
 
 
-def _scripted_call(monkeypatch, limits, on_start=()):
+def _scripted_call(monkeypatch, limits, on_start=(), frames=None):
     """A call through stub providers: the transcriber pushes `on_start` when the call starts, and the voice "says"
-    each sentence at once, recording it. Returns (client, store, params, sentences said)."""
+    each sentence at once, recording it (and its frame, in `frames`). Returns (client, store, params, sentences)."""
     from pipecat.frames.frames import BotStartedSpeakingFrame, BotStoppedSpeakingFrame, StartFrame, TTSSpeakFrame
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
@@ -265,6 +265,8 @@ def _scripted_call(monkeypatch, limits, on_start=()):
                     await self.push_frame(early)
             if self.layer == "voice" and isinstance(frame, TTSSpeakFrame):
                 said.append(frame.text)
+                if frames is not None:
+                    frames.append(frame)
                 await self.push_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
                 await self.push_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
 
@@ -302,3 +304,18 @@ def test_a_quiet_caller_hears_the_idle_message_then_the_call_ends(monkeypatch):
         call = _wait_until_ended(store, params["callId"])
     assert call["endedReason"] == "silence-timed-out"
     assert said == [ASSISTANT["firstMessage"], "Still there?", "Still there?", "Goodbye."]
+
+
+def test_a_voicemail_gets_the_message_and_the_call_hangs_up(monkeypatch):
+    frames = []
+    client, store, params, said = _scripted_call(monkeypatch, (600, 30), frames=frames)
+    assistant = store.list("assistants")[0]
+    store.update("assistants", assistant["id"], {"voicemailMessage": "Hi {{customer.name}}, please call us back."})
+    store.update("calls", params["callId"], {"answeredBy": "machine_end_beep", "customer": {"name": "Maria"}})
+    with client.websocket_connect("/ws/twilio") as ws:
+        _handshake(ws, params)
+        call = _wait_until_ended(store, params["callId"])
+    assert call["endedReason"] == "voicemail"
+    assert said == ["Hi Maria, please call us back."]  # not the greeting
+    assert frames[0].interruptible is False  # the beep or noise on the line must not cut it off
+    assert [m["message"] for m in call["messages"]] == said

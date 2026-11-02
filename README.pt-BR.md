@@ -217,6 +217,11 @@ Ligue para o número. As transcrições ficam em `GET /call` e na página **Call
 para alguém, use o mesmo corpo do `POST /call` do Vapi (ou **Call a phone** no painel). Ligue só para quem
 espera a ligação: ligações automáticas são reguladas (as regras da Anatel no Brasil, a TCPA nos EUA).
 
+**Caixa postal (beta):** com `voicemailDetection` ou um `voicemailMessage` no assistente, a detecção do Twilio
+vê quem atendeu e espera o bipe. Na caixa postal, o assistente deixa o `voicemailMessage` na própria voz (ou toca
+um áudio, se for a URL de um .wav ou .mp3) e desliga com `endedReason: "voicemail"`; sem recado, só desliga. Vem
+desligada: a pessoa ouve a saudação alguns segundos depois, e o Twilio cobra uma pequena taxa por ligação.
+
 **Telnyx (beta, ainda não confirmada numa ligação real):** no portal da Telnyx, crie uma **TeXML Application**
 com a voice URL `$PUBLIC_URL/telnyx/voice` (HTTP POST) e associe o número a ela. Cadastre o número no OpenRing
 com `"provider": "telnyx"` e defina `TELNYX_API_KEY` e `TELNYX_PUBLIC_KEY` (Keys & Credentials > Public Key),

@@ -195,6 +195,17 @@ curl -X POST http://localhost:8000/call \
   -d '{"phoneNumberId": "PHONE_NUMBER_ID", "customer": {"number": "+5511912345678"}}'
 ```
 
+**Voicemail (beta).** With `voicemailDetection` or a `voicemailMessage` on the assistant, Twilio's answering
+machine detection checks who picked up and waits for the beep. A voicemail gets the `voicemailMessage`, in the
+assistant's voice (or a recording, when it's the URL of a .wav or .mp3), then the call hangs up with
+`endedReason: "voicemail"`; without a message it just hangs up. It's off by default: a person hears the greeting
+a few seconds later, and Twilio charges a small fee per call. `"voicemailDetection": "off"` turns it off.
+
+```json
+{"voicemailMessage": "Hi {{customer.name}}, this is Ava from the clinic. Please call us back.",
+ "voicemailDetection": {"provider": "twilio", "beepMaxAwaitSeconds": 30}}
+```
+
 ### Campaigns (beta)
 
 A campaign has one assistant call a list of people, a few at a time, with the body of Vapi's `POST /campaign`.
