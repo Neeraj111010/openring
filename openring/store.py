@@ -15,7 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-COLLECTIONS = ("assistants", "phone_numbers", "calls", "tools", "campaigns", "routes")
+COLLECTIONS = ("assistants", "phone_numbers", "calls", "tools", "campaigns", "routes", "files", "knowledge_bases",
+               "squads", "credentials")
 PROTECTED = {"id", "createdAt"}
 
 
@@ -46,6 +47,34 @@ class Store:
             self._db.execute(
                 "CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, expires_at REAL NOT NULL)"
             )
+            # The passages of knowledge base files (knowledge.py). Python builds without FTS5 are rare; uploads say so.
+            try:
+                self._db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS file_chunks USING fts5("
+                                 "file_id UNINDEXED, content, tokenize='unicode61 remove_diacritics 2')")
+                self.can_search = True
+            except sqlite3.OperationalError:
+                self.can_search = False
+            self._db.commit()
+
+    def index_file(self, file_id: str, passages: list[str]) -> None:
+        with self._lock:
+            self._db.executemany("INSERT INTO file_chunks (file_id, content) VALUES (?, ?)",
+                                 [(file_id, passage) for passage in passages])
+            self._db.commit()
+
+    def search_chunks(self, file_ids: list[str], match: str, limit: int) -> list[str]:
+        """The passages of these files that best match a full-text query, best first."""
+        marks = ",".join("?" * len(file_ids))
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT content FROM file_chunks WHERE file_chunks MATCH ? AND file_id IN ({marks}) "
+                "ORDER BY bm25(file_chunks) LIMIT ?", (match, *file_ids, limit),
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def forget_file(self, file_id: str) -> None:
+        with self._lock:
+            self._db.execute("DELETE FROM file_chunks WHERE file_id = ?", (file_id,))
             self._db.commit()
 
     def get_setting(self, key: str) -> str | None:

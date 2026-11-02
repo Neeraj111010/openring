@@ -474,6 +474,8 @@ async def run_call(
             current_call=lambda: store.get("calls", call_id),
             assistant=plan.assistant,
             default_url=plan.server_url,
+            store=store,
+            messages=lambda: [m for m in context.get_messages() if isinstance(m, dict)],
         )
         tools = register_tools(llm, assistant_tools(plan.assistant, store), controls)
         context = LLMContext(messages=list(plan.messages), **({"tools": tools} if tools else {}))

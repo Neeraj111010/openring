@@ -14,7 +14,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from loguru import logger
 
@@ -24,6 +24,7 @@ from . import (
     campaigns,
     genesys,
     keys,
+    knowledge,
     netguard,
     overrides,
     prices,
@@ -188,12 +189,26 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         for tool_id in (doc.get("model") or {}).get("toolIds") or []:
             if store.get("tools", str(tool_id)) is None:
                 raise HTTPException(status_code=400, detail=f"model.toolIds: tool {tool_id} not found")
+        for tool in (doc.get("model") or {}).get("tools") or []:
+            _check_files(tool)
+        base_id = (doc.get("model") or {}).get("knowledgeBaseId")
+        if base_id and store.get("knowledge_bases", str(base_id)) is None:
+            raise HTTPException(status_code=400, detail=f"model.knowledgeBaseId: knowledge base {base_id} not found")
+
+    def _check_files(tool: dict[str, Any]) -> None:
+        if tool.get("type") != "query":
+            return
+        for base in tool.get("knowledgeBases") or []:
+            for file_id in base.get("fileIds") or []:
+                if store.get("files", str(file_id)) is None:
+                    raise HTTPException(status_code=400, detail=f"knowledgeBases.fileIds: file {file_id} not found")
 
     def _validate_tool(doc: dict[str, Any]) -> None:
         try:
             check_tool(doc)
         except ToolError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _check_files(doc)
 
     @app.get("/", include_in_schema=False)
     def dashboard() -> FileResponse:
@@ -495,6 +510,78 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     def delete_tool(tool_id: str) -> dict[str, Any]:
         _get_or_404("tools", tool_id)
         return store.delete("tools", tool_id)
+
+    # ---- Files and knowledge bases (Vapi's /file and /knowledge-base) --------------------
+    @app.post("/file", status_code=201, dependencies=auth_deps)
+    async def upload_file(file: UploadFile) -> dict[str, Any]:
+        """Keep a file's text, searchable by `query` tools. The file itself isn't kept."""
+        if not store.can_search:
+            raise HTTPException(status_code=400, detail="this Python's SQLite has no full-text search (FTS5)")
+        data = await file.read(knowledge.MAX_FILE_BYTES + 1)
+        if len(data) > knowledge.MAX_FILE_BYTES:
+            raise HTTPException(status_code=413,
+                                detail=f"a file has at most {knowledge.MAX_FILE_BYTES // 1_000_000} MB")
+        name = (file.filename or "file").replace("\\", "/").rsplit("/", 1)[-1][:200]
+        try:
+            text = await asyncio.to_thread(knowledge.extract_text, name, data)
+        except knowledge.KnowledgeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        passages = knowledge.chunks(text)
+        doc = store.create("files", {"name": name, "originalName": name, "bytes": len(data), "status": "done",
+                                     "mimetype": file.content_type, "parsedTextBytes": len(text.encode()),
+                                     "passages": len(passages)})
+        await asyncio.to_thread(store.index_file, doc["id"], passages)
+        return doc
+
+    @app.get("/file", dependencies=auth_deps)
+    def list_files(limit: int = 100) -> list[dict[str, Any]]:
+        return store.list("files", limit)
+
+    @app.get("/file/{file_id}", dependencies=auth_deps)
+    def get_file(file_id: str) -> dict[str, Any]:
+        return _get_or_404("files", file_id)
+
+    @app.patch("/file/{file_id}", dependencies=auth_deps)
+    def update_file(file_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        _get_or_404("files", file_id)
+        return store.update("files", file_id, {k: v for k, v in body.items() if k == "name"})
+
+    @app.delete("/file/{file_id}", dependencies=auth_deps)
+    def delete_file(file_id: str) -> dict[str, Any]:
+        """Its text goes for good; tools listing it go on with their other files."""
+        _get_or_404("files", file_id)
+        store.forget_file(file_id)
+        return store.delete("files", file_id)
+
+    def _validate_base(doc: dict[str, Any]) -> None:
+        try:
+            knowledge.check(doc, "a knowledge base")
+        except knowledge.KnowledgeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _check_files({"type": "query", "knowledgeBases": [doc]})
+
+    @app.post("/knowledge-base", status_code=201, dependencies=auth_deps)
+    def create_knowledge_base(body: dict[str, Any]) -> dict[str, Any]:
+        _validate_base(body)
+        return store.create("knowledge_bases", body)
+
+    @app.get("/knowledge-base", dependencies=auth_deps)
+    def list_knowledge_bases(limit: int = 100) -> list[dict[str, Any]]:
+        return store.list("knowledge_bases", limit)
+
+    @app.get("/knowledge-base/{base_id}", dependencies=auth_deps)
+    def get_knowledge_base(base_id: str) -> dict[str, Any]:
+        return _get_or_404("knowledge_bases", base_id)
+
+    @app.patch("/knowledge-base/{base_id}", dependencies=auth_deps)
+    def update_knowledge_base(base_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        _validate_base({**_get_or_404("knowledge_bases", base_id), **body})
+        return store.update("knowledge_bases", base_id, body)
+
+    @app.delete("/knowledge-base/{base_id}", dependencies=auth_deps)
+    def delete_knowledge_base(base_id: str) -> dict[str, Any]:
+        _get_or_404("knowledge_bases", base_id)
+        return store.delete("knowledge_bases", base_id)
 
     # ---- Import from another Vapi-compatible API ------------------------------------
     @app.post("/import", dependencies=auth_deps)

@@ -19,6 +19,8 @@ dependencies = [
   "aiortc>=1.14,<2",
   # Ed25519 signatures on Telnyx webhooks (aiortc already brings it).
   "cryptography>=42",
+  # Reads PDFs for knowledge bases; pure Python.
+  "pypdf>=5,<7",
 ]
 
 [project.optional-dependencies]

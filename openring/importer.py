@@ -124,6 +124,8 @@ async def import_account(
             problems.append(f"tool type '{doc.get('type')}' is not supported yet")
         if doc.get("type") == "apiRequest" and tool.get("credentialId"):
             problems.append("its credential was not copied: put the key in the tool's headers")
+        if doc.get("type") == "query":
+            problems.append("its files were not copied: upload them here and list the new ids in fileIds")
         report["tools"].append({"id": doc["id"], "name": _tool_label(doc), "created": created, "problems": problems})
 
     assistant_ids: dict[str, str] = {}

@@ -22,11 +22,11 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 import httpx
 from loguru import logger
 
-from . import netguard, overrides
+from . import knowledge, netguard, overrides
 from .store import Store
 
 # Tool types OpenRing runs. Assistants imported with other types still load; those tools are skipped.
-SUPPORTED = ("function", "apiRequest", "endCall", "transferCall")
+SUPPORTED = ("function", "apiRequest", "endCall", "transferCall", "query")
 DEFAULT_TIMEOUT = 20  # seconds, like Vapi's server.timeoutSeconds default
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 MAX_RESPONSE_BYTES = 100_000  # what's read of an apiRequest's answer; the rest is never downloaded
@@ -47,6 +47,8 @@ def tool_name(tool: dict[str, Any]) -> str:
         return str((tool.get("function") or {}).get("name") or "")
     if tool.get("type") == "apiRequest":
         return str(tool.get("name") or (tool.get("function") or {}).get("name") or "")
+    if tool.get("type") == "query":
+        return str((tool.get("function") or {}).get("name") or "knowledge-search")
     return str(tool.get("type"))  # Vapi exposes endCall and transferCall under their type names
 
 
@@ -111,6 +113,16 @@ def check_tool(tool: dict[str, Any]) -> None:
             raise ToolError("a tool's timeoutSeconds must be a number")
     if kind == "apiRequest":
         _check_api_request(tool)
+    if kind == "query":
+        _check_name(tool_name(tool), "a query tool's function.name")
+        bases = tool.get("knowledgeBases")
+        if not isinstance(bases, list) or not bases:
+            raise ToolError("a query tool needs knowledgeBases: a list with the fileIds to search")
+        try:
+            for base in bases:
+                knowledge.check(base)
+        except knowledge.KnowledgeError as exc:
+            raise ToolError(str(exc)) from exc
     if kind == "transferCall":
         if not any(d.get("number") for d in tool.get("destinations") or []):
             raise ToolError("a transferCall tool needs destinations with a phone number")
@@ -120,6 +132,11 @@ def assistant_tools(assistant: dict[str, Any], store: Store) -> list[dict[str, A
     """The tools a call can use: `model.tools` plus the saved tools in `model.toolIds`."""
     model = assistant.get("model") or {}
     tools = list(model.get("tools") or [])
+    if base_id := model.get("knowledgeBaseId"):
+        if base := store.get("knowledge_bases", str(base_id)):
+            tools.append({"type": "query", "knowledgeBases": [base]})
+        else:
+            logger.warning("knowledge base {} was deleted; the call runs without it", base_id)
     for tool_id in model.get("toolIds") or []:
         if doc := store.get("tools", str(tool_id)):
             tools.append(doc)
@@ -159,6 +176,17 @@ def function_schema(tool: dict[str, Any]) -> dict[str, Any]:
             "description": str(tool.get("description") or (tool.get("function") or {}).get("description") or ""),
             "properties": _fillable(tool),
             "required": [name for name in body.get("required") or [] if name in _fillable(tool)],
+        }
+    if tool["type"] == "query":
+        fn = tool.get("function") or {}
+        about = "; ".join(str(b["description"]) for b in tool.get("knowledgeBases") or [] if b.get("description"))
+        return {
+            "name": tool_name(tool),
+            "description": fn.get("description") or "Look up facts in the company's documents before answering a "
+            "question about them." + (f" They hold: {about}" if about else ""),
+            "properties": {"query": {"type": "string", "description": "The main words of what to find, in the "
+                                                                      "documents' language, with synonyms."}},
+            "required": ["query"],
         }
     if tool["type"] == "endCall":
         return {
@@ -395,6 +423,8 @@ class CallControls:
     current_call: Callable[[], dict | None]
     assistant: dict[str, Any]
     default_url: str | None
+    store: Store | None = None  # where knowledge base files are searched
+    messages: Callable[[], list[dict[str, Any]]] = list  # the conversation so far
 
 
 def make_handler(tool: dict[str, Any], controls: CallControls):
@@ -413,6 +443,11 @@ def make_handler(tool: dict[str, Any], controls: CallControls):
         try:
             if tool["type"] == "apiRequest":
                 result = await call_api(tool, _arguments(params.arguments), call=controls.current_call())
+            elif tool["type"] == "query":
+                result = await knowledge.answer(
+                    tool, str(_arguments(params.arguments).get("query") or ""), store=controls.store,
+                    messages=controls.messages(), call=without_secrets(controls.current_call()),
+                )
             else:
                 result = await call_server(
                     tool,
@@ -422,7 +457,7 @@ def make_handler(tool: dict[str, Any], controls: CallControls):
                     call=controls.current_call(),
                     assistant=controls.assistant,
                 )
-        except ToolError as exc:
+        except (ToolError, knowledge.KnowledgeError) as exc:
             logger.warning("tool {} failed: {}", tool_name(tool), exc)
             result = f"The tool failed: {exc}. Tell the caller you could not complete it."
             failed = _message(tool, "request-failed")
@@ -462,7 +497,7 @@ def make_handler(tool: dict[str, Any], controls: CallControls):
         message = destination.get("message") or tool_message(tool, "request-start")
         await controls.transfer(destination["number"], message)
 
-    return {"function": run_function, "apiRequest": run_function, "endCall": end_call,
+    return {"function": run_function, "apiRequest": run_function, "query": run_function, "endCall": end_call,
             "transferCall": transfer_call}[tool["type"]]
 
 
