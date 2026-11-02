@@ -32,14 +32,17 @@ def _answered_call(monkeypatch, **server):
     a = client.post("/assistant", json=ASSISTANT, headers=AUTH).json()
     client.post("/phone-number", json={"number": "+15551234567", "assistantId": a["id"]}, headers=AUTH)
     twiml = client.post("/twilio/voice", data={"To": "+15551234567", "From": "+5511", "CallSid": "CA1"}).text
-    params = {p.get("name"): p.get("value") for p in ET.fromstring(twiml).find("./Connect/Stream").findall("Parameter")}
-    return client, store, params
+    return client, store, _stream_params(twiml)
 
 
-def _handshake(ws, params):
+def _stream_params(twiml):
+    return {p.get("name"): p.get("value") for p in ET.fromstring(twiml).find("./Connect/Stream").findall("Parameter")}
+
+
+def _handshake(ws, params, line=1):
     ws.send_text(json.dumps({"event": "connected", "protocol": "Call", "version": "1.0.0"}))
-    ws.send_text(json.dumps({"event": "start", "streamSid": "MZ1", "start": {
-        "streamSid": "MZ1", "callSid": "CA1", "accountSid": "AC1", "customParameters": params,
+    ws.send_text(json.dumps({"event": "start", "streamSid": f"MZ{line}", "start": {
+        "streamSid": f"MZ{line}", "callSid": f"CA{line}", "accountSid": "AC1", "customParameters": params,
         "mediaFormat": {"encoding": "audio/x-mulaw", "sampleRate": 8000, "channels": 1}}}))
 
 
@@ -104,6 +107,39 @@ def test_call_lifecycle(monkeypatch, quiet_providers):
     assert set(call["costBreakdown"]) == {"llmPromptTokens", "llmCompletionTokens", "ttsCharacters",
                                           "transcriberAudioSeconds", "stt", "llm", "tts", "total"}
     assert call["cost"] == call["costBreakdown"]["total"]
+
+
+def test_two_calls_at_once_stay_apart(monkeypatch, quiet_providers):
+    """Both run on one event loop, as on a real server, and neither touches the other's call."""
+    sent = _pipeline_started(monkeypatch)
+    client, store, first = _answered_call(monkeypatch)
+    other = client.post("/assistant", json={**ASSISTANT, "firstMessage": "Second line here."}, headers=AUTH).json()
+    client.post("/phone-number", json={"number": "+15557654321", "assistantId": other["id"]}, headers=AUTH)
+    twiml = client.post("/twilio/voice", data={"To": "+15557654321", "From": "+5522", "CallSid": "CA2"}).text
+    second = _stream_params(twiml)
+    assert first["callId"] != second["callId"]
+
+    with client, client.websocket_connect("/ws/twilio") as ws2:
+        with client.websocket_connect("/ws/twilio") as ws1:
+            _handshake(ws1, first)
+            _handshake(ws2, second, line=2)
+            for _ in range(150):  # the first Pipecat import in a process takes a few seconds
+                if {m["call"]["id"] for m in sent} >= {first["callId"], second["callId"]}:
+                    break
+                time.sleep(0.1)
+            assert {m["call"]["id"] for m in sent} >= {first["callId"], second["callId"]}
+            ws1.send_text(json.dumps({"event": "stop", "streamSid": "MZ1"}))
+
+        one = _wait_until_ended(store, first["callId"])
+        assert one["status"] == "ended"
+        assert store.get("calls", second["callId"])["status"] == "in-progress"  # the other caller is still talking
+        ws2.send_text(json.dumps({"event": "stop", "streamSid": "MZ2"}))
+
+    two = _wait_until_ended(store, second["callId"])
+    assert two["status"] == "ended"
+    assert one["messages"] == [{"role": "assistant", "message": ASSISTANT["firstMessage"]}]
+    assert two["messages"] == [{"role": "assistant", "message": "Second line here."}]
+    assert two["assistantId"] == other["id"] != one["assistantId"]
 
 
 def test_media_stream_is_single_use(monkeypatch, fake_bot):
