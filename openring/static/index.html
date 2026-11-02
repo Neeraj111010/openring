@@ -378,6 +378,8 @@ dialog::backdrop { background: rgba(5,8,12,.6); }
       <a href="#home" data-view="home"><svg class="i" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg>Home</a>
       <div class="group">Agents</div>
       <a href="#assistants" data-view="assistants"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 12h.01M15 12h.01M9.5 16h5"/></svg>Assistants</a>
+      <a href="#squads" data-view="squads"><svg class="i" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20a6 6 0 0 1 12 0M15 15a5 5 0 0 1 6 5"/></svg>Squads</a>
+      <a href="#knowledge" data-view="knowledge"><svg class="i" viewBox="0 0 24 24"><path d="M5 4h10l4 4v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM14 4v5h5M8 13h8M8 17h6"/></svg>Knowledge</a>
       <a href="#numbers" data-view="numbers"><svg class="i" viewBox="0 0 24 24"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>Phone numbers</a>
       <a href="#routes" data-view="routes"><svg class="i" viewBox="0 0 24 24"><path d="M4 7h5l6 10h5M4 17h5l1.5-2.5M15 7h5M17 4l3 3-3 3M17 14l3 3-3 3"/></svg>Model routes</a>
       <div class="group">Activity</div>
@@ -503,13 +505,13 @@ const when = iso => { if (!iso) return ""; const d = new Date(iso), today = new 
 const initials = s => (s || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase();
 const caller = c => c.type === "webCall" ? "Browser test" : c.type === "outboundPhoneCall" ? `Call to ${c.customer?.name || c.customer?.number || "?"}` : c.customer?.number || "Unknown caller";
 // Who answered a call: a saved assistant, or a transient one that lives in the call record.
-const assistantOf = (c, assistants) => c.assistant?.name || assistants.find(a => a.id === c.assistantId)?.name || (c.assistant ? "Transient assistant" : "Deleted assistant");
+const assistantOf = (c, assistants) => c.squadId || c.squad ? "Squad" : c.assistant?.name || assistants.find(a => a.id === c.assistantId)?.name || (c.assistant ? "Transient assistant" : "Deleted assistant");
 const TYPE = { webCall: "Browser", inboundPhoneCall: "Inbound", outboundPhoneCall: "Outbound" };
-const failed = c => /^(pipeline-error|provider-error|assistant-not-found|twilio-failed)/.test(c.endedReason || "");
+const failed = c => /^(pipeline-error|provider-error|assistant-not-found|twilio-failed|sip-failed)/.test(c.endedReason || "");
 const ENDED = {
   "customer-ended-call": "Caller hung up", "assistant-said-end-call-phrase": "Assistant said goodbye",
   "customer-busy": "Line busy", "customer-did-not-answer": "No answer",
-  "twilio-failed-to-connect-call": "Twilio couldn't connect", "assistant-not-found": "Assistant was deleted",
+  "twilio-failed-to-connect-call": "Twilio couldn't connect", "sip-failed-to-connect-call": "The SIP trunk couldn't connect", "assistant-not-found": "Assistant was deleted",
   "assistant-ended-call": "Assistant ended the call", "assistant-forwarded-call": "Transferred",
   "worker-shutdown": "Server restarted", "silence-timed-out": "Silence timed out",
   "exceeded-max-duration": "Reached the time limit", "voicemail": "Voicemail",
@@ -599,6 +601,8 @@ async function signOut() { await api("/auth/logout", { method: "POST" }).catch((
 const PAGES = {
   home: ["Home", "How your voice agents are doing"],
   assistants: ["Assistants", "Each assistant answers with its own instructions, model and voice"],
+  squads: ["Squads", "Several assistants on one call: each hands the caller to the next when it's the right one"],
+  knowledge: ["Knowledge", "Files your assistants can look things up in during a call"],
   numbers: ["Phone numbers", "Your phone numbers and who answers them"],
   routes: ["Model routes", "Models in order: the next one takes over when a model fails or is slow"],
   calls: ["Calls", "Every call with its transcript and response time"],
@@ -717,9 +721,10 @@ function openImport() {
       $("#importKey").value = "";
       const line = (label, problems, extra = "") => `<div class="minirow"><span style="min-width:0">${esc(label)}${extra}${problems?.length ? `<div class="muted" style="font-size:12.5px">${problems.map(esc).join("<br>")}</div>` : ""}</span>${problems?.length ? '<span class="badge warn">Needs a fix</span>' : '<span class="badge ok">Ready</span>'}</div>`;
       $("#importReport").innerHTML = `
-        <h3 style="font-size:15px;margin:16px 0 4px">${r.assistants.length} assistant${r.assistants.length === 1 ? "" : "s"}, ${r.tools.length} tool${r.tools.length === 1 ? "" : "s"}, ${r.phoneNumbers.filter(n => !n.skipped).length} number${r.phoneNumbers.filter(n => !n.skipped).length === 1 ? "" : "s"}</h3>
+        <h3 style="font-size:15px;margin:16px 0 4px">${r.assistants.length} assistant${r.assistants.length === 1 ? "" : "s"}, ${r.tools.length} tool${r.tools.length === 1 ? "" : "s"}, ${r.phoneNumbers.filter(n => !n.skipped).length} number${r.phoneNumbers.filter(n => !n.skipped).length === 1 ? "" : "s"}${r.squads?.length ? `, ${r.squads.length} squad${r.squads.length === 1 ? "" : "s"}` : ""}</h3>
         ${r.assistants.map(a => line(a.name, a.problems, a.created ? "" : ' <span class="muted">(updated)</span>')).join("")}
         ${r.tools.filter(t => t.problems.length).map(t => line("Tool " + t.name, t.problems)).join("")}
+        ${(r.squads || []).map(s => line("Squad " + s.name, s.problems)).join("")}
         ${r.phoneNumbers.map(n => n.skipped ? `<div class="minirow"><span>${esc(n.number)}</span><span class="muted" style="font-size:12.5px">${esc(n.skipped)}</span></div>` : line(n.number, [], ' <span class="muted">· point its Twilio voice webhook here</span>')).join("")}`;
       go_.hidden = true;
       $("#importClose").textContent = "Done";
@@ -750,8 +755,122 @@ function wordsTyped(text) {
   return words.length ? words : undefined;
 }
 
+// The editor's Knowledge boxes are one query tool in model.tools, the one this page writes; others are left alone.
+const KNOWLEDGE_TOOL = "knowledge-search";
+const isKnowledgeTool = t => t.type === "query" && (t.function?.name || KNOWLEDGE_TOOL) === KNOWLEDGE_TOOL;
+const knowledgeIds = m => (m.tools || []).filter(isKnowledgeTool).flatMap(t => t.knowledgeBases || []).flatMap(b => b.fileIds || []);
+function withKnowledge(m, ids) {
+  const tools = (m.tools || []).filter(t => !isKnowledgeTool(t));
+  if (ids.length) tools.push({ type: "query", function: { name: KNOWLEDGE_TOOL }, knowledgeBases: [{ name: "files", fileIds: ids }] });
+  return { ...m, tools: tools.length || m.tools ? tools : undefined };
+}
+
+async function viewKnowledge() {
+  setPage("knowledge");
+  const files = await api("/file");
+  const v = $("#view");
+  const size = b => b >= 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1000)) + " KB";
+  v.innerHTML = `<section class="panel" style="margin-bottom:18px"><header><h2>Add files</h2></header><div class="body">
+    <p style="margin-top:0">PDF, Word (.docx), text, Markdown, CSV, JSON, YAML, XML or logs, up to 20 MB each. The search runs on this server, for free, and matches words rather than meanings, so name things in your instructions the way the files do. Then tick the files in an assistant's Setup tab.</p>
+    <form id="up" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><input type="file" id="files" name="file" multiple required aria-label="Files to add"><button class="btn" id="upGo">${ICON.plus}Add</button></form>
+    <div class="error" id="err" role="alert"></div></div></section>
+  ${files.length ? `<div class="tiles">${files.map(file => `<article class="tile"><div class="head"><div class="grow"><div class="name">${esc(file.name)}</div><div class="sub">${esc(size(file.bytes))} · ${esc(num(file.passages))} passages</div></div></div>
+      <div class="actions"><span style="flex:1"></span><button class="btn danger small" data-del="${esc(file.id)}">Delete</button></div></article>`).join("")}</div>`
+    : `<div class="panel empty">No files yet. Prices, opening hours, policies: whatever callers ask about.</div>`}`;
+  $("#up").onsubmit = async e => {
+    e.preventDefault();
+    const button = $("#upGo");
+    button.disabled = true; $("#err").textContent = "";
+    const problems = [];
+    for (const file of $("#files").files) {
+      const form = new FormData();
+      form.append("file", file);
+      // Not api(): the browser sets the multipart Content-Type itself.
+      const res = await fetch("/file", { method: "POST", headers: { "X-OpenRing": "dashboard" }, body: form }).catch(() => null);
+      if (!res?.ok) problems.push(`${file.name}: ${(await res?.json().catch(() => null))?.detail || "it wasn't saved"}`);
+    }
+    if (problems.length) { button.disabled = false; $("#err").textContent = problems.join(" · "); return; }
+    viewKnowledge();
+  };
+  v.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => { if (confirm("Delete this file? Assistants using it go on with their other files.")) { await api("/file/" + b.dataset.del, { method: "DELETE" }); viewKnowledge(); } });
+}
+
+async function viewSquads() {
+  setPage("squads");
+  const [items, numbers] = await Promise.all([api("/squad"), api("/phone-number")]);
+  const lines = id => numbers.filter(n => n.squadId === id).map(n => n.number);
+  const v = $("#view");
+  v.innerHTML = `<div class="toolbar"><span class="muted">${items.length} squad${items.length === 1 ? "" : "s"}</span><span class="spacer"></span><button class="btn" id="new">${ICON.plus}New squad</button></div>
+    ${items.length ? `<div class="tiles">${items.map(s => `<article class="tile link" tabindex="0" data-id="${esc(s.id)}">
+      <div class="head"><span class="avatar">${esc(initials(s.name))}</span><div class="grow"><div class="name">${esc(s.name || "Untitled")}</div><div class="sub">${lines(s.id).length ? esc(lines(s.id).join(", ")) : "No phone number"}</div></div></div>
+      <div class="greet">${esc(num(s.members?.length))} assistants</div>
+      <div class="actions"><button class="btn small" data-test="${esc(s.id)}">${ICON.mic}Test</button></div>
+    </article>`).join("")}</div>` : `<div class="panel empty">No squads yet. A squad lets one assistant answer and pass the caller to specialists, each with its own instructions, tools, model and voice.</div>`}`;
+  $("#new").onclick = () => go("squads/new");
+  v.querySelectorAll(".tile").forEach(t => { t.onclick = () => go("squads/" + t.dataset.id); t.onkeydown = e => e.key === "Enter" && e.target === t && t.click(); });
+  v.querySelectorAll("[data-test]").forEach(b => b.onclick = e => { e.stopPropagation(); startTalk(items.find(s => s.id === b.dataset.test)); });
+}
+
+async function viewSquad(id) {
+  const [s, assistants] = await Promise.all([id === "new" ? { members: [] } : api("/squad/" + id), api("/assistant")]);
+  setPage("squads", s.id ? s.name || "Squad" : "New squad", "The first assistant answers the call; the boxes say who it can pass the caller to");
+  const v = $("#view");
+  const label = a => a.name || "Untitled";
+  // The form covers saved assistants; a squad with inline ones (from the API or an import) is edited as JSON.
+  const simple = (s.members || []).every(m => m.assistantId);
+  const members = simple ? (s.members || []).map(m => ({ ...m })) : [];
+  const render = () => `<div class="field"><label for="sname">Name</label><input id="sname" name="sname" required value="${esc(s.name || "")}"></div>
+    ${members.map((m, i) => {
+      const others = members.filter(o => o.assistantId && o.assistantId !== m.assistantId);
+      const to = m.assistantDestinations || [];
+      return `<section class="panel" style="margin-bottom:12px"><div class="body">
+        <div class="field"><label for="m${i}">${i ? "Assistant " + (i + 1) : "Answers the call"}</label><select id="m${i}" data-member="${i}">${assistants.map(a => option(a.id, label(a), m.assistantId)).join("")}</select></div>
+        ${others.map(o => { const n = label(assistants.find(a => a.id === o.assistantId) || {}); const d = to.find(x => x.assistantName === n); return `<label class="consent" style="margin:4px 0"><input type="checkbox" data-to="${i}" value="${esc(n)}" ${d ? "checked" : ""}><span>Can hand off to ${esc(n)}</span></label>
+          <input aria-label="When to hand off to ${esc(n)}" data-why="${i}" data-name="${esc(n)}" value="${esc(d?.description || "")}" placeholder="When: the caller asks about billing" style="margin-bottom:8px">`; }).join("")}
+        <div class="actions" style="margin-top:8px"><button type="button" class="btn ghost small" data-remove="${i}">Remove</button></div>
+      </div></section>`;
+    }).join("")}
+    <button type="button" class="btn ghost" id="addMember" ${assistants.length ? "" : "disabled"}>${ICON.plus}Add assistant</button>`;
+  v.innerHTML = `<div class="toolbar"><a class="btn ghost" href="#squads">← All squads</a><span class="spacer"></span>${s.id ? `<button type="button" class="btn ghost" id="test">${ICON.mic}Test</button>` : ""}</div>
+  <section class="panel"><div class="body"><form id="f">
+    ${simple ? '<div id="form"></div>' : `<div class="field"><label for="json">Squad JSON</label><textarea id="json" rows="16">${esc(JSON.stringify({ name: s.name, members: s.members, membersOverrides: s.membersOverrides }, null, 2))}</textarea></div>`}
+    <div class="error" id="err" role="alert"></div>
+    <div class="actions" style="margin-top:14px"><button class="btn">Save</button><span style="flex:1"></span>${s.id ? '<button type="button" class="btn danger" id="del">Delete</button>' : ""}</div>
+  </form></div></section>`;
+  // Keeps what's typed when the form redraws.
+  const collect = () => {
+    if (!simple) return;
+    s.name = $("#sname").value;
+    members.forEach((m, i) => {
+      m.assistantId = $(`#m${i}`).value;
+      m.assistantDestinations = [...v.querySelectorAll(`[data-to="${i}"]:checked`)].map(box => ({ type: "assistant", assistantName: box.value, description: v.querySelector(`[data-why="${i}"][data-name="${CSS.escape(box.value)}"]`).value || undefined }));
+    });
+  };
+  const draw = () => {
+    if (!simple) return;
+    $("#form").innerHTML = render();
+    $("#addMember").onclick = () => { collect(); members.push({ assistantId: (assistants.find(a => !members.some(m => m.assistantId === a.id)) || assistants[0]).id }); draw(); };
+    v.querySelectorAll("[data-member]").forEach(select => select.onchange = () => { collect(); draw(); });
+    v.querySelectorAll("[data-remove]").forEach(b => b.onclick = () => { collect(); members.splice(Number(b.dataset.remove), 1); draw(); });
+  };
+  draw();
+  if (s.id) {
+    $("#test").onclick = () => startTalk(s);
+    $("#del").onclick = async () => { if (confirm("Delete this squad? Numbers using it will stop answering.")) { await api("/squad/" + s.id, { method: "DELETE" }); go("squads"); } };
+  }
+  $("#f").onsubmit = async e => {
+    e.preventDefault();
+    collect();
+    try {
+      const body = simple ? { name: s.name, members } : JSON.parse($("#json").value);
+      await api(s.id ? "/squad/" + s.id : "/squad", { method: s.id ? "PATCH" : "POST", body: JSON.stringify(body) });
+      go("squads");
+    } catch (err) { $("#err").textContent = err.message; }
+  };
+}
+
 async function viewAssistant(id) {
-  const [a, routes] = await Promise.all([id === "new" ? structuredClone(NEW_ASSISTANT) : api("/assistant/" + id), api("/model-route").catch(() => [])]);
+  const [a, routes, files] = await Promise.all([id === "new" ? structuredClone(NEW_ASSISTANT) : api("/assistant/" + id), api("/model-route").catch(() => []), api("/file").catch(() => [])]);
   setPage("assistants", a.id ? a.name || "Assistant" : "New assistant", "Follow the call from left to right: the caller is transcribed, answered by the model and spoken back");
   const tab = location.hash.endsWith("/json") ? "json" : "setup";
   const m = a.model || {}, vo = a.voice || {}, t = a.transcriber || {};
@@ -802,6 +921,9 @@ async function viewAssistant(id) {
       <div class="field narrow"><label for="silence">Silence limit</label><p class="hint">Seconds</p><input id="silence" name="silence" type="number" min="5" max="3600" value="${esc(limitsShown.silence)}"></div>
       <div class="field"><label for="idle">If the caller goes quiet, say</label><p class="hint">Optional. After ${esc(a.messagePlan?.idleTimeoutSeconds ?? 10)} s without an answer, up to ${esc(a.messagePlan?.idleMessageMaxSpokenCount ?? 3)} times.</p><input id="idle" name="idle" value="${esc((a.messagePlan?.idleMessages || [])[0] || "")}" placeholder="Are you still there?"></div>
     </div>
+    <div class="field"><label>Knowledge</label><p class="hint">Files this assistant can look things up in during a call. Add them on the <a href="#knowledge">Knowledge</a> page, and say in the instructions when to use them.</p>
+      ${files.length ? files.map(file => `<label class="consent" style="margin:4px 0"><input type="checkbox" name="kb" value="${esc(file.id)}" ${knowledgeIds(m).includes(file.id) ? "checked" : ""}><span>${esc(file.name)}</span></label>`).join("") : '<p class="muted" style="margin:0">No files yet.</p>'}
+    </div>
     <label class="consent"><input type="checkbox" name="recOn" ${a.artifactPlan?.recordingEnabled === true ? "checked" : ""}><span>Record calls, on this server. About 2 MB per minute on the phone. Many places require telling people they are being recorded, so say it in the greeting.</span></label>
     <label class="consent"><input type="checkbox" name="vmOn" ${voicemailOn ? "checked" : ""}><span>On outgoing calls, detect voicemail. A person hears the greeting a few seconds later, and Twilio charges a small fee per call.</span></label>
     <div class="field"><label for="vmMsg">Message to leave on voicemail</label><p class="hint">Optional. A sentence in the assistant's voice, or the URL of a .wav or .mp3. Without one, the call hangs up.</p><input id="vmMsg" name="vmMsg" value="${esc(a.voicemailMessage || "")}" placeholder="Hi, this is Ava from the clinic. Please call us back."></div>
@@ -850,7 +972,7 @@ async function viewAssistant(id) {
         name: f.get("name"), firstMessage: f.get("greet") || undefined,
         // Keep the transcriber's model only while its provider stays the same; each provider has its own.
         transcriber: { ...t, provider: f.get("tp"), model: f.get("tp") === "whisper" ? f.get("tm") : f.get("tp") === (t.provider || "deepgram") ? t.model : undefined, language: f.get("tl") || "multi", keyterm: wordsTyped(f.get("twords")), keytermsPrompt: undefined },
-        model: { ...m, ...routeModel(routes.find(r => r.id === f.get("mr")), f), messages: [...(m.messages || []).filter(x => x.role !== "system"), ...(f.get("sys") ? [{ role: "system", content: f.get("sys") }] : [])] },
+        model: { ...withKnowledge({ ...m, ...routeModel(routes.find(r => r.id === f.get("mr")), f) }, f.getAll("kb")), messages: [...(m.messages || []).filter(x => x.role !== "system"), ...(f.get("sys") ? [{ role: "system", content: f.get("sys") }] : [])] },
         voice: { ...vo, provider: f.get("vp"), voiceId: f.get("vv") || undefined, model: f.get("vp") === (vo.provider || "kokoro") ? vo.model : undefined },
         server: f.get("hook") ? { ...(a.server || {}), url: f.get("hook") } : undefined,
         artifactPlan: f.get("recOn") ? { ...(a.artifactPlan || {}), recordingEnabled: true } : a.artifactPlan?.recordingEnabled ? { ...a.artifactPlan, recordingEnabled: false } : a.artifactPlan,
@@ -868,8 +990,8 @@ async function viewAssistant(id) {
 
 async function viewNumbers() {
   setPage("numbers");
-  const [nums, assistants, info] = await Promise.all([api("/phone-number"), api("/assistant"), api("/dashboard/info")]);
-  const name = id => assistants.find(a => a.id === id)?.name || "No assistant";
+  const [nums, assistants, info, teams, trunks] = await Promise.all([api("/phone-number"), api("/assistant"), api("/dashboard/info"), api("/squad"), api("/credential")]);
+  const answeredBy = n => n.squadId ? teams.find(s => s.id === n.squadId)?.name || "Deleted squad" : assistants.find(a => a.id === n.assistantId)?.name || "No assistant";
   const v = $("#view");
   v.innerHTML = `<section class="panel" style="margin-bottom:18px"><header><h2>Connect a phone number</h2></header><div class="body">
     <p style="margin-top:0"><b>Twilio:</b> open the number and set <b>A call comes in</b> to this webhook (HTTP POST):</p>
@@ -881,28 +1003,49 @@ async function viewNumbers() {
     ${info.publicUrl ? "" : `<p class="muted" style="margin-bottom:0">Phone providers can't reach <code>localhost</code>. Start a tunnel (<code>cloudflared tunnel --url http://localhost:8000</code>), put its URL in <code>PUBLIC_URL</code> and restart.</p>`}
     <form id="add" style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-top:18px">
       <div class="field" style="margin:0;flex:1;min-width:180px"><label for="num">Number</label><input id="num" name="num" required placeholder="+15551234567"></div>
-      <div class="field" style="margin:0;min-width:120px"><label for="np">Provider</label><select id="np" name="np"><option value="twilio">Twilio</option><option value="telnyx">Telnyx</option><option value="genesys">Genesys</option></select></div>
-      <div class="field" style="margin:0;flex:1;min-width:180px"><label for="as">Answered by</label><select id="as" name="as">${assistants.map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join("")}</select></div>
+      <div class="field" style="margin:0;min-width:120px"><label for="np">Provider</label><select id="np" name="np"><option value="twilio">Twilio</option><option value="telnyx">Telnyx</option><option value="genesys">Genesys</option>${trunks.map(t => `<option value="sip:${esc(t.id)}">SIP: ${esc(t.name || t.gateways[0].ip)}</option>`).join("")}</select></div>
+      <div class="field" style="margin:0;flex:1;min-width:180px"><label for="as">Answered by</label><select id="as" name="as">${assistants.map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join("")}${teams.map(s => `<option value="squad:${esc(s.id)}">Squad: ${esc(s.name || "Untitled")}</option>`).join("")}</select></div>
       <button class="btn">${ICON.plus}Add number</button>
     </form><div class="error" id="err" role="alert"></div></div></section>
   ${nums.length ? `<div class="tiles">${nums.map(n => `<article class="tile">
-      <div class="head"><span class="avatar">${ICON.phone}</span><div class="grow"><div class="name">${esc(n.number)}</div><div class="sub">Answered by ${esc(name(n.assistantId))}</div></div><span class="badge">${esc(n.provider || "twilio")}</span></div>
-      <div class="actions">${(n.provider || "twilio") === "twilio" ? `<button class="btn ghost small" data-call="${esc(n.id)}">${ICON.phone}Call a phone</button>` : ""}<span style="flex:1"></span><button class="btn danger small" data-del="${esc(n.id)}">Remove</button></div>
+      <div class="head"><span class="avatar">${ICON.phone}</span><div class="grow"><div class="name">${esc(n.number)}</div><div class="sub">Answered by ${esc(answeredBy(n))}</div></div><span class="badge">${esc(n.provider === "byo-phone-number" ? "SIP" : n.provider || "twilio")}</span></div>
+      <div class="actions">${["twilio", "byo-phone-number"].includes(n.provider || "twilio") && !n.squadId ? `<button class="btn ghost small" data-call="${esc(n.id)}">${ICON.phone}Call a phone</button>` : ""}<span style="flex:1"></span><button class="btn danger small" data-del="${esc(n.id)}">Remove</button></div>
     </article>`).join("")}</div>`
-    : `<div class="panel empty">No numbers yet. Add your Twilio number above.</div>`}`;
+    : `<div class="panel empty">No numbers yet. Add your Twilio number above.</div>`}
+  <section class="panel" style="margin-top:18px"><header><h2>SIP trunks <span class="badge">beta</span></h2></header><div class="body">
+    <p style="margin-top:0">Any carrier that speaks SIP, with no Twilio in between. The carrier has to reach this computer by UDP on port ${esc(info.sipPort)} and on the audio ports ${esc(info.sipRtpPorts)}, so this needs a server with a public address, or port forwarding: a web tunnel won't do. Only the gateways you list here can send calls. Then add a number above with the trunk as its provider.</p>
+    ${trunks.map(t => `<div class="minirow"><span style="min-width:0"><b>${esc(t.name || "Trunk")}</b> <span class="muted">${esc(t.gateways.map(g => g.ip).join(", "))}${t.sipRegistered === undefined ? "" : t.sipRegistered ? " · registered" : " · not registered"}</span>${t.sipError ? `<div class="error">${esc(t.sipError)}</div>` : ""}</span><button class="btn danger small" data-trunk="${esc(t.id)}">Remove</button></div>`).join("")}
+    <form id="addTrunk" style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-top:14px">
+      <div class="field" style="margin:0;min-width:140px"><label for="tn">Name</label><input id="tn" name="tn" placeholder="Carrier"></div>
+      <div class="field" style="margin:0;flex:1;min-width:180px"><label for="tg">SIP server</label><input id="tg" name="tg" required placeholder="sip.carrier.example"></div>
+      <div class="field" style="margin:0;min-width:130px"><label for="tu">Username</label><input id="tu" name="tu" autocomplete="off"></div>
+      <div class="field" style="margin:0;min-width:130px"><label for="tp2">Password</label><input id="tp2" name="tp2" type="password" autocomplete="new-password"></div>
+      <label class="consent" style="margin:0"><input type="checkbox" name="treg"><span>Register</span></label>
+      <label class="consent" style="margin:0"><input type="checkbox" name="tplus"><span>Dial with +</span></label>
+      <button class="btn">${ICON.plus}Add trunk</button>
+    </form><div class="error" id="trunkErr" role="alert"></div></div></section>`;
   copyButtons(v);
   $("#add").onsubmit = async e => {
     e.preventDefault(); const f = new FormData(e.target);
-    try { await api("/phone-number", { method: "POST", body: JSON.stringify({ number: f.get("num"), assistantId: f.get("as"), provider: f.get("np") }) }); viewNumbers(); }
+    const [kind, who] = [f.get("np"), f.get("as")];
+    const trunk = kind.startsWith("sip:") ? { provider: "byo-phone-number", credentialId: kind.slice(4), numberE164CheckEnabled: /^\+\d{7,15}$/.test(f.get("num").trim()) ? undefined : false } : { provider: kind };
+    try { await api("/phone-number", { method: "POST", body: JSON.stringify({ number: f.get("num"), ...(who.startsWith("squad:") ? { squadId: who.slice(6) } : { assistantId: who }), ...trunk }) }); viewNumbers(); }
     catch (err) { $("#err").textContent = err.message; }
   };
+  $("#addTrunk").onsubmit = async e => {
+    e.preventDefault(); const f = new FormData(e.target);
+    const login = f.get("tu") ? { authUsername: f.get("tu"), authPassword: f.get("tp2") || undefined, ...(f.get("treg") ? { sipRegisterPlan: { domain: f.get("tg") } } : {}) } : undefined;
+    try { await api("/credential", { method: "POST", body: JSON.stringify({ provider: "byo-sip-trunk", name: f.get("tn") || undefined, gateways: [{ ip: f.get("tg").trim() }], outboundLeadingPlusEnabled: !!f.get("tplus"), outboundAuthenticationPlan: login }) }); viewNumbers(); }
+    catch (err) { $("#trunkErr").textContent = err.message; }
+  };
+  v.querySelectorAll("[data-trunk]").forEach(b => b.onclick = async () => { if (confirm("Remove this trunk?")) { try { await api("/credential/" + b.dataset.trunk, { method: "DELETE" }); viewNumbers(); } catch (err) { $("#trunkErr").textContent = err.message; } } });
   v.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => { if (confirm("Remove this number from OpenRing?")) { await api("/phone-number/" + b.dataset.del, { method: "DELETE" }); viewNumbers(); } });
-  v.querySelectorAll("[data-call]").forEach(b => b.onclick = () => { const n = nums.find(x => x.id === b.dataset.call); callPhone(n, name(n.assistantId)); });
+  v.querySelectorAll("[data-call]").forEach(b => b.onclick = () => { const n = nums.find(x => x.id === b.dataset.call); callPhone(n, answeredBy(n)); });
 }
 
 // The number's assistant calls a phone: an outbound call, placed by Twilio.
 function callPhone(n, assistantName) {
-  $("#callFrom").textContent = `${assistantName} calls from ${n.number}. On a Twilio trial account, only verified numbers can be called.`;
+  $("#callFrom").textContent = `${assistantName} calls from ${n.number}.` + (n.provider === "byo-phone-number" ? "" : " On a Twilio trial account, only verified numbers can be called.");
   $("#callTo").value = store.get("openring-call-to") || "";
   $("#callErr").textContent = "";
   $("#callDialog").showModal();
@@ -1361,6 +1504,7 @@ async function viewCall(id) {
   v.innerHTML = `<div class="toolbar"><a class="btn ghost" href="#calls">← All calls</a><span class="spacer"></span>${statusBadge(c)}</div>
   <div class="cards compact" style="--cols:${Math.ceil(cards.length / Math.ceil(cards.length / 4))}">${cards.join("")}</div>
   ${(c.providerFallbacks || []).map(f => `<p class="muted fallback-note">${ICON.bolt}${esc(LAYER_NAMES[f.layer] || f.layer)} switched to <b>${esc(f.to)}</b> at ${esc(new Date(f.at).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit", second: "2-digit" }))}${f.reason && f.reason !== "failed" ? ` (${esc(f.reason)})` : ""}</p>`).join("")}
+  ${(c.handoffs || []).map(h => `<p class="muted fallback-note">${ICON.bolt}<b>${esc(h.from)}</b> handed the call to <b>${esc(h.to)}</b> at ${esc(new Date(h.at).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit", second: "2-digit" }))}</p>`).join("")}
   ${c.artifact?.recordingUrl ? `<section class="panel call-recording"><div class="body"><span class="muted">${ICON.mic}Recording</span><button class="btn ghost small" id="recPlay">Load and play</button><span class="spacer"></span><button class="btn danger small" id="recDel">Delete recording</button></div></section>` : ""}
   <div class="toolbar">${tabs([["transcript", "Transcript"], ["latency", "Response time"], ["json", "JSON"]], callTab)}</div>
   <section class="panel"><div class="body">${panes[callTab]()}</div></section>`;
@@ -1720,7 +1864,7 @@ async function startTalk(a) {
     talkState("Connecting…");
     await pc.setLocalDescription(await pc.createOffer());
     await iceGathered(pc);
-    const call = await api("/call/web", { method: "POST", body: JSON.stringify({ assistantId: a.id, sdp: pc.localDescription.sdp, type: pc.localDescription.type }) });
+    const call = await api("/call/web", { method: "POST", body: JSON.stringify({ [a.members ? "squadId" : "assistantId"]: a.id, sdp: pc.localDescription.sdp, type: pc.localDescription.type }) });
     if (!talk) return;
     talk.callId = call.id;
     await pc.setRemoteDescription(call.answer);
@@ -1763,7 +1907,7 @@ async function openCall(id) {
 $("#talkDialog").addEventListener("close", () => endTalk());
 
 // ---- Routing and shell ------------------------------------------------------------------
-const views = { home: viewHome, assistants: viewAssistants, numbers: viewNumbers, routes: viewRoutes, calls: viewCalls, campaigns: viewCampaigns, providers: viewProviders, settings: viewSettings };
+const views = { home: viewHome, assistants: viewAssistants, squads: viewSquads, knowledge: viewKnowledge, numbers: viewNumbers, routes: viewRoutes, calls: viewCalls, campaigns: viewCampaigns, providers: viewProviders, settings: viewSettings };
 function go(name) { location.hash = name; }
 async function route() {
   if ($("#app").hidden) return;
@@ -1774,6 +1918,7 @@ async function route() {
     else if (name === "campaigns" && id) await viewCampaign(id);
     else if (name === "routes" && id) await viewRoute(id);
     else if (name === "assistants" && id) await viewAssistant(id);
+    else if (name === "squads" && id) await viewSquad(id);
     else await (views[name] || viewHome)();
   } catch (err) { $("#view").innerHTML = `<div class="panel empty">${esc(err.message)}</div>`; }
 }

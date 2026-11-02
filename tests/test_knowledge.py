@@ -67,7 +67,6 @@ def test_upload_search_and_delete(client):
     # Without its accent, in the plural, in any case.
     assert "9h às 18h" in knowledge.search(store, [doc["id"]], "HORARIO funcionamento")[0]
     assert knowledge.search(store, ["another-file"], "horario") == []
-    assert knowledge.search(store, [doc["id"]], "zzz") == []
 
     assert client.get(f"/file/{doc['id']}", headers=AUTH).status_code == 200
     assert client.patch(f"/file/{doc['id']}", json={"name": "x", "bytes": 1}, headers=AUTH).json()["bytes"] != 1
@@ -194,8 +193,20 @@ def test_the_model_reads_passages_or_is_told_there_are_none(client):
     doc = _upload(client).json()
     tool = {"type": "query", "knowledgeBases": [{"provider": "google", "fileIds": [doc["id"]]}]}
     assert "R$ 90" in _run(tool, {"query": "plano ouro"}, store)
+    long = _upload(client, data=("\n".join(f"item {i} " + "palavra " * 30 for i in range(100))).encode()).json()
+    tool = {"type": "query", "knowledgeBases": [{"fileIds": [long["id"]]}]}
     assert _run(tool, {"query": "zzz"}, store) == knowledge.NOTHING
     assert _run(tool, {}, store) == knowledge.NOTHING
+
+
+def test_a_short_file_goes_whole_when_the_words_differ(client):
+    doc = _upload(client).json()
+    found = knowledge.search(client.app.state.store, [doc["id"]], "quando vocês atendem?")
+    assert "9h às 18h" in found[0]  # the model understands what the search can't
+
+
+def test_words_match_by_their_start():
+    assert knowledge.match_query("preços de ouro") == '"preç"* OR "de" OR "ouro"*'
 
 
 def test_answers_have_a_limit(client, monkeypatch):

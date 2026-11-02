@@ -72,6 +72,13 @@ class Store:
             ).fetchall()
         return [r[0] for r in rows]
 
+    def first_chunks(self, file_ids: list[str], limit: int) -> list[str]:
+        marks = ",".join("?" * len(file_ids))
+        with self._lock:
+            rows = self._db.execute(f"SELECT content FROM file_chunks WHERE file_id IN ({marks}) LIMIT ?",
+                                    (*file_ids, limit)).fetchall()
+        return [r[0] for r in rows]
+
     def forget_file(self, file_id: str) -> None:
         with self._lock:
             self._db.execute("DELETE FROM file_chunks WHERE file_id = ?", (file_id,))

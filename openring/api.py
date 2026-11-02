@@ -31,6 +31,7 @@ from . import (
     providers,
     recordings,
     routes,
+    sip,
     squads,
     stats,
     telnyx,
@@ -102,9 +103,12 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             providers.prepare_local(assistant)
         for squad in store.list("squads", limit=10_000):
             _prepare_squad(squad)
+        if store.list("credentials", limit=1):
+            await sip_server.start()
         cleaning = asyncio.create_task(clean_recordings_forever())
         yield
         cleaning.cancel()
+        await sip_server.stop()
         await dialer.close()
 
     app = FastAPI(title="OpenRing", version=__version__, lifespan=lifespan)
@@ -329,6 +333,8 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             "twilioVoiceUrl": base + "/twilio/voice",
             "telnyxVoiceUrl": base + "/telnyx/voice",
             "genesysUrl": re.sub(r"^http", "ws", base) + "/ws/genesys",
+            "sipPort": sip_server.port or settings.sip_port,
+            "sipRtpPorts": settings.sip_rtp_ports,
             "envFile": os.environ.get("OPENRING_ENV_FILE", ""),
             "providers": [_with_connect(p) for p in providers.provider_status(settings)],
         }
@@ -654,6 +660,58 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         _get_or_404("knowledge_bases", base_id)
         return store.delete("knowledge_bases", base_id)
 
+    # ---- SIP trunks (Vapi's /credential with provider byo-sip-trunk) ----------------------
+    def _trunk_view(doc: dict[str, Any]) -> dict[str, Any]:
+        view = {**sip.without_password(doc), "sipListening": sip_server.listening}
+        if sip_server.error:
+            view["sipError"] = sip_server.error
+        if doc["id"] in sip_server.registered:
+            view["sipRegistered"] = sip_server.registered[doc["id"]]
+        return view
+
+    def _check_trunk(doc: dict[str, Any]) -> None:
+        try:
+            sip.check_trunk(doc)
+        except sip.SipError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/credential", status_code=201, dependencies=auth_deps)
+    async def create_credential(body: dict[str, Any]) -> dict[str, Any]:
+        _check_trunk(body)
+        doc = store.create("credentials", body)
+        await sip_server.start()
+        return _trunk_view(doc)
+
+    @app.get("/credential", dependencies=auth_deps)
+    def list_credentials(limit: int = 100) -> list[dict[str, Any]]:
+        return [_trunk_view(doc) for doc in store.list("credentials", limit)]
+
+    @app.get("/credential/{credential_id}", dependencies=auth_deps)
+    def get_credential(credential_id: str) -> dict[str, Any]:
+        return _trunk_view(_get_or_404("credentials", credential_id))
+
+    @app.patch("/credential/{credential_id}", dependencies=auth_deps)
+    async def update_credential(credential_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        current = _get_or_404("credentials", credential_id)
+        plan = body.get("outboundAuthenticationPlan")
+        if isinstance(plan, dict) and "authPassword" not in plan:  # the API never shows it, so it stays unless replaced
+            old = (current.get("outboundAuthenticationPlan") or {}).get("authPassword")
+            body = {**body, "outboundAuthenticationPlan": {**plan, **({"authPassword": old} if old else {})}}
+        _check_trunk({**current, **body})
+        doc = store.update("credentials", credential_id, body)
+        await sip_server.start()
+        return _trunk_view(doc)
+
+    @app.delete("/credential/{credential_id}", dependencies=auth_deps)
+    async def delete_credential(credential_id: str) -> dict[str, Any]:
+        _get_or_404("credentials", credential_id)
+        for number in store.list("phone_numbers", limit=100_000):
+            if number.get("credentialId") == credential_id:
+                raise HTTPException(status_code=409, detail=f"{number.get('number')} uses this trunk: delete it first")
+        doc = store.delete("credentials", credential_id)
+        await sip_server.refresh()
+        return sip.without_password(doc)
+
     # ---- Import from another Vapi-compatible API ------------------------------------
     @app.post("/import", dependencies=auth_deps)
     async def import_from_api(body: dict[str, Any]) -> dict[str, Any]:
@@ -665,11 +723,21 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # ---- Phone numbers --------------------------------------------------------
-    @app.post("/phone-number", status_code=201, dependencies=auth_deps)
-    def create_phone_number(body: dict[str, Any]) -> dict[str, Any]:
-        if not is_phone_number(body.get("number")):
+    def _check_number(doc: dict[str, Any]) -> None:
+        trunk = doc.get("provider") == "byo-phone-number"
+        if trunk:
+            if store.get("credentials", str(doc.get("credentialId") or "")) is None:
+                raise HTTPException(status_code=400, detail="credentialId: a byo-phone-number needs a saved SIP trunk")
+            # An extension or a carrier's own format, as on Vapi, when the number says so.
+            if doc.get("numberE164CheckEnabled") is False and sip.NUMBER.fullmatch(str(doc.get("number") or "")):
+                return
+        if not is_phone_number(doc.get("number")):
             raise HTTPException(status_code=400, detail="number must be a phone number with its country code "
                                                         "(E.164, e.g. +15551234567)")
+
+    @app.post("/phone-number", status_code=201, dependencies=auth_deps)
+    def create_phone_number(body: dict[str, Any]) -> dict[str, Any]:
+        _check_number(body)
         if body.get("assistantId"):
             _get_or_404("assistants", body["assistantId"])
         if body.get("squadId"):
@@ -687,10 +755,9 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
 
     @app.patch("/phone-number/{number_id}", dependencies=auth_deps)
     def update_phone_number(number_id: str, body: dict[str, Any]) -> dict[str, Any]:
-        _get_or_404("phone_numbers", number_id)
-        if "number" in body and not is_phone_number(body["number"]):
-            raise HTTPException(status_code=400, detail="number must be a phone number with its country code "
-                                                        "(E.164, e.g. +15551234567)")
+        current = _get_or_404("phone_numbers", number_id)
+        if "number" in body or "credentialId" in body or "provider" in body:
+            _check_number({**current, **body})
         if body.get("assistantId"):
             _get_or_404("assistants", body["assistantId"])
         if body.get("squadId"):
@@ -783,28 +850,37 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
 
     def _outbound_number(number_id: str) -> dict[str, Any]:
         number = _get_or_404("phone_numbers", number_id)
-        if (number.get("provider") or "twilio") != "twilio":
-            raise HTTPException(status_code=400, detail="outbound calls only go through Twilio numbers for now")
+        if (number.get("provider") or "twilio") not in ("twilio", "byo-phone-number"):
+            raise HTTPException(status_code=400, detail="outbound calls go through Twilio numbers and SIP trunks")
         return number
 
-    def _customer(value: Any, where: str) -> dict[str, Any]:
+    def _customer(value: Any, where: str, *, sip_address: bool = False) -> dict[str, Any]:
         """A Vapi customer with its number in E.164. Its `assistantOverrides` go to the call, not the record."""
         customer = dict(value) if isinstance(value, dict) else {}
         if customer.get("sipUri") and not customer.get("number"):
-            raise HTTPException(status_code=400, detail=f"{where}.sipUri: SIP calls are not supported yet; use number")
+            if not sip_address:
+                raise HTTPException(status_code=400, detail=f"{where}.sipUri: a campaign calls numbers; use number")
+            if not sip.SIP_URI.fullmatch(str(customer["sipUri"])):
+                raise HTTPException(status_code=400, detail=f"{where}.sipUri must be like sip:name@host")
+            return customer
         if not is_phone_number(customer.get("number")):
             raise HTTPException(status_code=400, detail=f"{where}.number must be a phone number with its country code "
                                                         "(E.164, e.g. +5511999999999)")
         customer["number"] = _e164(str(customer["number"]))
         return customer
 
-    def _check_outbound(assistant: dict[str, Any]) -> None:
-        """Everything an outbound call needs before Twilio dials: a working assistant, Twilio, a public URL."""
+    def _check_outbound(assistant: dict[str, Any], number: dict[str, Any]) -> None:
+        """Everything an outbound call needs before it's dialed: a working assistant, and Twilio with a public URL or
+        a SIP trunk."""
         _validate_assistant(assistant)
         try:
             _plan(assistant)
         except ProviderError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if number.get("provider") == "byo-phone-number":
+            if store.get("credentials", str(number.get("credentialId") or "")) is None:
+                raise HTTPException(status_code=400, detail="the number's SIP trunk was deleted")
+            return
         if not (settings.twilio_account_sid and settings.twilio_auth_token):
             raise HTTPException(status_code=400, detail="outbound calls need TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN")
         if not settings.public_url:
@@ -813,16 +889,27 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     async def dial(
         number: dict[str, Any], customer: dict[str, Any], record: dict[str, Any], assistant: dict[str, Any]
     ) -> dict[str, Any]:
-        """Has Twilio call `customer` from `number`. `record` names the assistant (and overrides) for the call;
-        `assistant` is it with those applied, for what Twilio does before anyone talks to it."""
+        """Has Twilio or the SIP trunk call `customer` from `number`. `record` names the assistant (and overrides) for
+        the call; `assistant` is it with those applied, for what Twilio does before anyone talks to it."""
         person = {k: v for k, v in customer.items() if k != "assistantOverrides"}
         call = store.create("calls", {"type": "outboundPhoneCall", "status": "queued", **record,
                                       "phoneNumberId": number["id"], "customer": person})
+        to = person.get("number") or person["sipUri"]
+        if number.get("provider") == "byo-phone-number":
+            trunk = store.get("credentials", str(number.get("credentialId") or "")) or {}
+            try:
+                if not sip_server.listening:
+                    await sip_server.start()
+                await sip_server.place_call(call["id"], to, str(number["number"]), trunk)
+            except (sip.SipError, OSError) as exc:
+                patch = {"status": "ended", "endedReason": "sip-failed-to-connect-call", "endedAt": now_iso()}
+                raise Refused(store.update("calls", call["id"], patch), str(exc)) from exc
+            return store.update("calls", call["id"], {"phoneCallProvider": "sip"})
         try:
             sid = await twilio.create_call(
                 settings.twilio_account_sid,
                 settings.twilio_auth_token,
-                to=person["number"],
+                to=to,
                 from_=_e164(number["number"]),
                 url=f"{settings.public_url}/twilio/voice?callId={call['id']}",
                 status_callback=f"{settings.public_url}/twilio/status?callId={call['id']}",
@@ -837,7 +924,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     async def create_call(body: dict[str, Any]) -> dict[str, Any]:
         """Outbound phone call, Vapi-style: the assistant calls `customer.number` from one of your numbers."""
         number = _outbound_number(str(body.get("phoneNumberId") or ""))
-        customer = _customer(body.get("customer"), "customer")
+        customer = _customer(body.get("customer"), "customer", sip_address=True)
         extra = overrides.combine(customer.get("assistantOverrides"), body.get("assistantOverrides"))
         transient = body.get("assistant") if isinstance(body.get("assistant"), dict) else None
         squad = body.get("squad") if isinstance(body.get("squad"), dict) else None
@@ -863,13 +950,14 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         applied = team[0]
         for member in team:
-            _check_outbound(member)
+            _check_outbound(member, number)
         if extra:
             record["assistantOverrides"] = extra
         try:
             return await dial(number, customer, record, applied)
         except Refused as exc:
-            raise HTTPException(status_code=400, detail=f"Twilio did not place the call: {exc.detail}") from exc
+            carrier = "The SIP trunk" if number.get("provider") == "byo-phone-number" else "Twilio"
+            raise HTTPException(status_code=400, detail=f"{carrier} did not place the call: {exc.detail}") from exc
 
     # ---- Campaigns (Vapi's /campaign): one assistant calls a list of people --------------
     def _campaign_doc(body: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -945,11 +1033,11 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
                                     detail=f"assistantId is required: {number['number']} has no assistant attached")
             assistant = _get_or_404("assistants", str(assistant_id))
             if number_id not in checked:
-                _check_outbound(overrides.apply(assistant, base))
+                _check_outbound(overrides.apply(assistant, base), number)
                 checked.add(number_id)
             if overrides.changes_assistant(customer.get("assistantOverrides")):
                 _check_outbound(overrides.apply(assistant, overrides.combine(base, customer["assistantOverrides"]),
-                                                customer))
+                                                customer), number)
         return doc
 
     async def dial_for_campaign(campaign: dict[str, Any], number_id: str, customer: dict[str, Any]) -> dict[str, Any]:
@@ -958,7 +1046,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             assistant = _get_or_404("assistants", str(campaign.get("assistantId") or number.get("assistantId") or ""))
             extra = overrides.combine(campaign.get("assistantOverrides"), customer.get("assistantOverrides"))
             applied = overrides.apply(assistant, extra, customer)
-            _check_outbound(applied)
+            _check_outbound(applied, number)
         except HTTPException as exc:
             raise campaigns.Stop(str(exc.detail)) from exc
         record = {"assistantId": assistant["id"], "campaignId": campaign["id"],
@@ -966,7 +1054,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         try:
             return await dial(number, customer, record, applied)
         except Refused as exc:
-            logger.warning("campaign {}: Twilio did not call {}: {}", campaign["id"], customer["number"], exc.detail)
+            logger.warning("campaign {}: {} was not called: {}", campaign["id"], customer["number"], exc.detail)
             return exc.call
 
     dialer = campaigns.Dialer(store, dial_for_campaign)
@@ -1169,7 +1257,9 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             params = {"callId": call_id, **({"assistantId": call["assistantId"]} if call.get("assistantId") else {})}
             return Response(stream_twiml(settings.public_ws_url + "/ws/twilio", params), media_type="application/xml")
 
-        answer = await answer_inbound(form.get("From", ""), form.get("To", ""), form.get("CallSid"), "twilio")
+        # A call through a Twilio SIP domain or trunk says sip:+1555...@...; the number in it is what counts.
+        answer = await answer_inbound(sip.user_of(form.get("From", "")), sip.user_of(form.get("To", "")),
+                                      form.get("CallSid"), "twilio")
         if isinstance(answer, str):
             return Response(say_twiml(answer), media_type="application/xml")
         params = {"callId": answer["id"]}
@@ -1202,7 +1292,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         if not settings.public_url:
             logger.error("PUBLIC_URL is not set; Telnyx cannot reach the media websocket")
             return Response(say_twiml("This line is not configured yet."), media_type="application/xml")
-        answer = await answer_inbound(form.get("From", ""), form.get("To", ""),
+        answer = await answer_inbound(sip.user_of(form.get("From", "")), sip.user_of(form.get("To", "")),
                                       form.get("CallSid") or form.get("CallControlId"), "telnyx")
         if isinstance(answer, str):
             return Response(say_twiml(answer), media_type="application/xml")
@@ -1290,6 +1380,37 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
 
         build = twilio_transport if provider == "twilio" else telnyx_transport
         await run_phone_call(call, hang_up, lambda: build(websocket, dict(call_data), settings), transfer)
+
+    async def run_sip_call(call_id: str, session: sip.Session) -> None:
+        """A SIP call that's connected, either way: it runs like any phone call, and is hung up when it ends."""
+        call = store.claim("calls", call_id, "queued", {"status": "in-progress", "startedAt": now_iso()})
+        if call is None:
+            logger.warning("refused SIP call {}: unknown or already connected", call_id)
+            await session.hang_up()
+            return
+
+        async def refuse(_why: str) -> None:
+            await session.hang_up()
+
+        try:
+            await run_phone_call(call, refuse, lambda: sip.transport_for(session), session.transfer)
+        finally:
+            await session.hang_up()
+
+    def sip_call_failed(call_id: str, reason: str) -> None:
+        """A SIP call that never reached the assistant."""
+        store.claim("calls", call_id, "queued", {"status": "ended", "endedReason": reason, "endedAt": now_iso()})
+
+    async def answer_sip(caller: str, called: str, sip_call_id: str) -> dict[str, Any] | str:
+        return await answer_inbound(caller, called, sip_call_id, "sip")
+
+    low, _, high = settings.sip_rtp_ports.partition("-")
+    sip_server = sip.Server(
+        host=settings.sip_host, port=settings.sip_port, public_ip=settings.sip_public_ip,
+        rtp_ports=(int(low), int(high or low)), trunks=lambda: store.list("credentials", limit=1000),
+        answer=answer_sip, run=run_sip_call, failed=sip_call_failed,
+    )
+    app.state.sip = sip_server
 
     @app.websocket("/ws/twilio")
     async def twilio_media(websocket: WebSocket) -> None:

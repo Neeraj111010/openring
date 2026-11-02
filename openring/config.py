@@ -54,6 +54,13 @@ class Settings:
     genesys_api_key: str = field(default_factory=lambda: _env("GENESYS_API_KEY"))
     genesys_client_secret: str = field(default_factory=lambda: _env("GENESYS_CLIENT_SECRET"))
 
+    # SIP trunks (sip.py): nothing listens until a trunk is saved. The carrier must reach this UDP port and the RTP
+    # ports. SIP_PUBLIC_IP is the address it should send to, when this computer doesn't have it (behind a NAT).
+    sip_host: str = field(default_factory=lambda: _env("SIP_HOST", "0.0.0.0"))
+    sip_port: int = field(default_factory=lambda: int(_env("SIP_PORT", "5060")))
+    sip_public_ip: str = field(default_factory=lambda: _env("SIP_PUBLIC_IP"))
+    sip_rtp_ports: str = field(default_factory=lambda: _env("SIP_RTP_PORTS", "40000-40999"))
+
     @property
     def public_ws_url(self) -> str:
         if self.public_url.startswith("https://"):

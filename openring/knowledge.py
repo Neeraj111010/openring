@@ -30,7 +30,8 @@ MAX_QUERY_WORDS = 30
 TEXT_TYPES = (".txt", ".md", ".csv", ".tsv", ".yaml", ".yml", ".json", ".xml", ".log")
 CUSTOM = "custom-knowledge-base"
 DEFAULT_TIMEOUT = 20
-NOTHING = "The knowledge base has nothing on that. Say you don't know instead of guessing."
+NOTHING = ("Nothing found with those words. Try once more with other words or synonyms, in the documents' language; "
+           "if that finds nothing either, say you don't know instead of guessing.")
 
 
 class KnowledgeError(ValueError):
@@ -134,15 +135,29 @@ def chunks(text: str) -> list[str]:
 
 
 def match_query(text: str) -> str | None:
-    """The question as a full-text query: any of its words, longer ones also as the start of a word ("horario"
-    finds "horarios"). Only letters and digits get through, so nothing in it can act as query syntax."""
+    """The question as a full-text query: any of its words, longer ones by their start, without their ending, in any
+    language ("preços" finds "preço", "horários" finds "horario"). Only letters and digits get through, so nothing
+    in it can act as query syntax."""
     words = list(dict.fromkeys(re.findall(r"[^\W_]+", text.lower())))[:MAX_QUERY_WORDS]
-    return " OR ".join(f'"{w}"*' if len(w) >= 4 else f'"{w}"' for w in words) or None
+
+    def term(word: str) -> str:
+        return f'"{word[:-2]}"*' if len(word) >= 6 else f'"{word}"*' if len(word) >= 4 else f'"{word}"'
+
+    return " OR ".join(term(w) for w in words) or None
 
 
 def search(store: Store, file_ids: list[str], query: str) -> list[str]:
+    """The passages that match. With no match but little text, all of it: the model reads meanings the search can't,
+    so "when do you open?" finds "Monday to Friday, 9 to 6" in a short FAQ."""
+    if not file_ids:
+        return []
     match = match_query(query)
-    return store.search_chunks(file_ids, match, MAX_PASSAGES) if match and file_ids else []
+    found = store.search_chunks(file_ids, match, MAX_PASSAGES) if match else []
+    if found:
+        return found
+    everything = store.first_chunks(file_ids, MAX_PASSAGES + 1)
+    fits = len(everything) <= MAX_PASSAGES and sum(map(len, everything)) <= MAX_ANSWER_CHARS
+    return everything if fits else []
 
 
 def _shorten(passages: list[str]) -> str:
