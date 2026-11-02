@@ -32,6 +32,8 @@ METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 MAX_RESPONSE_BYTES = 100_000  # what's read of an apiRequest's answer; the rest is never downloaded
 MAX_RESULT_CHARS = 4_000  # what the model reads of it: every word costs tokens, on every turn after
 MAX_NAME_CHARS = 64  # what model APIs accept for a tool's name
+MAX_HANDOFF_VALUE_CHARS = 500  # of one value a handoff passes along
+HANDOFF_UNDER_WAY = "The call is already moving to another assistant."
 HEADER_NAME = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
 # What a tool's server or a webhook has no need to see of an assistant: other tools' keys and addresses, its own.
 PRIVATE_FIELDS = {"headers", "secret", "credentials", "credentialId", "credentialIds", "url", "server", "value"}
@@ -496,15 +498,20 @@ def make_handler(tool: dict[str, Any], controls: CallControls):
                     call=controls.current_call(),
                     assistant=controls.assistant,
                 )
-        except (ToolError, knowledge.KnowledgeError) as exc:
-            logger.warning("tool {} failed: {}", tool_name(tool), exc)
-            result = f"The tool failed: {exc}. Tell the caller you could not complete it."
+        except Exception as exc:  # whatever it was, the model must hear, or the caller waits in silence for the timeout
+            explained = isinstance(exc, (ToolError, knowledge.KnowledgeError))
+            if explained:
+                logger.warning("tool {} failed: {}", tool_name(tool), exc)
+            else:  # a bug: its text might carry what the model shouldn't read
+                logger.exception("tool {} failed", tool_name(tool))
+            what = f"The tool failed: {exc}." if explained else "The tool failed."
+            result = f"{what} Tell the caller you could not complete it."
             failed = _message(tool, "request-failed")
             if failed and failed.get("role") == "system":  # written for the model: never read out to the caller
                 result = f"{result} {failed['content']}"
             elif failed:
                 await controls.speak(str(failed["content"]))
-                result = f"The tool failed: {exc}. The caller was just told, so don't apologize again."
+                result = f"{what} The caller was just told, so don't apologize again."
         finally:
             if late is not None:
                 late.cancel()
@@ -546,9 +553,16 @@ def make_handler(tool: dict[str, Any], controls: CallControls):
         if destination is None:
             await params.result_callback(f"Unknown destination '{wanted}'. Choose one of the listed assistants.")
             return
+        # These come from the caller's words and land in the next assistant's system prompt: only what's declared.
+        declared = ((tool.get("function") or {}).get("parameters") or {}).get("properties") or {}
+        arguments = {k: v[:MAX_HANDOFF_VALUE_CHARS] if isinstance(v, str) else v for k, v in arguments.items()
+                     if k in declared and isinstance(v, (str, int, float, bool))}
         message = destination.get("message") or tool_message(tool, "request-start")
         problem = "No other assistant is on this call." if controls.hand_off is None \
             else controls.hand_off(destination, arguments, message, params.tool_call_id)
+        if problem == HANDOFF_UNDER_WAY:  # it's on its way out: nothing more from this assistant
+            await params.result_callback(problem, properties=FunctionCallResultProperties(run_llm=False))
+            return
         if problem:
             await params.result_callback(f"{problem} Carry on with the caller yourself.")
             return

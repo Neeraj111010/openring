@@ -369,8 +369,9 @@ curl -H "Authorization: Bearer $OPENRING_API_KEY" -F file=@prices.pdf http://loc
   "knowledgeBases": [{"name": "faq", "description": "Prices and opening hours", "fileIds": ["FILE_ID"]}]}]}}
 ```
 
-PDF, .docx, text, Markdown, CSV, JSON, YAML, XML and logs, up to 20 MB each. A scanned PDF has no text to read, and old
-.doc files need saving as .docx. Only the text is kept, in OpenRing's database.
+PDF, .docx, text, Markdown, CSV, JSON, YAML, XML and logs, up to 20 MB each. A scanned PDF has no text to read, a PDF
+that takes over 3 minutes to read is refused, and old .doc files need saving as .docx. Only the text is kept, in
+OpenRing's database.
 
 The search runs on your server, for free, in a few milliseconds and with nothing to download. It **matches words, not
 meanings**: the model picks the words, and tries others when nothing comes back, and a short file goes to the model
@@ -439,15 +440,16 @@ curl -X POST http://localhost:8000/phone-number -H "Authorization: Bearer $OPENR
 Calls to the number reach the assistant, `POST /call` and campaigns dial out through the trunk, and `transferCall`
 sends a SIP REFER. A carrier that wants registration gets it with `sipRegisterPlan: {"domain": "sip.carrier.example"}`
 in the authentication plan. `numberE164CheckEnabled: false` allows an extension like `1000`, and `customer.sipUri`
-calls a SIP address directly.
+calls a `sip:` address directly. The trunk's login goes only to its own gateways, so an address elsewhere that asks for
+one is refused.
 
 **The carrier has to reach your computer by UDP**, on port 5060 and on the audio ports 40000-40999, so this needs a server
 with a public address or port forwarding: a web tunnel won't do. `SIP_PORT` and `SIP_RTP_PORTS` change them, and
 behind a NAT `SIP_PUBLIC_IP` says what address to give the carrier.
 
 Nothing listens until a trunk is saved. SIP servers on the internet get probed all day by people looking to make calls on
-someone else's bill, so OpenRing answers only the gateways of your trunks and ignores everyone else without a word; a
-softphone on your network works by listing its address as a gateway. The password goes in and never comes back
+someone else's bill, so OpenRing answers only the gateways of your trunks and whoever is on a call with it, and ignores
+everyone else without a word; a softphone on your network works by listing its address as a gateway. The password goes in and never comes back
 through the API. It's kept in OpenRing's database, and SIP over UDP isn't encrypted, as is usual with carriers.
 
 Not available yet: SIP over TCP or TLS, voicemail detection, and codecs other than G.711. On Twilio or Telnyx, SIP

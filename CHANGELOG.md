@@ -14,7 +14,8 @@ All notable changes to OpenRing are listed here. The format follows
   brings squads.
 - Knowledge bases (beta), in Vapi's format: `POST /file`, the `query` tool, `/knowledge-base` and
   `model.knowledgeBaseId`. The search runs on your server with SQLite's full-text index, matching words, or asks your
-  own with `custom-knowledge-base`. PDFs are read with pypdf, a new dependency.
+  own with `custom-knowledge-base`. PDFs are read with pypdf, a new dependency, in a process of their own with a time
+  limit.
 - SIP trunks (beta), in Vapi's format: `byo-sip-trunk` credentials in `/credential` and `byo-phone-number` numbers, in and
   out, with login, registration and transfers, over UDP with G.711. Only your trunks' gateways get an answer.
   `customer.sipUri` works, and Twilio and Telnyx SIP calls find their number.

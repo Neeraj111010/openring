@@ -3,7 +3,9 @@
 import asyncio
 import io
 import json
+import time
 import zipfile
+import zlib
 
 import httpx
 import pytest
@@ -276,3 +278,112 @@ def test_knowledge_base_id_on_an_assistant(client, monkeypatch):
     assert client.patch(f"/knowledge-base/{base['id']}", json={"name": "x"}, headers=AUTH).json()["name"] == "x"
     client.delete(f"/knowledge-base/{base['id']}", headers=AUTH)
     assert assistant_tools({"model": model}, client.app.state.store) == []  # deleted later: the call goes on
+
+
+def test_a_hostile_docx_cannot_freeze_the_server():
+    """A regular expression holds the whole process, calls included. This file is 300 bytes; at the size limit the
+    old one took days."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as package:
+        package.writestr("word/document.xml", "<w:t " * 40_000)
+    started = time.perf_counter()
+    with pytest.raises(knowledge.KnowledgeError):  # no text in it
+        knowledge.extract_text("a.docx", buffer.getvalue())
+    assert time.perf_counter() - started < 1
+
+
+def _slow_pdf(pages=3, megabytes=2) -> bytes:
+    """Pages sharing one compressed stream of drawing, no text: a few KB, seconds of work for each page."""
+    stream = zlib.compress(b"BT /F1 12 Tf ET\n" * (megabytes * 62_500), 9)
+    kids = b" ".join(b"%d 0 R" % (4 + n) for n in range(pages))
+    page = (b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 9 9] /Contents 3 0 R /Resources << /Font << "
+            b"/F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> >>")
+    objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [%s] /Count %d >>" % (kids, pages),
+               b"<< /Filter /FlateDecode /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream),
+               *[page] * pages]
+    out = b"%PDF-1.7\n"
+    offsets = []
+    for number, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n%s\nendobj\n" % (number, body)
+    table, size = len(out), len(objects) + 1
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % size + b"".join(b"%010d 00000 n \n" % o for o in offsets)
+    return out + b"trailer << /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF" % (size, table)
+
+
+def test_a_slow_pdf_is_stopped(monkeypatch):
+    monkeypatch.setattr(knowledge, "PDF_SECONDS", 1)
+    started = time.perf_counter()
+    with pytest.raises(knowledge.KnowledgeError, match="too long"):
+        knowledge.extract_text("a.pdf", _slow_pdf())
+    assert time.perf_counter() - started < 6
+
+
+def test_a_pdf_is_read_by_another_process(monkeypatch):
+    """pypdf is pure Python: reading a long PDF here would take turns with every call's audio."""
+    import pypdf
+
+    monkeypatch.setattr(pypdf, "PdfReader", None)  # in this process
+    assert "Garantia" in knowledge.extract_text("a.pdf", _pdf("Garantia de dois anos"))
+
+
+def test_a_pdf_with_a_password_says_so():
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    writer.add_blank_page(100, 100)
+    writer.encrypt("secret", algorithm="RC4-128")
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    with pytest.raises(knowledge.KnowledgeError, match="password"):
+        knowledge.extract_text("a.pdf", buffer.getvalue())
+
+
+def test_cutting_a_file_stays_off_the_event_loop(client, monkeypatch):
+    real, on_the_loop = knowledge.chunks, []
+
+    def note(text):
+        try:
+            asyncio.get_running_loop()
+            on_the_loop.append(True)
+        except RuntimeError:
+            on_the_loop.append(False)
+        return real(text)
+
+    monkeypatch.setattr(knowledge, "chunks", note)
+    assert _upload(client).status_code == 201
+    assert on_the_loop == [False]
+
+
+@pytest.mark.parametrize("server", [{"timeoutSeconds": "soon"}, {"timeoutSeconds": -1}, {"headers": "x"}])
+def test_a_badly_set_up_search_is_refused_and_still_answers_the_model(monkeypatch, server):
+    tool = {"type": "query", "knowledgeBases": [
+        {"provider": knowledge.CUSTOM, "server": {"url": "https://kb.test", **server}}]}
+    with pytest.raises(ToolError):
+        check_tool(tool)
+    _server(monkeypatch, lambda r: httpx.Response(200, json={"documents": []}))
+    assert _run(tool, {"query": "x"}, None)  # one saved before this check: the model isn't left waiting
+
+
+def test_a_tool_that_breaks_still_answers_the_model(monkeypatch):
+    """Without a result the model waits, and the caller hears nothing, until the tool's timeout."""
+    async def broken(*_args, **_kwargs):
+        raise RuntimeError("secret detail")
+
+    monkeypatch.setattr(knowledge, "answer", broken)
+    result = _run({"type": "query", "knowledgeBases": [{"fileIds": ["1"]}]}, {"query": "x"}, None)
+    assert "The tool failed" in result and "secret detail" not in result
+
+
+def test_a_huge_answer_from_your_own_search_is_not_downloaded(monkeypatch):
+    class Endless(httpx.AsyncByteStream):
+        sent = 0
+
+        async def __aiter__(self):
+            for _ in range(1000):
+                Endless.sent += 100_000
+                yield b"x" * 100_000
+
+    _server(monkeypatch, lambda r: httpx.Response(200, stream=Endless()))
+    assert "The tool failed" in _run(CUSTOM, {"query": "x"}, None)
+    assert Endless.sent <= knowledge.MAX_SERVER_BYTES + 100_000

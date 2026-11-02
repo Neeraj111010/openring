@@ -187,7 +187,8 @@ curl -X POST http://localhost:8000/assistant \
 
 Envie arquivos e o assistente consulta durante a ligação. As mesmas chamadas do Vapi: `POST /file` e uma ferramenta
 `query`, ou **Knowledge** no painel e as caixas no editor do assistente. Aceita PDF, .docx, texto, Markdown, CSV, JSON,
-YAML, XML e logs, até 20 MB cada. PDF escaneado não tem texto para ler, e .doc antigo precisa virar .docx.
+YAML, XML e logs, até 20 MB cada. PDF escaneado não tem texto para ler, PDF que leva mais de 3 minutos para ser lido é
+recusado, e .doc antigo precisa virar .docx.
 
 A busca roda no seu servidor, de graça, em milissegundos e sem baixar nada. Ela **procura palavras, não significados**: o
 modelo escolhe as palavras e tenta outras quando nada volta, e um arquivo curto vai inteiro para o modelo. Em documentos

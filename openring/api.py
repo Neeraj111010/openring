@@ -603,7 +603,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             text = await asyncio.to_thread(knowledge.extract_text, name, data)
         except knowledge.KnowledgeError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        passages = knowledge.chunks(text)
+        passages = await asyncio.to_thread(knowledge.chunks, text)
         doc = store.create("files", {"name": name, "originalName": name, "bytes": len(data), "status": "done",
                                      "mimetype": file.content_type, "parsedTextBytes": len(text.encode()),
                                      "passages": len(passages)})
@@ -860,7 +860,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         if customer.get("sipUri") and not customer.get("number"):
             if not sip_address:
                 raise HTTPException(status_code=400, detail=f"{where}.sipUri: a campaign calls numbers; use number")
-            if not sip.SIP_URI.fullmatch(str(customer["sipUri"])):
+            if not sip.is_address(str(customer["sipUri"])):
                 raise HTTPException(status_code=400, detail=f"{where}.sipUri must be like sip:name@host")
             return customer
         if not is_phone_number(customer.get("number")):

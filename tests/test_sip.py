@@ -1,5 +1,6 @@
 """SIP trunks, on real UDP sockets on this computer: a little softphone plays the carrier."""
 
+import asyncio
 import random
 import re
 import socket
@@ -616,3 +617,191 @@ def test_a_twilio_sip_domain_call_finds_its_number(monkeypatch):
                                            "CallSid": "CA1"})
     assert "<Stream" in r.text
     assert client.get("/call", headers=AUTH).json()[0]["customer"]["number"] == "ana"
+
+
+@pytest.mark.parametrize("read, hostile", [
+    (sip.read_sdp, b"c=IN IP4 203.0.113.9\r\nm=audio 4000 RTP/AVP 0" + b" " * 60_000 + b"x\r\n"),
+    (sip.user_of, "sip:" * 15_000),
+    (sip._uri_in, "<" * 60_000),
+    (lambda challenge: sip.digest(challenge, "INVITE", "u", "n", "p"), "a" * 60_000),
+], ids=["sdp", "address", "contact", "challenge"])
+def test_one_datagram_cannot_stall_every_call(read, hostile):
+    """These run on the event loop, where one slow regular expression stops the audio of every call."""
+    started = time.perf_counter()
+    read(hostile)
+    assert time.perf_counter() - started < 0.5
+
+
+def test_an_endless_header_is_not_read():
+    assert sip.parse(b"OPTIONS sip:a SIP/2.0\r\nVia: " + b"x" * 500 + b"\r\n\r\n") is not None
+    assert sip.parse(b"OPTIONS sip:a SIP/2.0\r\nVia: " + b"x" * (sip.MAX_LINE_CHARS + 1) + b"\r\n\r\n") is None
+    assert sip.parse(b"OPTIONS sip:a SIP/2.0\r\nVia: x" + b"\r\n y" * sip.MAX_LINE_CHARS + b"\r\n\r\n") is None
+
+
+def test_sdp_needs_plain_audio_and_a_reachable_address():
+    good = "c=IN IP4 203.0.113.9\r\nm=audio 4000 RTP/AVP 0\r\n"
+    assert sip.read_sdp(good.encode()) is not None
+    assert sip.read_sdp(good.replace("RTP/AVP", "RTP/AVPF").encode()) is not None
+    assert sip.read_sdp(good.replace("RTP/AVP", "RTP/SAVP").encode()) is None  # we'd read encrypted audio as noise
+    here = good.replace("203.0.113.9", "127.0.0.1").encode()
+    assert sip.read_sdp(here, "203.0.113.50") is None  # a far side can't send our audio to this computer's own ports
+    assert sip.read_sdp(here, "127.0.0.1") is not None
+
+
+def _from_the_far_side(phone, ack, method, body=""):
+    return (f"{method} sip:openring@127.0.0.1 SIP/2.0\r\nVia: SIP/2.0/UDP 127.0.0.1:{phone.port};branch=z{method}\r\n"
+            f"From: {ack.get('to')}\r\nTo: {ack.get('from')}\r\nCall-ID: {ack.get('call-id')}\r\n"
+            f"CSeq: 9 {method}\r\nContent-Length: {len(body)}\r\n\r\n{body}").encode()
+
+
+@pytest.mark.parametrize("customer", [{}, {"sipUri": "sip:agent@localhost:{port}"}], ids=["number", "sip address"])
+def test_the_far_side_of_a_call_is_heard_without_being_a_gateway(server, phone, customer):
+    """An outgoing-only gateway, or a sip: address, may not send calls, but it's on this one. Without its BYE the call
+    talks to nobody; without its re-INVITE the audio stops; without its NOTIFY a transfer never finishes."""
+    gateways = [{"ip": "127.0.0.1", "port": phone.port, "inboundEnabled": False}]
+    number, _, _ = _line(server, phone, trunk_fields={"gateways": gateways})
+    assert "127.0.0.1" not in server.app.state.sip.allowed
+    who = {k: v.format(port=phone.port) for k, v in customer.items()}
+    assert _dial(server, number, **who).status_code == 201
+    _, addr = _trunk_answers(phone, 200)
+    ack, _ = phone.until(lambda m: not m.is_response and m.method == "ACK")
+    assert _wait(lambda: _calls(server)[0]["status"] == "in-progress")
+
+    def answered(method, body=""):
+        phone.sip.sendto(_from_the_far_side(phone, ack, method, body), addr)
+        return phone.until(lambda m: m.is_response and m.cseq_method == method)[0]
+
+    held = answered("INVITE", phone.sdp("0"))
+    assert held.status == 200 and sip.read_sdp(held.body) is not None
+    assert answered("NOTIFY", "SIP/2.0 100 Trying").status == 200
+
+    bye = _from_the_far_side(phone, ack, "BYE")
+    server.app.state.sip.datagram_received(bye, ("198.51.100.7", 5060))  # the right words from anywhere else
+    time.sleep(0.2)
+    assert _calls(server)[0]["status"] == "in-progress"
+
+    assert answered("BYE").status == 200
+    assert _ended(server)[0]["endedReason"] == "customer-ended-call"
+
+
+def test_a_trunks_login_goes_only_to_its_own_gateway(server, phone):
+    """Anywhere else could answer 401 to a sip: address and crack the password from the digest."""
+    plan = {"authUsername": "acme", "authPassword": "s3cret"}
+    number, _, _ = _line(server, phone, trunk_fields={"outboundAuthenticationPlan": plan})
+    assert _dial(server, number, sipUri=f"sip:agent@localhost:{phone.port}").status_code == 201
+    invite, addr = phone.until(lambda m: not m.is_response and m.method == "INVITE")
+    _reply(phone, invite, addr, 401, extra='WWW-Authenticate: Digest realm="c", nonce="n"\r\n')
+    phone.until(lambda m: not m.is_response and m.method == "ACK")
+    with pytest.raises(TimeoutError):  # no second INVITE, with or without a digest
+        phone.receive(0.3)
+    assert _ended(server)[0]["endedReason"] == "sip-failed-to-connect-call"
+
+
+def test_a_bye_before_the_ack_ends_the_call(server, phone):
+    _line(server)
+    port = _port(server)
+    phone.send(phone.invite_text(port), port)
+    answer = _answered(phone, port)
+    phone.send(phone.in_dialog("BYE", answer, port), port)
+    phone.until(lambda m: m.is_response and m.cseq_method == "BYE")
+    assert _ended(server)[0]["endedReason"] == "customer-ended-call"
+
+
+@pytest.mark.parametrize("address", ["sip:agent@127.0.0.1:99999", "sip:agent@127.0.0.1:0", "sips:agent@127.0.0.1"])
+def test_a_sip_address_that_cannot_work_is_refused(server, phone, address):
+    number, _, _ = _line(server, phone)
+    assert _dial(server, number, sipUri=address).status_code == 400
+    assert _calls(server) == []
+
+
+def test_an_unexpected_error_while_dialing_still_ends_the_call(server, phone, monkeypatch):
+    async def broken(*_):
+        raise RuntimeError("a bug")
+
+    monkeypatch.setattr(sip.Server, "_invite", broken)
+    number, _, _ = _line(server, phone)
+    assert _dial(server, number).status_code == 201
+    assert _ended(server)[0]["endedReason"] == "sip-failed-to-connect-call"
+    assert not server.app.state.sip.sessions
+
+
+def test_invites_nobody_confirms_are_limited(server, phone, monkeypatch):
+    """A forged gateway address never gets our tag, so it never sends the ACK: those can't take every line."""
+    monkeypatch.setattr(sip, "MAX_UNANSWERED", 2)
+    _line(server)
+    port = _port(server)
+    for n in range(3):
+        phone.send(phone.invite_text(port, call_id=f"forged-{n}"), port)
+    busy, _ = phone.until(lambda m: m.is_response and m.status == 503)
+    assert busy.get("call-id") == "forged-2" and len(_calls(server)) == 2
+
+
+def test_a_changed_trunk_registers_with_the_new_login(server, phone):
+    plan = {"authUsername": "old", "authPassword": "pw", "sipRegisterPlan": {"domain": "voice.example"}}
+    body = {"provider": "byo-sip-trunk", "gateways": [{"ip": "127.0.0.1", "port": phone.port}],
+            "outboundAuthenticationPlan": plan}
+    trunk = server.post("/credential", json=body, headers=AUTH).json()
+    phone.until(lambda m: not m.is_response and m.method == "REGISTER" and "old@" in m.get("from"))
+    changed = {"outboundAuthenticationPlan": {**plan, "authUsername": "new"}}
+    assert server.patch(f"/credential/{trunk['id']}", json=changed, headers=AUTH).status_code == 200
+    phone.until(lambda m: not m.is_response and m.method == "REGISTER" and "new@" in m.get("from"))
+
+
+def test_registering_never_goes_to_a_cloud_metadata_address(server):
+    plan = {"authUsername": "a", "authPassword": "b", "sipRegisterPlan": {"domain": "voice.example"}}
+    body = {"provider": "byo-sip-trunk", "gateways": [{"ip": "169.254.169.254"}], "outboundAuthenticationPlan": plan}
+    trunk = server.post("/credential", json=body, headers=AUTH).json()
+    assert _wait(lambda: server.get(f"/credential/{trunk['id']}", headers=AUTH).json().get("sipRegistered") is False, 3)
+
+
+def test_a_failed_lookup_keeps_the_gateways_address(monkeypatch):
+    async def go():
+        trunks = [{"id": "t", "gateways": [{"ip": "127.0.0.1"}]}]
+        server = sip.Server(host="127.0.0.1", port=0, public_ip="", rtp_ports=(41000, 41010),
+                            trunks=lambda: trunks, answer=None, run=None)
+        await server.refresh()
+        assert server.allowed == {"127.0.0.1"}
+
+        async def broken(*_args, **_kwargs):
+            raise socket.gaierror("no DNS right now")
+
+        monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", broken)
+        await server.refresh()
+        assert server.allowed == {"127.0.0.1"}  # a carrier's calls aren't dropped for a hiccup
+        trunks.clear()
+        await server.refresh()
+        assert server.allowed == set()  # a deleted trunk's gateway goes at once
+
+    asyncio.run(go())
+
+
+def test_a_flood_of_strangers_writes_a_few_lines(server, monkeypatch):
+    lines = []
+    monkeypatch.setattr(sip.logger, "warning", lambda *a, **_k: lines.append(a))
+    message = sip.parse(b"OPTIONS sip:a SIP/2.0\r\nCall-ID: x\r\n\r\n")
+    for n in range(1000):  # a forged address on every packet
+        server.app.state.sip._note_stranger(f"198.51.{n // 256}.{n % 256}", message)
+    assert len(lines) <= sip.MAX_WARNED
+
+
+def test_a_transfer_goes_only_to_a_number():
+    session = sip.Session(None, "c", ("203.0.113.9", 5060), "t", False)
+    with pytest.raises(sip.SipError):  # never a line of its own in the REFER
+        asyncio.run(session.transfer("+15551234567\r\nX-Evil: 1"))
+
+
+def test_shutting_down_does_not_wait_for_a_silent_carrier(monkeypatch, quiet_providers, phone):
+    for key in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "ELEVENLABS_API_KEY"):
+        monkeypatch.setenv(key, "fake")
+    low = RTP_LOW + random.randrange(0, 4000, 2)
+    settings = Settings(api_key="test-key", db_path=":memory:", sip_host="127.0.0.1", sip_port=0, sip_public_ip="",
+                        sip_rtp_ports=f"{low}-{low + 40}")
+    with TestClient(create_app(settings, Store(":memory:"))) as client:
+        _line(client)
+        port = _port(client)
+        phone.send(phone.invite_text(port), port)
+        _ack(phone, _answered(phone, port), port)
+        assert _wait(lambda: _calls(client)[0]["status"] == "in-progress")
+        started = time.monotonic()
+    assert time.monotonic() - started < 6
+    phone.until(lambda m: not m.is_response and m.method == "BYE")  # it did say goodbye

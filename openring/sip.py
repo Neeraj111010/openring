@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import audioop
 import hashlib
+import ipaddress
 import random
 import re
 import secrets
@@ -33,7 +34,11 @@ from loguru import logger
 from . import netguard
 
 MAX_MESSAGE_BYTES = 65_000
+MAX_LINE_CHARS = 4_000  # of one header: no carrier needs more
 MAX_SESSIONS = 500
+MAX_UNANSWERED = 50  # calls waiting for an ACK: one from a forged address never comes, and they can't take every line
+MAX_WARNED = 100  # strangers logged in an hour; a flood with a forged address on every packet can't fill the disk
+STOP_SECONDS = 2  # how long shutting down waits for carriers to answer our goodbyes
 T1 = 0.5  # RFC 3261's retransmission timer
 TRANSACTION_SECONDS = 32  # its 64*T1: how long a request is resent for
 RING_SECONDS = 60  # how long an outgoing call rings before it's given up on
@@ -63,10 +68,16 @@ def tag() -> str:
     return secrets.token_hex(6)
 
 
+def is_address(text: str) -> bool:
+    """A `sip:` address this server can call. Not `sips:`: that promises an encryption UDP doesn't give."""
+    found = SIP_URI.fullmatch(text)
+    return bool(found) and text.startswith("sip:") and 0 < int(found.group("port") or 5060) < 65536
+
+
 def user_of(address: str) -> str:
     """The number in `sip:+15551234567@carrier.example` (also what Twilio and Telnyx send for a SIP call), or the
     address as it was given."""
-    found = re.search(r"sips?:([^@;>\s]+)@", address or "")
+    found = re.search(r"sips?:([^@;>\s]+)@", (address or "")[:MAX_LINE_CHARS])
     return found.group(1) if found else address
 
 
@@ -125,6 +136,8 @@ def parse(data: bytes) -> Message | None:
         lines = head.decode("utf-8", "replace").split("\r\n")
     except ValueError:
         return None
+    if any(len(line) > MAX_LINE_CHARS for line in lines):
+        return None
     first = lines[0]
     if not re.fullmatch(r"SIP/2\.0 \d{3}( .*)?|[A-Z]{3,12} \S+ SIP/2\.0", first):
         return None
@@ -132,6 +145,8 @@ def parse(data: bytes) -> Message | None:
     for line in lines[1:]:
         if line[:1] in (" ", "\t") and headers:  # a header continued on the next line
             headers[-1] = (headers[-1][0], f"{headers[-1][1]} {line.strip()}")
+            if len(headers[-1][1]) > MAX_LINE_CHARS:
+                return None
             continue
         name, separator, value = line.partition(":")
         if not separator:
@@ -152,7 +167,7 @@ def _tag_of(header: str) -> str:
 
 def _uri_in(header: str) -> str:
     """The address in `"Name" <sip:a@b>;tag=x`."""
-    found = re.search(r"<([^>]*)>", header)
+    found = re.search(r"<([^<>]*)>", header)
     return found.group(1) if found else header.split(";", 1)[0].strip()
 
 
@@ -165,7 +180,7 @@ def _host_port(uri: str) -> tuple[str, int] | None:
 
 def digest(challenge: str, method: str, uri: str, username: str, password: str) -> str:
     """The answer to a carrier's 401 or 407: RFC 8760 digest, MD5 unless it asks for SHA-256."""
-    fields = {k.lower(): v.strip('"') for k, v in re.findall(r'(\w+)=("[^"]*"|[^,\s]+)', challenge)}
+    fields = {k.lower(): v.strip('"') for k, v in re.findall(r'(?:^|[\s,])(\w+)=("[^"]*"|[^,\s]+)', challenge)}
     realm, nonce = fields.get("realm", ""), fields.get("nonce", "")
     algorithm = fields.get("algorithm", "MD5")
     if algorithm.upper() not in ("MD5", "SHA-256"):
@@ -200,11 +215,12 @@ class Offer:
     events: int | None  # their payload type for keypad tones
 
 
-def read_sdp(body: bytes) -> Offer | None:
-    """The audio of an SDP, None when it isn't G.711 at a usable address."""
+def read_sdp(body: bytes, peer: str | None = None) -> Offer | None:
+    """The audio of an SDP from `peer`, None when it isn't plain G.711 at a usable address. These patterns run on the
+    event loop, on what the other side sends: none may backtrack over a long line."""
     text = body.decode("utf-8", "replace")
-    media = re.search(r"^m=audio (\d+) RTP/\S+ ([\d ]+)\s*$", text, re.M)
-    connection = re.findall(r"^c=IN IP4 ([0-9.]+)\s*$", text, re.M)
+    media = re.search(r"^m=audio (\d+) RTP/AVPF? ([\d ]*\d)[ \t\r]*$", text, re.M)
+    connection = re.findall(r"^c=IN IP4 ([0-9.]+)[ \t\r]*$", text, re.M)
     if not media or not connection or media.group(1) == "0":
         return None
     named = {name.upper(): int(number) for number, name in re.findall(r"^a=rtpmap:(\d+) ([\w-]+)/8000", text, re.M)}
@@ -215,6 +231,8 @@ def read_sdp(body: bytes) -> Offer | None:
         # The address the audio goes to comes from the other side: never a cloud's metadata service or a broadcast.
         if netguard.blocked_address(address) or address == "0.0.0.0" or int(address.split(".")[0]) >= 224:
             return None
+        if peer and ipaddress.ip_address(address).is_loopback and not ipaddress.ip_address(peer).is_loopback:
+            return None  # another computer has no business pointing our audio at this one's own ports
     except ValueError:
         return None
     if payload is None or not 0 < int(media.group(1)) < 65536:
@@ -388,6 +406,9 @@ class Session:
 
     async def transfer(self, number: str) -> None:
         """Has the carrier move the call to `number` (SIP REFER). The carrier then ends this side of it."""
+        number = re.sub(r"[\s().-]", "", number)
+        if not NUMBER.fullmatch(number):
+            raise SipError("a SIP transfer goes to a phone number")
         host = (self.server.gateway_of(self.credential) or {}).get("ip") or self.address[0]
         loop = asyncio.get_running_loop()
         self.refer_done = loop.create_future()
@@ -444,6 +465,8 @@ class Server(asyncio.DatagramProtocol):
         self._registering: dict[str, asyncio.Task] = {}
         self._refreshing: asyncio.Task | None = None
         self._warned: dict[str, float] = {}
+        self._known: dict[str, set[str]] = {}  # the addresses each gateway's name had when last looked up
+        self._registered_as: dict[str, dict[str, Any]] = {}  # the trunk each registration was started with
         self._rtp_next = rtp_ports[0]
 
     @property
@@ -467,9 +490,9 @@ class Server(asyncio.DatagramProtocol):
         await self.refresh()
 
     async def stop(self) -> None:
-        for session in list(self.sessions.values()):
-            if session.acked.is_set():
-                await session.hang_up()
+        goodbyes = [self.spawn(s.hang_up()) for s in list(self.sessions.values()) if s.acked.is_set()]
+        if goodbyes:  # all at once, and not for long: a carrier that doesn't answer must not hold up the shutdown
+            await asyncio.wait(goodbyes, timeout=STOP_SECONDS)
         for task in [*self._tasks, *self._registering.values(), *([self._refreshing] if self._refreshing else [])]:
             task.cancel()
         self._registering.clear()
@@ -536,15 +559,19 @@ class Server(asyncio.DatagramProtocol):
                     continue
                 try:
                     found = await loop.getaddrinfo(gateway["ip"], None, family=socket.AF_INET, type=socket.SOCK_DGRAM)
-                    allowed |= {row[4][0] for row in found}
-                except OSError as exc:
+                    self._known[gateway["ip"]] = {row[4][0] for row in found}
+                except OSError as exc:  # a hiccup in DNS: the carrier's calls keep coming from where they did
                     logger.warning("SIP: can't look up gateway {}: {}", gateway.get("ip"), exc)
+                allowed |= self._known.get(gateway["ip"], set())
         self.allowed = allowed
         for trunk_id in set(self._registering) - set(wanted):
             self._registering.pop(trunk_id).cancel()
             self.registered.pop(trunk_id, None)
         for trunk_id, trunk in wanted.items():
+            if trunk_id in self._registering and self._registered_as.get(trunk_id) != trunk:  # its login changed
+                self._registering.pop(trunk_id).cancel()
             if trunk_id not in self._registering:
+                self._registered_as[trunk_id] = trunk
                 self._registering[trunk_id] = asyncio.ensure_future(self._register_forever(trunk))
 
     def gateway_of(self, trunk: dict[str, Any] | None, *, outbound: bool = True) -> dict[str, Any] | None:
@@ -560,19 +587,24 @@ class Server(asyncio.DatagramProtocol):
         try:
             if message.is_response:
                 self._on_response(message)
-            elif addr[0] not in self.allowed:
-                self._note_stranger(addr[0], message)
-            else:
+            elif addr[0] in self.allowed or self._on_a_call_with(addr[0], message):
                 self._on_request(message, addr)
+            else:
+                self._note_stranger(addr[0], message)
         except (ValueError, IndexError, KeyError):  # a malformed message from a gateway: nothing to do with it
             logger.debug("SIP: ignored a malformed message from {}", addr[0])
+
+    def _on_a_call_with(self, address: str, message: Message) -> bool:
+        """The far side of a live call, whether or not it may send new ones: an outgoing-only gateway, or the host of a
+        `sip:` address. Its BYE, re-INVITE and NOTIFY still have to match the dialog's tags to do anything."""
+        session = self.sessions.get(message.get("call-id"))
+        return session is not None and session.address[0] == address
 
     def _note_stranger(self, address: str, message: Message) -> None:
         """Nothing goes back: scanners get no sign anyone is here. The log says why a real gateway isn't answered."""
         now = time.monotonic()
-        if now - self._warned.get(address, -3600.0) > 3600:
-            if len(self._warned) > 10_000:
-                self._warned.clear()
+        self._warned = {seen: at for seen, at in self._warned.items() if now - at < 3600}
+        if address not in self._warned and len(self._warned) < MAX_WARNED:
             self._warned[address] = now
             logger.warning("SIP: ignored {} from {}: not a gateway of a saved trunk", message.method, address)
 
@@ -637,7 +669,9 @@ class Server(asyncio.DatagramProtocol):
                 self.send(session.answer, addr)  # the other side didn't get our answer
             return
         call_id = message.get("call-id")
-        if not call_id or _tag_of(message.get("to")) or len(self.sessions) >= MAX_SESSIONS:
+        unanswered = sum(not s.outgoing and not s.acked.is_set() for s in self.sessions.values())
+        if not call_id or _tag_of(message.get("to")) or len(self.sessions) >= MAX_SESSIONS \
+                or unanswered >= MAX_UNANSWERED:
             self.send(_response(message, 503 if call_id else 400, "Busy Here", addr, to_tag=tag()), addr)
             return
         self.send(_response(message, 100, "Trying", addr), addr)
@@ -648,7 +682,7 @@ class Server(asyncio.DatagramProtocol):
         self.spawn(self._take_call(session, message, addr))
 
     def _on_reinvite(self, session: Session, message: Message, addr: tuple[str, int]) -> None:
-        offer = read_sdp(message.body)
+        offer = read_sdp(message.body, addr[0])
         rtp = session.rtp
         if offer is None or rtp is None:
             self.send(_response(message, 488, "Not Acceptable Here", addr, to_tag=session.local_tag), addr)
@@ -688,7 +722,7 @@ class Server(asyncio.DatagramProtocol):
             if session.rtp is not None:
                 session.rtp.close()
 
-        offer = read_sdp(invite.body)
+        offer = read_sdp(invite.body, addr[0])
         if offer is None:
             final(488, "Not Acceptable Here")
             return
@@ -729,7 +763,9 @@ class Server(asyncio.DatagramProtocol):
         wait = T1
         started = time.monotonic()
         while not session.acked.is_set():
-            if session.over:
+            if session.over:  # they hung up before confirming
+                if self.failed:
+                    self.failed(answer["id"], "customer-ended-call")
                 return
             if time.monotonic() - started > TRANSACTION_SECONDS:
                 logger.warning("SIP: call {} got no ACK from {}; giving it up", session.call_id, addr[0])
@@ -789,7 +825,7 @@ class Server(asyncio.DatagramProtocol):
         """The address of a call, and where its messages go: a `sip:` address itself, or the trunk's gateway."""
         if to.startswith("sip"):
             found = SIP_URI.fullmatch(to)
-            if not found:
+            if not found or not is_address(to):
                 raise SipError(f"'{to}' is not a SIP address like sip:name@host")
             return to, (found.group("host").strip("[]"), int(found.group("port") or 5060))
         gateway = self.gateway_of(trunk)
@@ -809,9 +845,12 @@ class Server(asyncio.DatagramProtocol):
         address = found[0][4][0]
         if netguard.blocked_address(address):
             raise SipError(f"{target[0]} points to {address}, an address OpenRing never calls")
-        self.spawn(self._dial(call_id, uri, caller, trunk, (address, target[1])))
+        # A challenge from anywhere else gets no digest: it could crack the trunk's password from one.
+        login = any(str(g.get("ip") or "").lower() == target[0].lower() for g in trunk.get("gateways") or [])
+        self.spawn(self._dial(call_id, uri, caller, trunk, (address, target[1]), login))
 
-    async def _dial(self, call_id: str, uri: str, caller: str, trunk: dict[str, Any], addr: tuple[str, int]) -> None:
+    async def _dial(self, call_id: str, uri: str, caller: str, trunk: dict[str, Any], addr: tuple[str, int],
+                    login: bool = True) -> None:
         rtp: Rtp | None = None
         session: Session | None = None
         reason = "sip-failed-to-connect-call"
@@ -825,7 +864,7 @@ class Server(asyncio.DatagramProtocol):
                               local_header="", remote_header=f"<{uri}>", remote_target=uri, openring_call=call_id)
             session.local_header = f"{local};tag={session.local_tag}"
             self.sessions[sip_id] = session
-            answer = await self._invite(session, uri, trunk, addr, (host, port))
+            answer = await self._invite(session, uri, trunk, addr, (host, port), login)
             if answer is None:
                 reason = "customer-did-not-answer"
             elif answer.status >= 300:
@@ -833,7 +872,7 @@ class Server(asyncio.DatagramProtocol):
                     "customer-did-not-answer" if answer.status in NO_ANSWER else reason)
                 logger.info("SIP call {} to {} failed: {}", call_id, uri, answer.first[8:])
             else:
-                offer = read_sdp(answer.body)
+                offer = read_sdp(answer.body, addr[0])
                 if offer is None:
                     await session.hang_up()
                     logger.warning("SIP call {}: the answer has no G.711 audio", call_id)
@@ -855,6 +894,8 @@ class Server(asyncio.DatagramProtocol):
             logger.warning("SIP call {} to {} failed: {}", call_id, uri, exc)
         except OSError as exc:
             logger.warning("SIP call {} to {} failed: {}", call_id, uri, exc)
+        except Exception:  # whatever it was, the call record and its line don't stay taken
+            logger.exception("SIP call {} to {} failed", call_id, uri)
         if session is not None:
             session.over = True
             self.forget(session)
@@ -864,7 +905,7 @@ class Server(asyncio.DatagramProtocol):
             self.failed(call_id, reason)
 
     async def _invite(self, session: Session, uri: str, trunk: dict[str, Any], addr: tuple[str, int],
-                      local: tuple[str, int]) -> Message | None:
+                      local: tuple[str, int], login: bool = True) -> Message | None:
         """Send the INVITE, log in if asked, wait for the answer. None when nobody answered in time."""
         plan = trunk.get("outboundAuthenticationPlan") or {}
         body = write_sdp(local[0], session.rtp.port, None)
@@ -887,7 +928,7 @@ class Server(asyncio.DatagramProtocol):
                 self._transactions.pop(branch, None)
             if answer is None:
                 return None
-            if answer.status in (401, 407) and attempt == 0 and plan.get("authUsername"):
+            if answer.status in (401, 407) and attempt == 0 and plan.get("authUsername") and login:
                 self._ack_failure(uri, branch, headers, answer, addr)
                 header = "www-authenticate" if answer.status == 401 else "proxy-authenticate"
                 authorization = ("Authorization" if answer.status == 401 else "Proxy-Authorization",
@@ -940,6 +981,8 @@ class Server(asyncio.DatagramProtocol):
                     str(gateway.get("ip") or domain), int(gateway.get("port") or 5060),
                     family=socket.AF_INET, type=socket.SOCK_DGRAM)
                 addr = found[0][4][0], found[0][4][1]
+                if netguard.blocked_address(addr[0]):
+                    raise SipError(f"{domain} points to {addr[0]}, an address OpenRing never calls")
                 host, port = self.contact_address(addr)
                 uri = f"sip:{domain}"
                 authorization: tuple[str, str] | None = None

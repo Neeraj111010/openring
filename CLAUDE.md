@@ -122,7 +122,9 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
   `model.toolIds`, marks docs with `importedFrom` so a re-import updates them; reports per-assistant problems
   (unsupported providers/tools) without refusing the import. Dashboard: **Import** on the Assistants page.
 - Knowledge bases (`openring/knowledge.py`, `/file`, `/knowledge-base`, beta): uploads keep only the text, cut into passages,
-  in the FTS5 table `file_chunks` (`Store.index_file`, `search_chunks`). The `query` tool's handler is `knowledge.answer`:
+  in the FTS5 table `file_chunks` (`Store.index_file`, `search_chunks`). PDFs are read by another process
+  (`openring/pdf_reader.py`, low priority, `PDF_SECONDS` limit): pypdf is pure Python, and a crafted file takes hours.
+  The `query` tool's handler is `knowledge.answer`:
   word search (word starts, bm25) on this server, and when nothing matches and the files are short, all of it, so the model
   reads meanings. `custom-knowledge-base` POSTs Vapi's `knowledge-base-request`; `model.knowledgeBaseId` becomes a query tool.
 - Squads (`openring/squads.py`, `/squad`, beta): `squads.cast` is everyone a call can reach (members, `assistantDestinations`,

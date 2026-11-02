@@ -110,10 +110,12 @@ def check(target: dict[str, Any], store: Store) -> None:
 
 
 def carry_over(
-    messages: list[dict[str, Any]], previous: list[dict[str, Any]], plan: dict[str, Any] | None, handoff_call: str,
+    messages: list[dict[str, Any]], previous: list[dict[str, Any]], plan: dict[str, Any] | None,
+    handoff_call: str | set[str],
 ) -> list[dict[str, Any]]:
     """The earlier conversation the next assistant gets, Vapi's `contextEngineeringPlan`. `messages` is everything
     but the system prompt; `previous` what came before the current assistant. The handoff itself isn't part of it."""
+    handoffs = {handoff_call} if isinstance(handoff_call, str) else handoff_call
     kind = (plan or {}).get("type") or "all"
     if kind == "none":
         return []
@@ -121,11 +123,11 @@ def carry_over(
         return list(previous)
     kept: list[dict[str, Any]] = []
     for message in messages:
-        if message.get("role") == "tool" and message.get("tool_call_id") == handoff_call:
+        if message.get("role") == "tool" and message.get("tool_call_id") in handoffs:
             continue
         calls = message.get("tool_calls")
-        if calls and any(c.get("id") == handoff_call for c in calls):
-            others = [c for c in calls if c.get("id") != handoff_call]
+        if calls and any(c.get("id") in handoffs for c in calls):
+            others = [c for c in calls if c.get("id") not in handoffs]
             message = {k: v for k, v in message.items() if k != "tool_calls"}
             message.update({"tool_calls": others} if others else {})
             if not others and not message.get("content"):

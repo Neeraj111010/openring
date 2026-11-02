@@ -8,10 +8,15 @@ base at your own search with `provider: "custom-knowledge-base"`, as on Vapi.
 
 from __future__ import annotations
 
+import asyncio
 import html
 import io
+import json
 import re
+import subprocess
+import sys
 import zipfile
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -22,10 +27,12 @@ from .store import Store
 MAX_FILE_BYTES = 20_000_000
 MAX_TEXT_CHARS = 2_000_000  # what's kept of one file
 MAX_PDF_PAGES = 2_000
+PDF_SECONDS = 180  # a long, real PDF on a slow computer; a crafted one of a few KB would take hours
 CHUNK_CHARS = 900  # about a paragraph or two: enough to answer from, little enough to read on every turn after
 OVERLAP_CHARS = 150  # so an answer on the edge of two passages is whole in one of them
 MAX_PASSAGES = 4
 MAX_ANSWER_CHARS = 4_000
+MAX_SERVER_BYTES = 1_000_000  # what's read of your own search's answer; the rest is never downloaded
 MAX_QUERY_WORDS = 30
 TEXT_TYPES = (".txt", ".md", ".csv", ".tsv", ".yaml", ".yml", ".json", ".xml", ".log")
 CUSTOM = "custom-knowledge-base"
@@ -49,37 +56,34 @@ def _decode(data: bytes) -> str:
 
 def _docx_text(data: bytes) -> str:
     """A .docx is a zip of XML. A regular expression instead of an XML parser: a file can't expand entities in it,
-    and reading stops at the limit, so a small file can't unpack into a huge one."""
+    and reading stops at the limit, so a small file can't unpack into a huge one. Its patterns stop at the next tag:
+    one that backtracks over the rest of the file would hold the whole server, calls included, for days."""
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as package, package.open("word/document.xml") as part:
             xml = part.read(MAX_TEXT_CHARS * 8).decode("utf-8", "replace")
     except (zipfile.BadZipFile, KeyError, OSError, RuntimeError, NotImplementedError) as exc:
         raise KnowledgeError("this .docx can't be opened") from exc
     paragraphs = re.split(r"</w:p>", xml)
-    words = ("".join(re.findall(r"<w:t(?:\s[^>]*)?>([^<]*)</w:t>", p)) for p in paragraphs)
+    words = ("".join(re.findall(r"<w:t(?:\s[^<>]*)?>([^<]*)</w:t>", p)) for p in paragraphs)
     return "\n".join(html.unescape(line) for line in words if line.strip())
 
 
 def _pdf_text(data: bytes) -> str:
-    from pypdf import PdfReader
-    from pypdf.errors import PyPdfError
-
+    """Another process reads it (`pdf_reader.py`), at low priority and with a time limit. pypdf is pure Python: in this
+    process it would take turns with every call's audio, and a crafted PDF of a few KB keeps it busy for hours."""
+    command = [sys.executable, "-m", "openring.pdf_reader", str(PDF_SECONDS), str(MAX_PDF_PAGES), str(MAX_TEXT_CHARS)]
+    flags = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
-        reader = PdfReader(io.BytesIO(data))
-        if reader.is_encrypted:
-            raise KnowledgeError("this PDF has a password: save a copy without one")
-        pages = []
-        size = 0
-        for page in reader.pages[:MAX_PDF_PAGES]:
-            pages.append(page.extract_text() or "")
-            size += len(pages[-1])
-            if size >= MAX_TEXT_CHARS:
-                break
-    except KnowledgeError:
-        raise
-    except (PyPdfError, ValueError, KeyError, TypeError, AttributeError, IndexError, RecursionError, OSError) as exc:
+        done = subprocess.run(command, input=data, capture_output=True, timeout=PDF_SECONDS, creationflags=flags,
+                              cwd=Path(__file__).resolve().parent.parent)  # this OpenRing, whatever the folder has
+        answer = json.loads(done.stdout)
+    except subprocess.TimeoutExpired as exc:
+        raise KnowledgeError(f"this PDF took too long to read (over {PDF_SECONDS} seconds)") from exc
+    except (OSError, ValueError) as exc:  # the reader died: out of memory, say
         raise KnowledgeError("this PDF can't be read") from exc
-    return "\n\n".join(pages)
+    if "error" in answer:
+        raise KnowledgeError(answer["error"])
+    return answer["text"]
 
 
 def extract_text(name: str, data: bytes) -> str:
@@ -179,20 +183,28 @@ async def ask_server(
     except netguard.UnsafeURL as exc:
         raise KnowledgeError(f"the knowledge base's address is refused ({exc})") from exc
     payload = {"message": {"type": "knowledge-base-request", "query": query, "messages": messages, "call": call}}
+    timeout = float(server.get("timeoutSeconds") or DEFAULT_TIMEOUT)
     owned = client is None
     client = client or netguard.client()
+    received = bytearray()
     try:
-        r = await client.post(url, json=payload, headers=headers,
-                              timeout=float(server.get("timeoutSeconds") or DEFAULT_TIMEOUT))
+        async with asyncio.timeout(timeout):  # the whole exchange: a server that drips out bytes doesn't get longer
+            async with client.stream("POST", url, json=payload, headers=headers, timeout=timeout) as r:
+                if r.status_code >= 400:
+                    raise KnowledgeError(f"the knowledge base answered HTTP {r.status_code}")
+                async for chunk in r.aiter_bytes():
+                    received += chunk
+                    if len(received) > MAX_SERVER_BYTES:
+                        raise KnowledgeError("the knowledge base's answer is too long")
+    except TimeoutError as exc:
+        raise KnowledgeError("could not reach the knowledge base (it took too long)") from exc
     except httpx.HTTPError as exc:  # never the URL: the model reads this, and it often carries a secret
         raise KnowledgeError(f"could not reach the knowledge base ({exc.__class__.__name__})") from exc
     finally:
         if owned:
             await client.aclose()
-    if r.status_code >= 400:
-        raise KnowledgeError(f"the knowledge base answered HTTP {r.status_code}")
     try:
-        body = r.json()
+        body = json.loads(received)
     except ValueError as exc:
         raise KnowledgeError("the knowledge base's answer is not JSON") from exc
     body = body if isinstance(body, dict) else {}
@@ -208,9 +220,7 @@ async def answer(
     call: dict[str, Any] | None,
 ) -> str:
     """What the model reads back from a `query` tool: passages from its files, and from any server of its own."""
-    import asyncio
-
-    bases = [b for b in tool.get("knowledgeBases") or [] if isinstance(b, dict)]
+    bases =[b for b in tool.get("knowledgeBases") or [] if isinstance(b, dict)]
     found: list[str] = []
     for base in (b for b in bases if b.get("provider") == CUSTOM):
         found.append(await ask_server(base, query, messages, call))
@@ -229,6 +239,11 @@ def check(base: Any, where: str = "knowledgeBases") -> None:
         server = base.get("server") if isinstance(base.get("server"), dict) else {}
         if not str(server.get("url") or "").startswith(("https://", "http://")):
             raise KnowledgeError(f"a {CUSTOM} needs server.url, starting with https:// or http://")
+        seconds = server.get("timeoutSeconds")
+        if seconds is not None and (isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or seconds <= 0):
+            raise KnowledgeError(f"a {CUSTOM}'s server.timeoutSeconds must be a number of seconds")
+        if not isinstance(server.get("headers") or {}, dict):
+            raise KnowledgeError(f"a {CUSTOM}'s server.headers must be an object")
         return
     ids = base.get("fileIds")
     if not isinstance(ids, list) or not ids or not all(isinstance(i, str) for i in ids):

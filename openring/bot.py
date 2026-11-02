@@ -17,7 +17,7 @@ from . import overrides, prices, recordings, routes, server_messages, squads
 from .config import Settings
 from .providers import StackPlan, build_services
 from .store import Store, now_iso
-from .tools import CallControls, assistant_tools, register_tools
+from .tools import HANDOFF_UNDER_WAY, CallControls, assistant_tools, register_tools
 
 # Pipecat's named parts of a user-to-bot turn, mapped to Vapi's performanceMetrics fields.
 LATENCY_PARTS = {
@@ -394,7 +394,8 @@ async def run_call(
     inherited = 0  # how much of the current assistant's context came from them
     variables: dict[str, Any] = {}  # what handoffs added to the call's variables
     handing_off: set[asyncio.Task] = set()
-    outbox = server_messages.Outbox(plan.assistant, lambda: store.get("calls", call_id))
+    passed_over: set[str] = set()  # handoffs asked for while another was under way
+    outbox =server_messages.Outbox(plan.assistant, lambda: store.get("calls", call_id))
     # The setup runs inside the try as well, so the call record ends however the call does: a caller
     # who hangs up while the services are still being built, or a provider that fails to start.
     try:
@@ -497,6 +498,9 @@ async def run_call(
         def hand_off(destination: dict[str, Any], arguments: dict[str, Any], message: str | None,
                      tool_call_id: str) -> str | None:
             """Move the call to another assistant, once this one has finished talking. Says why it can't, or None."""
+            if handing_off:  # two in one answer, or another while the caller waits: the first one counts
+                passed_over.add(tool_call_id)
+                return HANDOFF_UNDER_WAY
             position = squads.find(team, destination)
             if position is None:
                 return "That assistant is not on this call."
@@ -519,14 +523,18 @@ async def run_call(
                 await wait_until_quiet(expect_speech=bool(message))
                 for layer in (stt, llm, tts):
                     if isinstance(layer, ServiceSwitcher) and hasattr(layer.strategy, "enter"):
+                        left = layer.strategy.active_service
                         await layer.strategy.enter(position)
-                given = (destination.get("assistantOverrides") or {}).get("variableValues")
+                        # If the caller spoke during the wait, its answer would go on in the next assistant's voice.
+                        if layer is llm and watch is not None and layer.strategy.active_service is not left:
+                            await watch.replaced(left)
+                given =(destination.get("assistantOverrides") or {}).get("variableValues")
                 variables.update(arguments, **(given if isinstance(given, dict) else {}))
                 values = {**overrides.call_context(store.get("calls", call_id)), **variables}
                 everything = conversation()
                 kept = squads.carry_over(
                     [m for m in context.get_messages() if isinstance(m, dict) and m.get("role") != "system"],
-                    said_before, destination.get("contextEngineeringPlan"), tool_call_id,
+                    said_before, destination.get("contextEngineeringPlan"), {tool_call_id, *passed_over},
                 )
                 prompt = [{**m, "content": overrides.fill(m["content"], values)} for m in target.messages]
                 # The new assistant gets its own prompt, tools and voice, and the part of the conversation it should.
