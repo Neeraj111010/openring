@@ -662,8 +662,8 @@ async def run_call(
                 try:
                     await recording.stop_recording()
                     await asyncio.wait_for(recording_over.wait(), 2)
-                except Exception as exc:
-                    logger.warning("call {}: the end of the recording may be missing: {}", call_id, exc)
+                except (Exception, asyncio.CancelledError) as exc:  # the call's record below has to be saved anyway
+                    logger.warning("call {}: the end of the recording may be missing: {!r}", call_id, exc)
             recorded = recorder.close()
         recording_urls = {key: recordings.url_for(call_id) for key in ("recordingUrl", "stereoRecordingUrl")}
         spoke, connected = first_word["spoke"], first_word["connected"]

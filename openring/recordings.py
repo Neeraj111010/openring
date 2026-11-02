@@ -17,6 +17,11 @@ from loguru import logger
 SAMPLE_WIDTH = 2  # bytes: 16-bit audio, what Pipecat's recorder hands over
 # How much of the call waits in memory before it goes to the file: about 10 s of a phone call.
 BUFFER_BYTES = 160_000
+_writing: set[str] = set()  # the calls whose file is still open here
+
+
+def is_being_written(call_id: str) -> bool:
+    return call_id in _writing
 
 
 def directory() -> Path:
@@ -41,7 +46,7 @@ class Recorder:
     (the WAV header is right after every write). A full disk loses the recording, never the call."""
 
     def __init__(self, call_id: str):
-        self.path = path_for(call_id)
+        self.path, self.call_id = path_for(call_id), call_id
         self._file: BinaryIO | None = None
         self._wav: wave.Wave_write | None = None
         self._done = False  # a full disk, or the call is over: nothing more is written (nor the file started again)
@@ -53,8 +58,10 @@ class Recorder:
         try:
             if self._wav is None:
                 self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                self._file = open(self.path, "wb")
-                os.chmod(self.path, 0o600)  # conversations: for the server's own user only
+                # Conversations: for the server's own user only, from the moment the file exists.
+                flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0)
+                self._file = os.fdopen(os.open(self.path, flags, 0o600), "wb")
+                _writing.add(self.call_id)
                 self._wav = wave.open(self._file, "wb")
                 self._wav.setnchannels(channels)
                 self._wav.setsampwidth(SAMPLE_WIDTH)
@@ -69,12 +76,12 @@ class Recorder:
     def close(self) -> bool:
         """Finish the file. Returns whether the call has a recording."""
         self._done = True
-        try:
-            if self._wav is not None:
-                self._wav.close()
-            if self._file is not None:
-                self._file.close()
-        except (OSError, wave.Error) as exc:
-            logger.error("recording of {} not finished: {}", self.path.name, exc)
+        _writing.discard(self.call_id)
+        for part in (self._wav, self._file):  # one failing still lets go of the other: an open file can't be deleted
+            try:
+                if part is not None:
+                    part.close()
+            except (OSError, wave.Error) as exc:
+                logger.error("recording of {} not finished: {}", self.path.name, exc)
         self._wav = self._file = None
         return self.recorded

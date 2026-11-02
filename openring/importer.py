@@ -74,6 +74,8 @@ def _assistant_problems(assistant: dict[str, Any]) -> list[str]:
         resolve_plan(assistant, check_keys=False)
     except ProviderError as exc:
         problems.append(str(exc))
+    if (assistant.get("artifactPlan") or {}).get("recordingEnabled") is True:
+        problems.append("it records its calls on this server: make sure callers are told, or turn it off")
     for tool in (assistant.get("model") or {}).get("tools") or []:
         try:
             check_tool(tool)

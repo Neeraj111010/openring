@@ -543,11 +543,18 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     def list_calls(limit: int = 100) -> list[dict[str, Any]]:
         return store.list("calls", limit)
 
-    @app.get("/call/{call_id}/recording", dependencies=auth_deps)
-    def call_recording(call_id: str) -> Response:
-        path = recordings.path_for(_get_or_404("calls", call_id)["id"])
+    def _finished_recording(call_id: str) -> tuple[dict[str, Any], Path]:
+        call = _get_or_404("calls", call_id)
+        if recordings.is_being_written(call["id"]):
+            raise HTTPException(status_code=409, detail="the call is still going on, so its recording isn't finished")
+        path = recordings.path_for(call["id"])
         if not path.is_file():
             raise HTTPException(status_code=404, detail="this call has no recording")
+        return call, path
+
+    @app.get("/call/{call_id}/recording", dependencies=auth_deps)
+    def call_recording(call_id: str) -> Response:
+        _, path = _finished_recording(call_id)
         # A conversation: no copies in caches along the way, and browsers play it as audio, nothing else.
         headers = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
         return FileResponse(path, media_type="audio/wav", headers=headers)
@@ -555,12 +562,14 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     @app.delete("/call/{call_id}/recording", dependencies=auth_deps)
     def delete_call_recording(call_id: str) -> dict[str, Any]:
         """Delete the audio for good (someone asked, or the disk is filling up). The transcript stays."""
-        call = _get_or_404("calls", call_id)
-        path = recordings.path_for(call["id"])
-        if not path.is_file():
-            raise HTTPException(status_code=404, detail="this call has no recording")
-        path.unlink()
-        return store.update("calls", call["id"], {"artifact": {"recordingUrl": None, "stereoRecordingUrl": None}})
+        call, path = _finished_recording(call_id)
+        try:
+            path.unlink()
+        except OSError as exc:  # Windows refuses while someone is downloading it
+            raise HTTPException(status_code=409, detail="the recording is in use; try again in a moment") from exc
+        # A store update replaces the field: the transcript and the latency stay in the artifact.
+        artifact = {**(call.get("artifact") or {}), "recordingUrl": None, "stereoRecordingUrl": None}
+        return store.update("calls", call["id"], {"artifact": artifact})
 
     @app.get("/call/{call_id}", dependencies=auth_deps)
     def get_call(call_id: str) -> dict[str, Any]:

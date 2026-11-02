@@ -210,7 +210,8 @@ no editor do assistente.
 ### Gravar ligações
 
 Com `"artifactPlan": {"recordingEnabled": true}`, ou **Record calls** no editor do assistente, cada ligação vira um
-arquivo WAV no seu servidor, com quem ligou à esquerda e o assistente à direita, cerca de 2 MB por minuto. Fica numa
+arquivo WAV no seu servidor, com quem ligou à esquerda e o assistente à direita, cerca de 2 MB por minuto no
+telefone e 6 MB no navegador. Fica numa
 pasta `recordings` ao lado do banco. A página da ligação toca o áudio; `GET /call/{id}/recording` pede a chave da
 API, e `DELETE /call/{id}/recording` apaga de vez. Nada apaga gravações antigas sozinho por enquanto: fique de olho
 no disco.

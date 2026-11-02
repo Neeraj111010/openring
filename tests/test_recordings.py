@@ -1,5 +1,6 @@
 """Call recordings: off unless asked for, written as the call goes, behind the API key, and deletable."""
 
+import asyncio
 import base64
 import json
 import os
@@ -138,3 +139,54 @@ def test_an_unknown_call_has_no_recording_and_the_id_stays_a_call_id(monkeypatch
         assert client.get(f"/call/{bad}/recording", headers=AUTH).status_code == 404
         assert client.delete(f"/call/{bad}/recording", headers=AUTH).status_code == 404
     assert (folder.parent / "secret.wav").exists()
+
+
+def test_deleting_a_recording_keeps_the_transcript_and_the_latency(monkeypatch, quiet_providers, folder):
+    client, call = _call_with_audio(monkeypatch, True)
+    assert client.delete(f"/call/{call['id']}/recording", headers=AUTH).status_code == 200
+    artifact = client.get(f"/call/{call['id']}", headers=AUTH).json()["artifact"]
+    assert artifact["messages"] == call["artifact"]["messages"]
+    assert artifact["performanceMetrics"] == call["artifact"]["performanceMetrics"]
+    assert artifact["recordingUrl"] is None and artifact["stereoRecordingUrl"] is None
+
+
+def test_a_recording_still_being_written_cannot_be_fetched_or_deleted(monkeypatch, quiet_providers, folder):
+    client, call = _call_with_audio(monkeypatch, True)
+    url = f"/call/{call['id']}/recording"
+    live = recordings.Recorder(call["id"])
+    live.write(b"\x01\x00\x02\x00", 8000, 2)
+    assert client.get(url, headers=AUTH).status_code == 409
+    assert client.delete(url, headers=AUTH).status_code == 409
+    assert (folder / f"{call['id']}.wav").exists()
+    live.close()
+    assert client.get(url, headers=AUTH).status_code == 200
+    assert client.delete(url, headers=AUTH).status_code == 200
+
+
+def test_a_recording_in_use_is_not_a_server_error(monkeypatch, quiet_providers, folder):
+    from pathlib import Path
+
+    client, call = _call_with_audio(monkeypatch, True)
+
+    def in_use(_path):
+        raise PermissionError("the file is open")
+
+    monkeypatch.setattr(Path, "unlink", in_use)
+    assert client.delete(f"/call/{call['id']}/recording", headers=AUTH).status_code == 409
+    assert client.get(f"/call/{call['id']}", headers=AUTH).json()["artifact"]["recordingUrl"]  # nothing was deleted
+
+
+def test_a_cancel_while_the_recording_finishes_still_ends_the_call(monkeypatch, quiet_providers, folder):
+    """A server shutting down can cancel the call's task right there: the call must not stay "in-progress" forever."""
+    from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
+
+    real = AudioBufferProcessor.stop_recording
+
+    async def cancelled_when_run_call_asks(self):
+        await real(self)
+        if sys._getframe(1).f_code.co_name == "run_call":
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(AudioBufferProcessor, "stop_recording", cancelled_when_run_call_asks)
+    _client, call = _call_with_audio(monkeypatch, True)
+    assert call["status"] == "ended" and call["endedReason"] == "customer-ended-call"

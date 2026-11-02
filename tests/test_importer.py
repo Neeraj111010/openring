@@ -148,3 +148,10 @@ def test_an_imported_api_request_tool_says_its_credential_stayed_behind():
     report = run(store, {"tool": [tool], "assistant": [], "phone-number": []})
     assert "credential" in report["tools"][0]["problems"][0]
     assert "credentialId" not in store.list("tools")[0]  # never copied
+
+
+def test_an_imported_assistant_that_records_says_so():
+    store = Store(":memory:")
+    recording = {**ASSISTANT, "artifactPlan": {"recordingEnabled": True}}
+    report = run(store, {"tool": [], "assistant": [recording], "phone-number": []})
+    assert any("records its calls" in p for p in report["assistants"][0]["problems"])

@@ -174,11 +174,13 @@ quiet after the assistant spoke,
 ### Recording calls
 
 With `"artifactPlan": {"recordingEnabled": true}`, or **Record calls** in the assistant editor, each call is saved
-as a WAV file on your server, the caller on the left and the assistant on the right, about 2 MB per minute. It's in
+as a WAV file on your server, the caller on the left and the assistant on the right, about 2 MB per minute on the
+phone and 6 MB in the browser. It's in
 a `recordings` folder next to the database (`OPENRING_RECORDINGS_DIR` moves it). The call page plays it, and
 `artifact.recordingUrl` is in the call and in the `end-of-call-report`. Fetching it needs your API key
-(`GET /call/{id}/recording`), and `DELETE /call/{id}/recording` deletes it for good. Nothing deletes old recordings
-by itself yet, so keep an eye on the disk.
+(`GET /call/{id}/recording`), and `DELETE /call/{id}/recording` deletes it for good; both answer 409 while the call
+is still going on. Nothing deletes old recordings by itself yet, so keep an eye on the disk. While the assistant
+talks, its track can have gaps of a few hundredths of a second every so often; the call itself doesn't.
 
 It's **off by default**, unlike on Vapi, where it's on. Many places require telling people they are being recorded,
 and some require their consent, so say it in the greeting and check the rules where you and your callers are.
