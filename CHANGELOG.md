@@ -11,7 +11,8 @@ All notable changes to OpenRing are listed here. The format follows
 - Call recording, in Vapi's `artifactPlan.recordingEnabled`: a stereo WAV per call on your server, played on the
   call's page, with `artifact.recordingUrl` on the call and in the `end-of-call-report`.
   `GET /call/{id}/recording` needs the API key or a dashboard session, and `DELETE` removes the file. It's off by
-  default, unlike on Vapi: many places require telling people they are being recorded.
+  default, unlike on Vapi: many places require telling people they are being recorded. Recordings are deleted after
+  365 days; change it under **Settings > Recordings** or with `PATCH /settings/recordings` (0 keeps them for good).
 
 - Call limits, in Vapi's fields: a call ends by itself after `maxDurationSeconds` or after `silenceTimeoutSeconds`
   without activity (the clock waits while someone talks, the model thinks or a tool runs), with Vapi's `endedReason`

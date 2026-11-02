@@ -1605,10 +1605,18 @@ async function finishOAuth() {
 async function viewSettings() {
   setPage("settings");
   const info = await api("/dashboard/info");
-  const tab = store.get("openring-settings-tab") === "security" ? "security" : "api";
+  const savedTab = store.get("openring-settings-tab");
+  const tab = ["security", "recordings"].includes(savedTab) ? savedTab : "api";
+  const rec = tab === "recordings" ? await api("/settings/recordings") : null;
   const v = $("#view");
-  v.innerHTML = `<div class="toolbar">${tabs([["api", "API access"], ["security", "Password"]], tab, "st")}</div>
-  ${tab === "api" ? `<div class="grid2 even">
+  v.innerHTML = `<div class="toolbar">${tabs([["api", "API access"], ["recordings", "Recordings"], ["security", "Password"]], tab, "st")}</div>
+  ${tab === "recordings" ? `<section class="panel" style="max-width:520px"><header><h2>Recordings</h2></header><div class="body"><form id="recForm">
+      <div class="field"><label for="recDays">Delete recordings after</label><p class="hint">Days. Applies to every recording on this server; 0 keeps them for good. Recording itself is turned on per assistant.</p><input id="recDays" type="number" min="0" max="36500" step="1" required value="${esc(rec.retentionDays)}" style="max-width:120px"></div>
+      <div class="error" id="err" role="alert"></div>
+      <p class="muted" id="recSaved" role="status" style="font-size:13px"></p>
+      <div class="field"><label>On this server</label><p class="muted" style="margin:0">${num(rec.files)} recording${rec.files === 1 ? "" : "s"}, ${(rec.bytes / 1048576).toFixed(1)} MB</p><p class="muted" style="margin:4px 0 0;font-size:13px;overflow-wrap:anywhere"><code>${esc(rec.folder)}</code></p></div>
+      <div class="row-actions"><span class="spacer"></span><button class="btn">Save</button></div></form></div></section>`
+  : tab === "api" ? `<div class="grid2 even">
     <section class="panel"><header><h2>API</h2></header><div class="body">
       <div class="field"><label>Base URL</label><p class="hint">Point a Vapi-compatible client here instead of the hosted API.</p><div class="copyline"><code>${esc(info.baseUrl)}</code><button class="btn ghost small" data-copy="${esc(info.baseUrl)}">${ICON.copy}Copy</button></div></div>
       <div class="field"><label>API key</label><p class="hint">Send it as <code>Authorization: Bearer …</code>. Set in <code>OPENRING_API_KEY</code>.</p><div class="copyline"><code id="key">${"•".repeat(24)}</code><button class="btn ghost small" id="reveal">Show</button><button class="btn ghost small" data-copy="${esc(info.apiKey)}">${ICON.copy}Copy</button></div></div>
@@ -1630,6 +1638,17 @@ async function viewSettings() {
   v.querySelectorAll("[data-st]").forEach(b => b.onclick = () => { store.set("openring-settings-tab", b.dataset.st); viewSettings(); });
   copyButtons(v);
   if ($("#reveal")) $("#reveal").onclick = e => { const k = $("#key"), shown = k.textContent === info.apiKey; k.textContent = shown ? "•".repeat(24) : info.apiKey; e.target.textContent = shown ? "Show" : "Hide"; };
+  if ($("#recForm")) $("#recForm").onsubmit = async e => {
+    e.preventDefault();
+    const days = Number($("#recDays").value);
+    const shorter = days > 0 && (rec.retentionDays === 0 || days < rec.retentionDays);
+    if (shorter && !confirm(`Recordings older than ${days} days will be deleted for good within the next few hours. Continue?`)) return;
+    try {
+      rec.retentionDays = (await api("/settings/recordings", { method: "PATCH", body: JSON.stringify({ retentionDays: days }) })).retentionDays;
+      $("#err").textContent = "";
+      $("#recSaved").textContent = "Saved.";
+    } catch (err) { $("#err").textContent = err.message; $("#recSaved").textContent = ""; }
+  };
   if ($("#pwForm")) $("#pwForm").onsubmit = async e => {
     e.preventDefault();
     if ($("#np").value !== $("#np2").value) return $("#err").textContent = "The new passwords don't match.";

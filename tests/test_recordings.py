@@ -14,7 +14,7 @@ import pytest
 from openring import recordings
 from openring.providers import ProviderError, resolve_plan
 
-from test_api import ASSISTANT, AUTH
+from test_api import ASSISTANT, AUTH, make_client
 from test_call_flow import _answered_call, _handshake, _pipeline_started, _wait_until_ended
 
 
@@ -190,3 +190,84 @@ def test_a_cancel_while_the_recording_finishes_still_ends_the_call(monkeypatch, 
     monkeypatch.setattr(AudioBufferProcessor, "stop_recording", cancelled_when_run_call_asks)
     _client, call = _call_with_audio(monkeypatch, True)
     assert call["status"] == "ended" and call["endedReason"] == "customer-ended-call"
+
+
+def _recording(folder, call_id, days_old):
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{call_id}.wav"
+    path.write_bytes(b"RIFF")
+    then = time.time() - days_old * 86_400
+    os.utime(path, (then, then))
+    return path
+
+
+def _client_with_call(days_old, folder):
+    client = make_client()
+    store = client.app.state.store
+    call = store.create("calls", {"type": "webCall", "status": "ended", "messages": [{"role": "user", "message": "hi"}],
+                                  "artifact": {"messages": [], "recordingUrl": "/x", "stereoRecordingUrl": "/x"}})
+    return client, store, call, _recording(folder, call["id"], days_old)
+
+
+def test_recordings_are_kept_365_days_unless_changed(folder):
+    client, store, call, path = _client_with_call(364, folder)
+    settings = client.get("/settings/recordings", headers=AUTH).json()
+    assert settings["retentionDays"] == 365 and settings["files"] == 1 and settings["bytes"] == 4
+    with client:  # the app starts, and cleans once
+        time.sleep(0.2)
+    assert path.exists()
+
+    client, store, call, path = _client_with_call(366, folder)
+    with client:
+        for _ in range(50):
+            if not path.exists():
+                break
+            time.sleep(0.05)
+    assert not path.exists()
+    # The call stays, with its transcript; only the audio is gone.
+    left = store.get("calls", call["id"])
+    assert left["artifact"]["recordingUrl"] is None and left["messages"] == call["messages"]
+
+
+def test_the_owner_chooses_how_long_and_zero_keeps_them(folder):
+    client, _, _, path = _client_with_call(5000, folder)
+    r = client.patch("/settings/recordings", json={"retentionDays": 0}, headers=AUTH)
+    assert r.status_code == 200 and r.json()["retentionDays"] == 0
+    with client:
+        time.sleep(0.2)
+    assert path.exists()  # kept for good
+    assert client.patch("/settings/recordings", json={"retentionDays": 30}, headers=AUTH).json()["retentionDays"] == 30
+
+
+@pytest.mark.parametrize("days", [-1, 1.5, "30", None, True, 36_501])
+def test_a_retention_that_makes_no_sense_is_refused(folder, days):
+    client = make_client()
+    r = client.patch("/settings/recordings", json={"retentionDays": days}, headers=AUTH)
+    assert r.status_code == 400 and "retentionDays" in r.json()["detail"]
+    assert client.get("/settings/recordings", headers=AUTH).json()["retentionDays"] == 365
+
+
+def test_only_the_key_can_see_or_change_retention(folder):
+    client = make_client()
+    assert client.get("/settings/recordings").status_code == 401
+    assert client.patch("/settings/recordings", json={"retentionDays": 1}).status_code == 401
+
+
+def test_cleaning_leaves_other_files_and_live_calls_alone(folder):
+    someone_elses = _recording(folder, "family-holiday", 5000)
+    (folder / "notes.txt").write_text("not audio")
+    client, store, call, path = _client_with_call(5000, folder)
+    recordings._writing.add(call["id"])  # its call is still going on
+    try:
+        with client:
+            time.sleep(0.2)
+        assert path.exists()
+    finally:
+        recordings._writing.discard(call["id"])
+    assert someone_elses.exists() and (folder / "notes.txt").exists()
+
+
+def test_a_broken_setting_falls_back_to_the_default(folder):
+    client = make_client()
+    client.app.state.store.set_setting(recordings.RETENTION_KEY, "soon")
+    assert client.get("/settings/recordings", headers=AUTH).json()["retentionDays"] == 365

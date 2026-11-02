@@ -98,6 +98,8 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
 - Recordings (`openring/recordings.py`, `artifactPlan.recordingEnabled`, off by default): Pipecat's
   `AudioBufferProcessor` after `transport.output()`, written to `<db dir>/recordings/<call id>.wav` as it comes;
   `GET`/`DELETE /call/{id}/recording` are behind the API key or a session. A disk error loses the recording, not the call.
+  Retention: `/settings/recordings` (365 days by default, 0 keeps them, in the settings table); a task from the app
+  lifespan cleans every 6 hours, only files named after a known call.
 - `openring/overrides.py`: Vapi's `assistantOverrides` (deep merge) and `{{variables}}` (`customer.*`,
   `variableValues`) in `firstMessage` and `model.messages`, applied per call in `media_stream`.
 - `openring/tools.py` Vapi tools: `function` (POSTs Vapi's `tool-calls` message to `tool.server.url` or the

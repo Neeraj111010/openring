@@ -179,8 +179,8 @@ phone and 6 MB in the browser. It's in
 a `recordings` folder next to the database (`OPENRING_RECORDINGS_DIR` moves it). The call page plays it, and
 `artifact.recordingUrl` is in the call and in the `end-of-call-report`. Fetching it needs your API key
 (`GET /call/{id}/recording`), and `DELETE /call/{id}/recording` deletes it for good; both answer 409 while the call
-is still going on. Nothing deletes old recordings by itself yet, so keep an eye on the disk. While the assistant
-talks, its track can have gaps of a few hundredths of a second every so often; the call itself doesn't.
+is still going on. Recordings are deleted for good after 365 days: change it under **Settings > Recordings**, or
+with `PATCH /settings/recordings {"retentionDays": 90}` (0 keeps them forever). While the assistant talks, its track can have gaps of a few hundredths of a second every so often; the call itself doesn't.
 
 It's **off by default**, unlike on Vapi, where it's on. Many places require telling people they are being recorded,
 and some require their consent, so say it in the greeting and check the rules where you and your callers are.

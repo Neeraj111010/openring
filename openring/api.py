@@ -98,7 +98,9 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         dialer.resume()
         for assistant in store.list("assistants", limit=10_000):  # their local models load in the background
             providers.prepare_local(assistant)
+        cleaning = asyncio.create_task(clean_recordings_forever())
         yield
+        cleaning.cancel()
         await dialer.close()
 
     app = FastAPI(title="OpenRing", version=__version__, lifespan=lifespan)
@@ -564,12 +566,54 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         """Delete the audio for good (someone asked, or the disk is filling up). The transcript stays."""
         call, path = _finished_recording(call_id)
         try:
-            path.unlink()
+            return _forget_recording(call, path)
         except OSError as exc:  # Windows refuses while someone is downloading it
             raise HTTPException(status_code=409, detail="the recording is in use; try again in a moment") from exc
+
+    def _forget_recording(call: dict[str, Any], path: Path) -> dict[str, Any]:
+        path.unlink()
         # A store update replaces the field: the transcript and the latency stay in the artifact.
         artifact = {**(call.get("artifact") or {}), "recordingUrl": None, "stereoRecordingUrl": None}
         return store.update("calls", call["id"], {"artifact": artifact})
+
+    def clean_recordings() -> int:
+        """Delete the recordings past the retention period. Returns how many went."""
+        days = recordings.retention_days(store)
+        deleted = 0
+        for call_id in recordings.old_recordings(days, lambda c: store.get("calls", c) is not None):
+            try:
+                _forget_recording(store.get("calls", call_id), recordings.path_for(call_id))
+                deleted += 1
+            except OSError as exc:  # in use right now: the next round gets it
+                logger.warning("recording of call {} not deleted yet: {}", call_id, exc)
+        if deleted:
+            logger.info("deleted {} recordings older than {} days", deleted, days)
+        return deleted
+
+    async def clean_recordings_forever() -> None:
+        while True:
+            try:
+                await asyncio.to_thread(clean_recordings)
+            except Exception:
+                logger.exception("cleaning old recordings failed; trying again later")
+            await asyncio.sleep(recordings.CLEANUP_SECONDS)
+
+    def _recordings_settings() -> dict[str, Any]:
+        return {"retentionDays": recordings.retention_days(store), **recordings.usage()}
+
+    @app.get("/settings/recordings", dependencies=auth_deps)
+    def recordings_settings() -> dict[str, Any]:
+        return _recordings_settings()
+
+    @app.patch("/settings/recordings", dependencies=auth_deps)
+    def update_recordings_settings(body: dict[str, Any]) -> dict[str, Any]:
+        """How many days recordings are kept; 0 keeps them for good. Old ones go in the next cleaning, within hours."""
+        days = body.get("retentionDays")
+        if isinstance(days, bool) or not isinstance(days, int) or not 0 <= days <= recordings.MAX_RETENTION_DAYS:
+            raise HTTPException(status_code=400, detail=f"retentionDays is a whole number from 0 (keep them for good) "
+                                                        f"to {recordings.MAX_RETENTION_DAYS}")
+        store.set_setting(recordings.RETENTION_KEY, str(days))
+        return _recordings_settings()
 
     @app.get("/call/{call_id}", dependencies=auth_deps)
     def get_call(call_id: str) -> dict[str, Any]:

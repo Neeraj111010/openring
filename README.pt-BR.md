@@ -213,8 +213,8 @@ Com `"artifactPlan": {"recordingEnabled": true}`, ou **Record calls** no editor 
 arquivo WAV no seu servidor, com quem ligou à esquerda e o assistente à direita, cerca de 2 MB por minuto no
 telefone e 6 MB no navegador. Fica numa
 pasta `recordings` ao lado do banco. A página da ligação toca o áudio; `GET /call/{id}/recording` pede a chave da
-API, e `DELETE /call/{id}/recording` apaga de vez. Nada apaga gravações antigas sozinho por enquanto: fique de olho
-no disco.
+API, e `DELETE /call/{id}/recording` apaga de vez. Gravações são apagadas depois de 365 dias: mude em **Settings >
+Recordings** ou com `PATCH /settings/recordings {"retentionDays": 90}` (0 guarda para sempre).
 
 Vem **desligada**, ao contrário do Vapi. A LGPD e leis de outros países podem exigir avisar a pessoa ou pedir o
 consentimento dela: diga isso na saudação e confira as regras de onde você e quem liga estão.
