@@ -171,6 +171,22 @@ quiet after the assistant spoke,
  "messagePlan": {"idleMessages": ["Are you still there?"], "idleTimeoutSeconds": 8}}
 ```
 
+### Names the transcriber should get right
+
+Give it the words it will hear: names, brands, products. Use Vapi's fields, or **Words to recognize** in the assistant
+editor:
+
+```json
+{"transcriber": {"provider": "deepgram", "model": "nova-3", "language": "pt-BR",
+                 "keyterm": ["Clínica Sorriso", "Doutora Ana"]}}
+```
+
+`keyterm`, `keytermsPrompt` and `keywords` (one word, with an optional boost: `Sorriso:2`) are all accepted, up to 100
+words of up to 50 characters, and go to the field each transcriber takes: Deepgram's nova-3 takes `keyterm` and refuses
+`keywords`, and older models the reverse, so OpenRing sends the right one. Phrases don't fit Deepgram's older models.
+Works on Deepgram, AssemblyAI, ElevenLabs, Cartesia's `ink-2` and Whisper; Gladia and Soniox ignore them, with a warning
+in the log.
+
 ### Recording calls
 
 With `"artifactPlan": {"recordingEnabled": true}`, or **Record calls** in the assistant editor, each call is saved

@@ -153,8 +153,9 @@ def _import_pipecat_whisper() -> Any:
     return whisper_stt
 
 
-def stt_service(name: str, language: Any) -> Any:
-    """A Pipecat speech-to-text service on the shared model. `language` None lets Whisper detect it."""
+def stt_service(name: str, language: Any, hotwords: str | None = None) -> Any:
+    """A Pipecat speech-to-text service on the shared model. `language` None lets Whisper detect it;
+    `hotwords` are words to listen for, separated by spaces."""
     if not _service:
         from pipecat.audio.utils import create_file_resampler
 
@@ -179,4 +180,4 @@ def stt_service(name: str, language: Any) -> Any:
 
         _service.append(LocalWhisper)
     service = _service[0]
-    return service(settings=service.Settings(model=model_id(name), language=language))
+    return service(settings=service.Settings(model=model_id(name), language=language, hotwords=hotwords))

@@ -47,6 +47,9 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
   refuse with a progress message until it is loaded; Pipecat's `WhisperModel` is patched to the shared,
   greedy-decoding instance; `LocalWhisper` upsamples phone audio to 16 kHz (Pipecat doesn't). CUDA when
   available, else CPU int8. `GET /providers/ollama/models` lists Ollama's pulled models.
+- Words to recognize (`providers.stt_words`): Vapi's `transcriber.keyterm`, `keytermsPrompt`, `keywords` go to the field
+  each transcriber and model take (`StackPlan.stt_words`). Real Deepgram answers HTTP 400 to nova-3 with `keywords` and
+  to nova-2 with `keyterm`, so they are never sent that way; a transcriber that can't use them gets a plan warning.
 - `"language": "multi"` appends `FOLLOW_LANGUAGE` (answer in the caller's language) to the system messages;
   a voice outside `MULTILINGUAL_VOICES` (11labs, openai) adds a plan warning.
 - Fallbacks (`openring/fallback.py`): Vapi's `transcriber.fallbackPlan.transcribers`, `model.fallbackModels`

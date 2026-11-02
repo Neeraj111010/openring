@@ -100,6 +100,13 @@ def test_whisper_loads_on_apple_silicon_without_mlx(loaded, monkeypatch):
     assert "mlx_whisper" not in sys.modules  # the stand-in is gone, so the MLX service still fails clearly
 
 
+def test_words_to_recognize_reach_whisper_as_hotwords(loaded):
+    plan = resolve_plan({**BUILD, "transcriber": {**BUILD["transcriber"], "keyterm": ["Clínica Sorriso"],
+                                                  "keywords": ["Ana:2"]}}, check_keys=False)
+    stt, _, _ = build_services(plan)
+    assert stt._settings.hotwords == "Clínica Sorriso Ana"
+
+
 def test_phone_audio_reaches_whisper_at_16_khz(loaded):
     stt, _, _ = build_services(resolve_plan(BUILD, check_keys=False))
     stt._sample_rate = 8000  # a phone call

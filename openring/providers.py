@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -260,6 +261,14 @@ def default_model() -> dict[str, Any]:
     }
 
 
+# Words to recognize. Each transcriber has its limits; these fit all of them (AssemblyAI's are the tightest).
+KEYWORD = re.compile(r"[^\W_]+(:-?\d+)?")  # one word, and how much to boost it, as Deepgram's `keywords` takes it
+MAX_WORDS = 100
+MAX_WORD_CHARS = 50
+OLD_DEEPGRAM = ("nova-2", "nova-1", "enhanced", "base")  # take `keywords`, refuse `keyterm`; nova-3 the reverse
+CARTESIA_WORD_MODELS = ("ink-2", "ink-preview")
+
+
 @dataclass
 class StackPlan:
     stt_provider: str
@@ -303,6 +312,8 @@ class StackPlan:
     leave_message: bool = False
     # Vapi's artifactPlan.recordingEnabled, off unless asked for (see recordings.py).
     record: bool = False
+    # Settings for the words the transcriber should listen for (`stt_words`).
+    stt_words: dict[str, Any] = field(default_factory=dict)
 
 
 def _require_key(env_name: str | None, what: str) -> None:
@@ -402,6 +413,63 @@ def fallback_layers(assistant: dict[str, Any]) -> dict[str, list[dict[str, Any]]
     return {"transcriber": listed(transcriber, "transcribers"), "model": models, "voice": listed(voice, "voices")}
 
 
+def _word_list(transcriber: dict[str, Any], name: str) -> list[str]:
+    words = transcriber.get(name)
+    if words is None:
+        return []
+    if not isinstance(words, list) or not all(isinstance(word, str) for word in words):
+        raise ProviderError(f"transcriber.{name} must be a list of words")
+    words = [word.strip() for word in words if word.strip()]
+    for word in words:
+        if len(word) > MAX_WORD_CHARS or not word.isprintable():
+            raise ProviderError(f"transcriber.{name}: each one has at most {MAX_WORD_CHARS} characters, on one line")
+    return words
+
+
+def stt_words(transcriber: dict[str, Any], provider: str, model: str | None) -> tuple[dict[str, Any], list[str]]:
+    """The settings for Vapi's `keyterm`, `keytermsPrompt` and `keywords` on this transcriber, and what it can't use.
+
+    Deepgram refuses the connection when a model gets the other field, which would end the call, so whichever
+    field the assistant used goes to the one its model takes."""
+    terms = _word_list(transcriber, "keyterm") + _word_list(transcriber, "keytermsPrompt")
+    keywords = _word_list(transcriber, "keywords")
+    for word in keywords:
+        if not KEYWORD.fullmatch(word):
+            raise ProviderError(f"transcriber.keywords: '{word}' must be one word, or a word and a whole number "
+                                "like word:3; use transcriber.keyterm for phrases")
+    if len(set(terms + keywords)) > MAX_WORDS:
+        raise ProviderError(f"transcriber: at most {MAX_WORDS} words to recognize")
+    if not terms and not keywords:
+        return {}, []
+
+    settings: dict[str, Any] = {}
+    warnings: list[str] = []
+    if provider == "deepgram" and (model == "nova" or (model or "").startswith(OLD_DEEPGRAM)):
+        phrases = [term for term in terms if not KEYWORD.fullmatch(term)]
+        if phrases:
+            warnings.append(f"deepgram {model} recognizes single words only; ignoring {', '.join(phrases)}")
+        settings["keywords"] = list(dict.fromkeys(keywords + [term for term in terms if term not in phrases]))
+    else:
+        plain = list(dict.fromkeys(terms + [word.split(":")[0] for word in keywords if ":-" not in word]))
+        lowered = [word for word in keywords if ":-" in word]
+        if lowered:
+            warnings.append(f"only older deepgram models can lower a word; ignoring {', '.join(lowered)}")
+        if provider == "deepgram" and (model or "nova-3").startswith("nova-3"):
+            settings["keyterm"] = plain
+        elif provider == "assembly-ai" and "multilingual" not in (model or ""):
+            settings["keyterms_prompt"] = plain
+        elif provider == "11labs":
+            settings["keyterms"] = plain
+        elif provider == "cartesia" and (model or "").startswith(CARTESIA_WORD_MODELS):
+            settings["keyterm"] = plain
+        elif provider == "whisper":
+            settings["hotwords"] = " ".join(plain)
+        else:
+            warnings.append(f"transcriber {' '.join(filter(None, (provider, model)))} can't be given words to "
+                            "recognize; ignoring keyterm and keywords")
+    return {key: value for key, value in settings.items() if value}, warnings
+
+
 def resolve_plan(assistant: dict[str, Any], *, check_keys: bool = True, with_fallbacks: bool = True) -> StackPlan:
     transcriber = _with_defaults(assistant.get("transcriber") or {}, DEFAULT_TRANSCRIBER, "deepgram")
     model = {**default_model(), **(assistant.get("model") or {})}
@@ -417,6 +485,7 @@ def resolve_plan(assistant: dict[str, Any], *, check_keys: bool = True, with_fal
             whisper.model_id(stt_model)
         except ValueError as exc:
             raise ProviderError(f"transcriber.model: {exc}") from exc
+    words, word_warnings = stt_words(transcriber, stt_provider, stt_model)
 
     llm_provider = _canonical(model["provider"])
     llm_api_key = None
@@ -487,6 +556,8 @@ def resolve_plan(assistant: dict[str, Any], *, check_keys: bool = True, with_fal
         assistant=assistant,
         route=model.get("route"),
         max_latency_ms=(model.get("route") or {}).get("maxLatencyMs") or model.get("maxLatencyMs"),
+        stt_words=words,
+        warnings=word_warnings,
         **call_limits(assistant),
     )
     if multilingual and plan.tts_provider not in MULTILINGUAL_VOICES:
@@ -548,16 +619,17 @@ def _service_class(module: str, name: str, provider: str):
 def _build_stt(plan: StackPlan):
     lang = _language(plan.stt_language)
     if plan.stt_provider == "whisper":  # free, runs locally; without a language, it detects the caller's
-        return whisper.stt_service(plan.stt_model or whisper.DEFAULT, None if lang == "multi" else lang)
+        return whisper.stt_service(plan.stt_model or whisper.DEFAULT, None if lang == "multi" else lang,
+                                   plan.stt_words.get("hotwords"))
     if plan.stt_provider == "deepgram":
         from pipecat.services.deepgram.stt import DeepgramSTTService
 
         return DeepgramSTTService(
             api_key=os.environ.get("DEEPGRAM_API_KEY", ""),
-            settings=DeepgramSTTService.Settings(model=plan.stt_model or "nova-3", language=lang),
+            settings=DeepgramSTTService.Settings(model=plan.stt_model or "nova-3", language=lang, **plan.stt_words),
         )
     service = _service_class(*STT_SERVICES[plan.stt_provider], plan.stt_provider)
-    settings: dict[str, Any] = {}
+    settings: dict[str, Any] = dict(plan.stt_words)
     if plan.stt_model:
         settings["model"] = plan.stt_model
     if lang and lang != "multi":  # without a language, these services detect it

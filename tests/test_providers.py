@@ -88,6 +88,106 @@ def test_every_claimed_provider_is_tested():
     assert set(TTS_PROVIDERS) - {"elevenlabs", "kokoro"} == set(TTS_CLASSES)  # kokoro has its own tests
 
 
+def stt_settings(transcriber):
+    return build_services(resolve_plan(assistant(transcriber=transcriber)))[0]._settings
+
+
+def plain(transcriber):
+    return resolve_plan(assistant(transcriber=transcriber))
+
+
+@pytest.mark.parametrize("model", [None, "nova-3", "nova-3-medical"])
+def test_nova_3_gets_keyterm_whichever_field_was_used(keys, model):
+    # A real Deepgram refuses nova-3 with `keywords` (HTTP 400), which would end the call.
+    settings = stt_settings({"provider": "deepgram", "model": model, "keyterm": ["Clínica Sorriso"],
+                             "keywords": ["Sorriso:2", "Ana", "ruim:-3"]})
+    assert settings.keyterm == ["Clínica Sorriso", "Sorriso", "Ana"]
+    assert not settings.keywords
+
+
+@pytest.mark.parametrize("model", ["nova", "nova-2", "nova-2-phonecall", "nova-1", "enhanced", "base"])
+def test_older_deepgram_gets_keywords_whichever_field_was_used(keys, model):
+    # A real Deepgram refuses nova-2 with `keyterm` (HTTP 400).
+    transcriber = {"provider": "deepgram", "model": model, "keyterm": ["Clínica Sorriso", "Ana"],
+                   "keywords": ["Sorriso:2", "ruim:-3"]}
+    settings = stt_settings(transcriber)
+    assert settings.keywords == ["Sorriso:2", "ruim:-3", "Ana"]
+    assert not settings.keyterm
+    assert "Clínica Sorriso" in plain(transcriber).warnings[0]
+
+
+def test_an_unknown_deepgram_model_gets_no_words_rather_than_a_refused_connection(keys):
+    transcriber = {"provider": "deepgram", "model": "whisper-large", "keyterm": ["Ana"]}
+    settings = stt_settings(transcriber)
+    assert not settings.keyterm and not settings.keywords
+    assert "whisper-large" in plain(transcriber).warnings[0]
+
+
+@pytest.mark.parametrize(("provider", "field"), [("assembly-ai", "keyterms_prompt"), ("11labs", "keyterms")])
+def test_other_transcribers_get_their_own_field(keys, provider, field):
+    settings = stt_settings({"provider": provider, "keytermsPrompt": ["Clínica Sorriso"], "keyterm": ["Ana"],
+                             "keywords": ["Sorriso:2"]})
+    assert getattr(settings, field) == ["Ana", "Clínica Sorriso", "Sorriso"]
+
+
+def test_assemblyai_multilingual_gets_no_words(keys):
+    transcriber = {"provider": "assembly-ai", "model": "universal-streaming-multilingual", "keyterm": ["Ana"]}
+    assert plain(transcriber).stt_words == {}
+    assert plain(transcriber).warnings
+
+
+def test_cartesia_gets_words_only_on_models_that_use_them(keys):
+    assert stt_settings({"provider": "cartesia", "model": "ink-2", "keyterm": ["Ana"]}).keyterm == ["Ana"]
+    transcriber = {"provider": "cartesia", "keyterm": ["Ana"]}
+    assert plain(transcriber).stt_words == {} and plain(transcriber).warnings
+
+
+@pytest.mark.parametrize("provider", ["gladia", "soniox"])
+def test_transcribers_without_words_say_so_and_still_work(keys, provider):
+    transcriber = {"provider": provider, "keyterm": ["Ana"]}
+    assert stt_settings(transcriber)
+    assert "keyterm" in plain(transcriber).warnings[0]
+
+
+def test_no_words_means_no_settings_and_no_warning(keys):
+    plan = plain({"provider": "deepgram", "keyterm": [], "keywords": ["  "]})
+    assert plan.stt_words == {} and plan.warnings == []
+    assert plain({"provider": "gladia"}).warnings == []
+
+
+@pytest.mark.parametrize("field", ["keyterm", "keytermsPrompt", "keywords"])
+@pytest.mark.parametrize("value", ["Ana", [1], {"a": 1}, ["x" * 51], ["a\nb"]])
+def test_bad_words_are_refused(keys, field, value):
+    with pytest.raises(ProviderError, match=f"transcriber.{field}"):
+        plain({"provider": "deepgram", field: value})
+
+
+@pytest.mark.parametrize("word", ["order number", "hello-world", "foo_bar", "rate:1.5", "a:b", ":3"])
+def test_keywords_follow_deepgrams_format(keys, word):
+    with pytest.raises(ProviderError, match="one word"):
+        plain({"provider": "deepgram", "keywords": [word]})
+
+
+@pytest.mark.parametrize("word", ["Sorriso", "Clínica:3", "São:-2", "agendar2", "予約"])
+def test_keywords_can_be_any_language(keys, word):
+    assert plain({"provider": "deepgram", "keywords": [word]})
+
+
+def test_at_most_a_hundred_words_in_all(keys):
+    many = [f"w{n}" for n in range(60)]
+    assert plain({"provider": "deepgram", "keyterm": many[:50], "keywords": many[:50]})  # the same 50, counted once
+    with pytest.raises(ProviderError, match="at most 100"):
+        plain({"provider": "deepgram", "keyterm": many, "keywords": [f"k{n}" for n in range(41)]})
+
+
+def test_a_bad_word_in_a_fallback_skips_that_fallback(keys):
+    plan = resolve_plan({**assistant(), "transcriber": {
+        "provider": "deepgram",
+        "fallbackPlan": {"transcribers": [{"provider": "deepgram", "model": "nova-2", "keywords": ["two words"]}]},
+    }})
+    assert "transcriber" not in plan.fallbacks and "skipped" in plan.warnings[0]
+
+
 def test_defaults_belong_to_the_default_provider(keys):
     plan = resolve_plan(assistant(transcriber={"provider": "assembly-ai"}, voice={"provider": "cartesia"}))
     assert plan.stt_model is None  # not Deepgram's nova-3

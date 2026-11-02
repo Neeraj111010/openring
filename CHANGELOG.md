@@ -8,6 +8,9 @@ All notable changes to OpenRing are listed here. The format follows
 
 ### Added
 
+- Words the transcriber should get right, in Vapi's `transcriber.keyterm`, `keytermsPrompt` and `keywords`, or
+  **Words to recognize** in the assistant editor. Each goes to the field its transcriber and model take, since Deepgram
+  refuses a connection given the wrong one.
 - Call recording, in Vapi's `artifactPlan.recordingEnabled`: a stereo WAV per call on your server, played on the
   call's page, with `artifact.recordingUrl` on the call and in the `end-of-call-report`.
   `GET /call/{id}/recording` needs the API key or a dashboard session, and `DELETE` removes the file. It's off by

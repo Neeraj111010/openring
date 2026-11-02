@@ -745,6 +745,11 @@ const SUGGESTED_VOICE = { kokoro: "af_heart", deepgram: "thalia", openai: "alloy
 const option = (value, label, current) => `<option value="${esc(value)}" ${value === current ? "selected" : ""}>${esc(label)}</option>`;
 const NEW_ASSISTANT = { model: { provider: "openai", model: "gpt-4.1-mini" }, voice: { provider: "kokoro", voiceId: "af_heart" }, transcriber: { provider: "deepgram", model: "nova-3", language: "multi" } };
 
+function wordsTyped(text) {
+  const words = [...new Set(String(text || "").split(",").map((word) => word.trim()).filter(Boolean))];
+  return words.length ? words : undefined;
+}
+
 async function viewAssistant(id) {
   const [a, routes] = await Promise.all([id === "new" ? structuredClone(NEW_ASSISTANT) : api("/assistant/" + id), api("/model-route").catch(() => [])]);
   setPage("assistants", a.id ? a.name || "Assistant" : "New assistant", "Follow the call from left to right: the caller is transcribed, answered by the model and spoken back");
@@ -784,7 +789,7 @@ async function viewAssistant(id) {
     pane.innerHTML = `<form id="f">
     <div class="line-diagram">
       <div class="stage caller"><h3>Caller</h3><span class="muted" style="font-size:12.5px">Phone or browser</span></div><div class="cable"></div>
-      <div class="stage"><h3>Transcriber</h3><label>Provider</label><select name="tp">${TRANSCRIBERS.map(([k, l]) => option(k, l, t.provider === "assemblyai" ? "assembly-ai" : t.provider || "deepgram")).join("")}</select><label>Language</label><select name="tl">${[...LANGUAGES, ...(LANGUAGES.some(([k]) => k === (t.language || "multi")) ? [] : [[t.language, t.language]])].map(([k, l]) => option(k, l, t.language || "multi")).join("")}</select><div id="tmodel" hidden><label>Model</label><select name="tm">${[...WHISPER_MODELS, ...(t.provider === "whisper" && t.model && !WHISPER_MODELS.some(([k]) => k === t.model) ? [[t.model, t.model]] : [])].map(([k, l]) => option(k, l, t.provider === "whisper" && t.model ? t.model : "base")).join("")}</select></div></div><div class="cable"></div>
+      <div class="stage"><h3>Transcriber</h3><label>Provider</label><select name="tp">${TRANSCRIBERS.map(([k, l]) => option(k, l, t.provider === "assemblyai" ? "assembly-ai" : t.provider || "deepgram")).join("")}</select><label>Language</label><select name="tl">${[...LANGUAGES, ...(LANGUAGES.some(([k]) => k === (t.language || "multi")) ? [] : [[t.language, t.language]])].map(([k, l]) => option(k, l, t.language || "multi")).join("")}</select><div id="tmodel" hidden><label>Model</label><select name="tm">${[...WHISPER_MODELS, ...(t.provider === "whisper" && t.model && !WHISPER_MODELS.some(([k]) => k === t.model) ? [[t.model, t.model]] : [])].map(([k, l]) => option(k, l, t.provider === "whisper" && t.model ? t.model : "base")).join("")}</select></div><label>Words to recognize</label><input name="twords" placeholder="Names, brands, products" title="Separated by commas. The transcriber listens for these." value="${esc([...(t.keyterm || []), ...(t.keytermsPrompt || [])].join(", "))}"></div><div class="cable"></div>
       <div class="stage"><h3>Model</h3>${routes.length ? `<label>Route</label><select name="mr">${option("", "None: one model", m.routeId || "")}${routes.map(r => option(r.id, r.name, m.routeId || "")).join("")}</select>` : ""}<div id="mfixed"><label>Provider</label><select name="mp">${LLM.map(p => option(p, p, m.provider === "deep-seek" ? "deepseek" : m.provider)).join("")}</select><label>Model</label><input name="mm" value="${esc(m.model || "")}" list="ollamaModels"><datalist id="ollamaModels"></datalist></div><p class="hint stage-hint plain" id="mroute" hidden></p></div><div class="cable"></div>
       <div class="stage"><h3>Voice</h3><label>Provider</label><select name="vp">${VOICES.map(([k, l]) => option(k, l, vo.provider === "elevenlabs" ? "11labs" : vo.provider || "kokoro")).join("")}</select><label>Voice ID</label><input name="vv" value="${esc(vo.voiceId || "")}"><p class="hint stage-hint" id="vhint" hidden>This voice speaks one language. To follow callers in several, pick ElevenLabs or OpenAI.</p></div>
     </div>
@@ -844,7 +849,7 @@ async function viewAssistant(id) {
       save({
         name: f.get("name"), firstMessage: f.get("greet") || undefined,
         // Keep the transcriber's model only while its provider stays the same; each provider has its own.
-        transcriber: { ...t, provider: f.get("tp"), model: f.get("tp") === "whisper" ? f.get("tm") : f.get("tp") === (t.provider || "deepgram") ? t.model : undefined, language: f.get("tl") || "multi" },
+        transcriber: { ...t, provider: f.get("tp"), model: f.get("tp") === "whisper" ? f.get("tm") : f.get("tp") === (t.provider || "deepgram") ? t.model : undefined, language: f.get("tl") || "multi", keyterm: wordsTyped(f.get("twords")), keytermsPrompt: undefined },
         model: { ...m, ...routeModel(routes.find(r => r.id === f.get("mr")), f), messages: [...(m.messages || []).filter(x => x.role !== "system"), ...(f.get("sys") ? [{ role: "system", content: f.get("sys") }] : [])] },
         voice: { ...vo, provider: f.get("vp"), voiceId: f.get("vv") || undefined, model: f.get("vp") === (vo.provider || "kokoro") ? vo.model : undefined },
         server: f.get("hook") ? { ...(a.server || {}), url: f.get("hook") } : undefined,

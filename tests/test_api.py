@@ -346,3 +346,13 @@ def test_the_owner_at_this_computer_is_never_locked_out_by_typos():
         tunnel.post("/auth/login", json={"password": "guess"}, headers={"X-Forwarded-For": "203.0.113.9"})
     assert tunnel.post("/auth/login", json={"password": "correct horse"},
                        headers={"X-Forwarded-For": "203.0.113.9"}).status_code == 429
+
+
+def test_words_to_recognize_are_kept_and_bad_ones_refused():
+    client = make_client()
+    transcriber = {"provider": "deepgram", "keyterm": ["Clínica Sorriso"], "keywords": ["Sorriso:2"]}
+    made = client.post("/assistant", json={**ASSISTANT, "transcriber": transcriber}, headers=AUTH)
+    assert made.status_code == 201 and made.json()["transcriber"]["keyterm"] == ["Clínica Sorriso"]
+    bad = {**ASSISTANT, "transcriber": {"provider": "deepgram", "keywords": ["two words"]}}
+    r = client.post("/assistant", json=bad, headers=AUTH)
+    assert r.status_code == 400 and "keywords" in r.json()["detail"]

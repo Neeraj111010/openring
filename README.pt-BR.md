@@ -207,6 +207,21 @@ diz o `endCallMessage`. Se a pessoa fica quieta depois que o assistente falou, e
 `messagePlan.idleMessages` ("Você ainda está aí?"), até `idleMessageMaxSpokenCount` vezes. No painel, ficam
 no editor do assistente.
 
+### Nomes que o transcritor precisa acertar
+
+Passe as palavras que ele vai ouvir: nomes, marcas, produtos. Use os campos da Vapi, ou **Words to recognize** no editor
+do assistente:
+
+```json
+{"transcriber": {"provider": "deepgram", "model": "nova-3", "language": "pt-BR",
+                 "keyterm": ["Clínica Sorriso", "Doutora Ana"]}}
+```
+
+`keyterm`, `keytermsPrompt` e `keywords` (uma palavra, com reforço opcional: `Sorriso:2`) são aceitos, até 100 palavras de
+até 50 caracteres, e vão para o campo que cada transcritor usa: o nova-3 da Deepgram usa `keyterm` e recusa `keywords`, e
+os modelos antigos o contrário, então o OpenRing manda o certo. Frases não cabem nos modelos antigos da Deepgram.
+Funciona com Deepgram, AssemblyAI, ElevenLabs, `ink-2` da Cartesia e Whisper; Gladia e Soniox ignoram, com um aviso no log.
+
 ### Gravar ligações
 
 Com `"artifactPlan": {"recordingEnabled": true}`, ou **Record calls** no editor do assistente, cada ligação vira um
