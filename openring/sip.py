@@ -435,7 +435,9 @@ class Session:
             return
         if status >= 300:
             raise SipError(f"the other line answered {status}")
-        await self.hang_up()
+        # Without waiting for an answer to our BYE: the caller has left, and the model and the voice are still billing.
+        self.server.spawn(self.hang_up())
+        await asyncio.sleep(0)
         if self.on_peer_left is not None:  # the call's pipeline ends with this side of it
             await self.on_peer_left()
 

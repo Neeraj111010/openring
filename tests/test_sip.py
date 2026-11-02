@@ -9,7 +9,7 @@ import time
 
 import pytest
 from fastapi.testclient import TestClient
-from test_real_model_tools import Stub, _text, _tool_call
+from test_real_model_tools import Hears, Stub, _text, _tool_call, strict
 
 from openring import bot, providers, sip
 from openring.api import create_app
@@ -808,21 +808,22 @@ def test_shutting_down_does_not_wait_for_a_silent_carrier(monkeypatch, quiet_pro
     phone.until(lambda m: not m.is_response and m.method == "BYE")  # it did say goodbye
 
 
-def _call_being_transferred(server, phone, monkeypatch, model_server):
+def _call_being_transferred(server, phone, monkeypatch, model_server, stt=None, then=None, **tool_fields):
     """A call whose real model service asks for a transfer right away, up to the carrier accepting the REFER."""
     url, scripts, asked = model_server
     monkeypatch.setattr(bot, "build_services", providers.build_services)
-    monkeypatch.setattr(providers, "_build_stt", lambda plan: Stub())
+    monkeypatch.setattr(providers, "_build_stt", lambda plan: stt or Stub())
     monkeypatch.setattr(providers, "_build_tts", lambda plan: Stub())
-    tool = {"type": "transferCall", "destinations": [{"type": "number", "number": "+15550001111"}]}
-    assistant = server.post("/assistant", headers=AUTH, json={
+    tool = {"type": "transferCall", "destinations": [{"type": "number", "number": "+15550001111"}], **tool_fields}
+    assistant =server.post("/assistant", headers=AUTH, json={
         "name": "Ana", "voice": {"provider": "deepgram", "voiceId": "thalia"},
         "model": {"provider": "custom-llm", "model": "m", "url": f"{url}/ana", "tools": [tool],
                   "messages": [{"role": "system", "content": "You are Ana."}]}}).json()
     trunk = _trunk(server)
     server.post("/phone-number", headers=AUTH, json={"provider": "byo-phone-number", "number": "+15557654321",
                                                      "credentialId": trunk["id"], "assistantId": assistant["id"]})
-    scripts["ana"] = [_tool_call("transferCall", {"destination": "+15550001111"}), _text("Sorry, that line is busy.")]
+    scripts["ana"] = [_tool_call("transferCall", {"destination": "+15550001111"}),
+                      *(then or [_text("Sorry, that line is busy.")])]
     port = _port(server)
     phone.send(phone.invite_text(port), port)
     answer = _answered(phone, port)
@@ -841,6 +842,56 @@ def _notify(phone, answer, port, status, cseq):
     phone.until(lambda m: m.is_response and m.cseq_method == "NOTIFY" and m.cseq == cseq)
 
 
+def test_a_failed_transfer_reaches_a_strict_model(server, phone, monkeypatch, model_server):
+    """Mistral and others refuse a system message in mid-conversation: that must not cost the caller the call."""
+    model_server[1]["refuse"] = strict
+    answer, port, asked = _call_being_transferred(server, phone, monkeypatch, model_server)
+    _notify(phone, answer, port, "486 Busy Here", 6)
+    assert _wait(lambda: len(asked) == 2), asked
+    assert not strict(asked[1][1])
+    time.sleep(0.3)
+    assert _calls(server)[0]["status"] == "in-progress"
+    phone.send(phone.in_dialog("BYE", answer, port, cseq=7), port)
+    call = _ended(server)[0]
+    assert call["endedReason"] == "customer-ended-call", call["endedReason"]
+    assert any(m.get("message") == "Sorry, that line is busy." for m in call["messages"])
+
+
+def test_a_second_transfer_while_one_rings_sends_no_second_refer(server, phone, monkeypatch, model_server):
+    """The caller speaks while the other line rings, and the model asks again: two REFERs would lose track of both."""
+    again = _tool_call("transferCall", {"destination": "+15550001111"})
+    answer, port, asked = _call_being_transferred(server, phone, monkeypatch, model_server, stt=Hears("Hello?", 1.5),
+                                                  then=[again])
+    assert _wait(lambda: len(asked) >= 2), asked
+    with pytest.raises((TimeoutError, AssertionError)):  # a second one would wait a second for the line to go quiet
+        phone.until(lambda m: not m.is_response and m.method == "REFER", timeout=2.5)
+    _notify(phone, answer, port, "200 OK", 6)  # and the first one still finishes
+    bye, addr = phone.until(lambda m: not m.is_response and m.method == "BYE")
+    _reply(phone, bye, addr, 200)
+    assert _ended(server)[0]["endedReason"] == "assistant-forwarded-call"
+    assert len(asked) == 2
+
+
+def test_a_transfer_outlasts_the_tools_timeout(server, phone, monkeypatch, model_server):
+    """Another line can ring for longer than a tool may run: that's no reason to tell the model it failed."""
+    answer, port, asked = _call_being_transferred(server, phone, monkeypatch, model_server, timeoutSeconds=0.5)
+    time.sleep(6.5)  # the handler's limit is that plus 5 s
+    assert len(asked) == 1, asked
+    _notify(phone, answer, port, "200 OK", 6)
+    bye, addr = phone.until(lambda m: not m.is_response and m.method == "BYE")
+    _reply(phone, bye, addr, 200)
+    assert _ended(server)[0]["endedReason"] == "assistant-forwarded-call"
+
+
+def test_a_connected_transfer_does_not_wait_for_an_answer_to_our_bye(server, phone, monkeypatch, model_server):
+    """The caller has left: the model, the transcriber and the voice stop billing now, not when the BYE times out."""
+    answer, port, asked = _call_being_transferred(server, phone, monkeypatch, model_server)
+    _notify(phone, answer, port, "200 OK", 6)
+    started = time.monotonic()
+    assert _ended(server)[0]["endedReason"] == "assistant-forwarded-call"
+    assert time.monotonic() - started < 5
+
+
 def test_a_transfer_that_connects_ends_this_side_of_the_call(server, phone, monkeypatch, model_server):
     answer, port, asked = _call_being_transferred(server, phone, monkeypatch, model_server)
     _notify(phone, answer, port, "100 Trying", 5)
@@ -856,7 +907,7 @@ def test_a_transfer_that_fails_comes_back_to_the_assistant(server, phone, monkey
     _notify(phone, answer, port, "100 Trying", 5)
     _notify(phone, answer, port, "486 Busy Here", 6)
     assert _wait(lambda: len(asked) == 2), asked  # the model hears, and tells the caller
-    told = [m["content"] for m in asked[1][1]["messages"] if m["role"] == "system"]
+    told = [m["content"] for m in asked[1][1]["messages"] if m["role"] == "user"]  # any provider takes this role
     assert any("transfer" in text.lower() for text in told)
     assert _calls(server)[0]["status"] == "in-progress"
     phone.send(phone.in_dialog("BYE", answer, port, cseq=7), port)

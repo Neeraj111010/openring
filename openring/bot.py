@@ -493,7 +493,8 @@ async def run_call(
                 raise
 
         async def tell_model(text: str) -> None:
-            await task.queue_frames([LLMMessagesAppendFrame([{"role": "system", "content": text}], run_llm=True)])
+            # "developer", which goes out as what each provider takes: some refuse "system" in mid-conversation.
+            await task.queue_frames([LLMMessagesAppendFrame([{"role": "developer", "content": text}], run_llm=True)])
 
         async def uninterrupted(work: Any) -> None:
             """Apart from the tool call that asked for it: a caller's "okay" cancels the tool's handler, and the

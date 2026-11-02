@@ -33,7 +33,7 @@ MAX_RESPONSE_BYTES = 100_000  # what's read of an apiRequest's answer; the rest 
 MAX_RESULT_CHARS = 4_000  # what the model reads of it: every word costs tokens, on every turn after
 MAX_NAME_CHARS = 64  # what model APIs accept for a tool's name
 MAX_HANDOFF_VALUE_CHARS = 500  # of one value a handoff passes along
-HANDOFF_UNDER_WAY = "The call is already moving to another assistant."
+HANDOFF_UNDER_WAY = "The call is already on its way to someone else."
 TRANSFER_FAILED = "The transfer did not go through, and the caller is still on the line with you. Tell them so."
 HEADER_NAME = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
 # What a tool's server or a webhook has no need to see of an assistant: other tools' keys and addresses, its own.
@@ -539,6 +539,9 @@ def make_handler(tool: dict[str, Any], controls: CallControls):
         await controls.end_call()
 
     async def transfer_call(params) -> None:
+        if not controls.in_charge():  # the caller spoke while the other line rings, and the model asked again
+            await params.result_callback(HANDOFF_UNDER_WAY, properties=FunctionCallResultProperties(run_llm=False))
+            return
         destinations = [d for d in tool.get("destinations") or [] if d.get("number")]
         wanted = str(_arguments(params.arguments).get("destination") or "")
         destination = next((d for d in destinations if d["number"] == wanted), None)

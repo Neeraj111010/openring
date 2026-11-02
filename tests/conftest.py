@@ -63,6 +63,14 @@ def model_server():
                 self.wfile.write(answer)
                 return
             asked.append((who, body))
+            if scripts.get("refuse") and scripts["refuse"](body):  # a provider stricter than OpenAI
+                answer = json.dumps({"error": {"message": "invalid", "type": "invalid_request_error"}}).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(answer)))
+                self.end_headers()
+                self.wfile.write(answer)
+                return
             default = {"id": "c1", "object": "chat.completion.chunk", "created": 1, "model": "m", "choices": [
                 {"index": 0, "delta": {"role": "assistant", "content": "Okay."}, "finish_reason": "stop"}]}
             chunks = scripts[who].pop(0) if scripts.get(who) else [default]

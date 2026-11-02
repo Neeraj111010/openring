@@ -58,6 +58,9 @@ All notable changes to OpenRing are listed here. The format follows
 
 ### Fixed
 
+- Only OpenAI is sent the `developer` message role now. Pipecat adds such messages during a call (a tool's late answer, a
+  caller's empty turn), and a provider that refuses the role ended the call. Mistral, DeepSeek and Perplexity go through
+  Pipecat's own services for them, which follow their rules for messages.
 - A caller speaking during a transfer no longer cancels it, and a transfer that fails now gets an answer: the model tells
   the caller, or the tool's `request-failed` message does, instead of leaving them in silence.
 - When a provider stopped working during a call (a rejected key, no credit left, an outage) and no fallback could

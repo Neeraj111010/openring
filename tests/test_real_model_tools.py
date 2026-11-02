@@ -1,6 +1,7 @@
 """Knowledge search and a handoff through Pipecat's real model service, against a little OpenAI-style server on this
 computer: what the model is really sent, turn by turn. Only speech-to-text and the voice are stubs."""
 
+import asyncio
 import json
 import time
 import xml.etree.ElementTree as ET
@@ -8,7 +9,9 @@ import xml.etree.ElementTree as ET
 import pytest
 from conftest import SLOW_TOOL_SECONDS
 from fastapi.testclient import TestClient
+from pipecat.frames.frames import StartFrame, TranscriptionFrame
 from pipecat.processors.frame_processor import FrameProcessor
+from pipecat.utils.time import time_now_iso8601
 
 from openring import providers
 from openring.api import create_app
@@ -45,6 +48,30 @@ class Stub(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
+class Hears(Stub):
+    """Speech-to-text that hears the caller say `words`, `after` seconds into the call."""
+
+    def __init__(self, words, after):
+        super().__init__()
+        self.words, self.after = words, after
+
+    async def process_frame(self, frame, direction):
+        await super().process_frame(frame, direction)
+        if isinstance(frame, StartFrame):
+            self.create_task(self._later())
+
+    async def _later(self):
+        await asyncio.sleep(self.after)
+        await self.push_frame(TranscriptionFrame(self.words, "caller", time_now_iso8601()))
+
+
+def strict(body):
+    """What Mistral, DeepSeek, Ollama, OpenRouter and others refuse, going by Pipecat's own services for them."""
+    roles = [m["role"] for m in body["messages"]]
+    opening = next((i for i, role in enumerate(roles) if role != "system"), len(roles))
+    return "developer" in roles or "system" in roles[opening:]
+
+
 def _wait(condition, seconds=15):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -52,6 +79,55 @@ def _wait(condition, seconds=15):
             return True
         time.sleep(0.05)
     return False
+
+
+def test_a_late_tool_answer_reaches_a_strict_model(monkeypatch, model_server):
+    """The caller spoke while an async tool ran, so Pipecat delivers its answer as a `developer` message."""
+    url, scripts, asked = model_server
+    scripts["refuse"] = strict
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "fake")
+    monkeypatch.setattr(providers, "_build_stt", lambda plan: Hears("Are you there?", 0.3))
+    monkeypatch.setattr(providers, "_build_tts", lambda plan: Stub())
+    settings = Settings(api_key="test-key", public_url="https://x.test", db_path=":memory:",
+                        validate_twilio_signature=False)
+    client = TestClient(create_app(settings, Store(":memory:")))
+    tool = {"type": "function", "async": True, "server": {"url": f"{url}/tool"},
+            "function": {"name": "lookup", "parameters": {"type": "object", "properties": {}}}}
+    assistant = client.post("/assistant", headers=AUTH, json={
+        "name": "Ana", "voice": {"provider": "deepgram", "voiceId": "thalia"},
+        "model": {"provider": "custom-llm", "model": "m", "url": f"{url}/ana", "tools": [tool],
+                  "messages": [{"role": "system", "content": "You are Ana."}]}}).json()
+    client.post("/phone-number", json={"number": "+15551234567", "assistantId": assistant["id"]}, headers=AUTH)
+    scripts["ana"] = [_tool_call("lookup", {}), _text("One moment."), _text("Still here."), _text("It's ready.")]
+
+    twiml = client.post("/twilio/voice", data={"To": "+15551234567", "From": "+5511999990000", "CallSid": "CA1"}).text
+    params = {p.get("name"): p.get("value") for p in ET.fromstring(twiml).find("./Connect/Stream").findall("Parameter")}
+    with client.websocket_connect("/ws/twilio") as ws:
+        _handshake(ws, params)
+        assert _wait(lambda: any("Found it" in json.dumps(body) for _, body in asked)), asked
+        time.sleep(0.5)
+        store = client.app.state.store
+        assert store.get("calls", params["callId"])["status"] == "in-progress"
+    assert _wait(lambda: store.get("calls", params["callId"])["status"] == "ended")
+    assert not [body for _, body in asked if strict(body)]
+    call = store.get("calls", params["callId"])
+    assert call["endedReason"] == "customer-ended-call", call["endedReason"]
+
+
+@pytest.mark.parametrize("provider, developer, adapter", [
+    ("openai", True, "OpenAILLMAdapter"), ("groq", False, "OpenAILLMAdapter"), ("ollama", False, "OpenAILLMAdapter"),
+    ("openrouter", False, "OpenAILLMAdapter"), ("mistral", False, "MistralLLMAdapter"),
+    ("deepseek", False, "DeepSeekLLMAdapter"), ("perplexity-ai", False, "PerplexityLLMAdapter"),
+    ("custom-llm", False, "OpenAILLMAdapter"),
+])
+def test_each_provider_is_sent_what_it_takes(monkeypatch, provider, developer, adapter):
+    for name in ("OPENAI", "GROQ", "OPENROUTER", "MISTRAL", "DEEPSEEK", "PERPLEXITY", "DEEPGRAM"):
+        monkeypatch.setenv(f"{name}_API_KEY", "fake")
+    model = {"provider": provider, "model": "m", **({"url": "http://127.0.0.1:1"} if provider == "custom-llm" else {})}
+    plan = providers.resolve_plan({"model": model, "voice": {"provider": "deepgram", "voiceId": "thalia"}})
+    service = providers._build_llm(plan)
+    assert service.supports_developer_role is developer
+    assert type(service.get_llm_adapter()).__name__ == adapter
 
 
 def test_a_call_searches_its_files_then_hands_off(monkeypatch, model_server):

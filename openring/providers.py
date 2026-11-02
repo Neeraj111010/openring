@@ -778,16 +778,38 @@ def _labeled(service: Any, layer: str, plan: StackPlan) -> Any:
     return service
 
 
-def _build_llm(plan: StackPlan):
+def _llm_class(provider: str | None) -> Any:
+    """Pipecat's own service where a provider has rules for what it's sent (Mistral's roles, say); else OpenAI's."""
+    if provider == "mistral":
+        from pipecat.services.mistral.llm import MistralLLMService
+
+        return MistralLLMService
+    if provider == "deepseek":
+        from pipecat.services.deepseek.llm import DeepSeekLLMService
+
+        return DeepSeekLLMService
+    if provider == "perplexity-ai":
+        from pipecat.services.perplexity.llm import PerplexityLLMService
+
+        return PerplexityLLMService
     from pipecat.services.openai.llm import OpenAILLMService
 
+    return OpenAILLMService
+
+
+def _build_llm(plan: StackPlan):
+    service_class = _llm_class(plan.llm_provider)
     llm_settings: dict[str, Any] = {"model": plan.llm_model}
     if plan.temperature is not None:
         llm_settings["temperature"] = plan.temperature
     api_key = plan.llm_api_key or os.environ.get(plan.llm_api_key_env or "", "") or "not-needed"
-    return OpenAILLMService(
+    service = service_class(
         api_key=api_key,
         base_url=plan.llm_base_url,
         default_headers=_llm_headers(plan.llm_provider),
-        settings=OpenAILLMService.Settings(**llm_settings),
+        settings=service_class.Settings(**llm_settings),
     )
+    # Pipecat adds "developer" messages mid-call: a tool's late answer, a caller's empty turn. Providers that refuse the
+    # role answer 400, which ends the call, so only OpenAI gets it. The others read those as "user" messages.
+    service.supports_developer_role = plan.llm_provider == "openai"
+    return service
