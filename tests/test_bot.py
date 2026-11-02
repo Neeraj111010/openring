@@ -60,3 +60,20 @@ def test_usage_adds_up_what_providers_bill_by():
                STTUsageMetricsData(processor="stt", value=STTUsage(audio_seconds=12.34))])
     assert usage.cost_breakdown() == {"llmPromptTokens": 240, "llmCompletionTokens": 60, "ttsCharacters": 42,
                                       "transcriberAudioSeconds": 12.3}
+
+
+def test_call_limits_end_a_long_call_and_a_silent_caller():
+    from openring.bot import CallLimits
+
+    limits = CallLimits(max_duration=600, silence_timeout=30, now=0)
+    assert limits.due(29) is None
+    assert limits.due(30) == "silence-timed-out"  # nobody said a word since the call started
+    limits.user(True, 31)
+    assert limits.due(100) is None  # the caller is talking: never cut them off for silence
+    limits.user(False, 100)
+    limits.bot(True)
+    assert limits.due(140) is None  # nor while the assistant talks
+    limits.bot(False)
+    assert limits.due(129) is None and limits.due(130) == "silence-timed-out"  # 30 s after the caller's last word
+    assert limits.due(600) == "exceeded-max-duration"
+    assert CallLimits(max_duration=0, silence_timeout=0, now=0).due(10**6) is None  # 0 turns a limit off

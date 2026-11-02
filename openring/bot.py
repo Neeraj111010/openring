@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -53,6 +54,33 @@ def performance_metrics(turns: list[dict[str, int]], first_word_ms: int | None =
         for name in LATENCY_FIELDS:
             metrics[name + "Average"] = round(sum(t[name] for t in turns) / len(turns))
     return metrics
+
+
+class CallLimits:
+    """Vapi's `maxDurationSeconds` and `silenceTimeoutSeconds`: the reason a call should end now, if any.
+
+    The clock starts when the caller connects. Silence is counted from the caller's last word (or from the
+    start), and never ends a call while someone is talking.
+    """
+
+    def __init__(self, max_duration: float, silence_timeout: float, now: float):
+        self.max_duration, self.silence_timeout = max_duration, silence_timeout
+        self.started = self.last_heard = now
+        self.user_speaking = self.bot_speaking = False
+
+    def user(self, speaking: bool, now: float) -> None:
+        self.user_speaking, self.last_heard = speaking, now
+
+    def bot(self, speaking: bool) -> None:
+        self.bot_speaking = speaking
+
+    def due(self, now: float) -> str | None:
+        if self.max_duration and now - self.started >= self.max_duration:
+            return "exceeded-max-duration"
+        quiet = not (self.user_speaking or self.bot_speaking)
+        if self.silence_timeout and quiet and now - self.last_heard >= self.silence_timeout:
+            return "silence-timed-out"
+        return None
 
 
 class Usage:
@@ -292,6 +320,8 @@ async def run_call(
         LLMRunFrame,
         MetricsFrame,
         TTSSpeakFrame,
+        UserStartedSpeakingFrame,
+        UserStoppedSpeakingFrame,
     )
     from pipecat.metrics.metrics import TTFATMetricsData
     from pipecat.observers.base_observer import BaseObserver
@@ -315,6 +345,9 @@ async def run_call(
     switches: list[dict[str, str]] = []  # providers that took over from one that failed
     services: list[Any] = []  # every provider service the call built, to price its usage
     first_word: dict[str, float | None] = {"connected": None, "spoke": None}
+    limits: CallLimits | None = None  # set when the caller connects
+    watching: asyncio.Task | None = None
+    idle = {"spoken": 0}
     outbox = server_messages.Outbox(plan.assistant, lambda: store.get("calls", call_id))
     # The setup runs inside the try as well, so the call record ends however the call does: a caller
     # who hangs up while the services are still being built, or a provider that fails to start.
@@ -411,7 +444,11 @@ async def run_call(
         tools = register_tools(llm, assistant_tools(plan.assistant, store), controls)
         context = LLMContext(messages=list(plan.messages), **({"tools": tools} if tools else {}))
         aggregators = LLMContextAggregatorPair(
-            context, user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer())
+            context, user_params=LLMUserAggregatorParams(
+                vad_analyzer=SileroVADAnalyzer(),
+                # Pipecat times the caller's silence after the assistant speaks (not during a tool call).
+                user_idle_timeout=plan.idle_timeout_seconds if plan.idle_messages else 0,
+            )
         )
         pipeline = Pipeline(
             [
@@ -431,10 +468,20 @@ async def run_call(
             async def on_push_frame(self, data):
                 if isinstance(data.frame, BotStartedSpeakingFrame):
                     speech["speaking"] = True
+                    if limits:
+                        limits.bot(True)
                     if first_word["connected"] and not first_word["spoke"]:
                         first_word["spoke"] = time.monotonic()
                 elif isinstance(data.frame, BotStoppedSpeakingFrame):
                     speech.update(speaking=False, last_stop=time.monotonic())
+                    if limits:
+                        limits.bot(False)
+                elif isinstance(data.frame, (UserStartedSpeakingFrame, UserStoppedSpeakingFrame)):
+                    started = isinstance(data.frame, UserStartedSpeakingFrame)
+                    if limits:
+                        limits.user(started, time.monotonic())
+                    if started and plan.idle_reset_on_speech:
+                        idle["spoken"] = 0
                 elif isinstance(data.frame, MetricsFrame):
                     usage.add(data.frame.data)
                     for item in data.frame.data:  # how long each model took to start answering
@@ -466,9 +513,33 @@ async def run_call(
                 ended_reason = f"pipeline-error: {what_failed(failed)} stopped working: {short_error(frame.error)}"
                 logger.warning("call {} ends: {}", call_id, ended_reason)
 
+        async def watch_limits() -> None:
+            """End the call when it has lasted too long, or the caller has been silent too long."""
+            nonlocal ended_reason
+            while True:
+                await asyncio.sleep(0.5)
+                reason = limits.due(time.monotonic()) if limits else None
+                if reason:
+                    ended_reason = reason
+                    logger.info("call {} ending: {}", call_id, reason)
+                    if plan.end_call_message:
+                        await speak(plan.end_call_message)
+                    await task.queue_frames([EndFrame()])  # after whatever is still being said
+                    return
+
+        if plan.idle_messages:
+            @aggregators.user().event_handler("on_user_turn_idle")
+            async def _on_idle(_aggregator):
+                if idle["spoken"] < plan.idle_max_spoken:
+                    idle["spoken"] += 1
+                    await task.queue_frames([TTSSpeakFrame(random.choice(plan.idle_messages))])
+
         @transport.event_handler("on_client_connected")
         async def _on_connected(_transport, _client):
+            nonlocal limits, watching
             first_word["connected"] = time.monotonic()
+            limits = CallLimits(plan.max_duration_seconds, plan.silence_timeout_seconds, time.monotonic())
+            watching = asyncio.ensure_future(watch_limits())
             outbox.send("status-update", status="in-progress")
             if plan.first_message:
                 # In the context (and transcript) right away, even if the voice fails to say it.
@@ -502,6 +573,8 @@ async def run_call(
         logger.exception("call {} failed", call_id)
         ended_reason = f"pipeline-error: {exc}"
     finally:
+        if watching is not None:
+            watching.cancel()
         transcript = transcript_messages(context.get_messages()) if context is not None else []
         breakdown = usage.cost_breakdown(services)
         routes.save_speed(store)

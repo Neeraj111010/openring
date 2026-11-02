@@ -85,6 +85,10 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
   `dial()` as `POST /call` with `campaignId`, keeps `calls` (callId -> customer, status, endedReason) and
   Vapi's `callsCounter*`, saves after every dial so a restart never calls anyone twice, and ends calls cut off
   by a restart (`worker-shutdown`). Cancel claims the status atomically (`Store.update` is atomic too).
+- Call limits (`bot.CallLimits`, `providers.call_limits`): Vapi's `maxDurationSeconds` (600) and
+  `silenceTimeoutSeconds` (30, from the caller's last word, never while someone talks) end the call from a
+  watcher task started on connect (`exceeded-max-duration`, `silence-timed-out`, saying `endCallMessage`);
+  `messagePlan.idleMessages` use Pipecat's `user_idle_timeout` (`on_user_turn_idle`) on the user aggregator.
 - `openring/overrides.py`: Vapi's `assistantOverrides` (deep merge) and `{{variables}}` (`customer.*`,
   `variableValues`) in `firstMessage` and `model.messages`, applied per call in `media_stream`.
 - `openring/tools.py` Vapi tools: `function` (POSTs Vapi's `tool-calls` message to `tool.server.url` or the

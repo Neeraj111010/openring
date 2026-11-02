@@ -159,6 +159,17 @@ curl -X POST http://localhost:8000/assistant \
   }'
 ```
 
+A call ends by itself after `maxDurationSeconds` (10 minutes by default), or when the caller has said nothing
+for `silenceTimeoutSeconds` (30 seconds by default), with Vapi's `endedReason` (`exceeded-max-duration`,
+`silence-timed-out`); `endCallMessage` is said first. When the caller goes quiet after the assistant spoke,
+`messagePlan.idleMessages` are said (one at random, after `idleTimeoutSeconds`, up to
+`idleMessageMaxSpokenCount` times), as on Vapi:
+
+```json
+{"maxDurationSeconds": 900, "silenceTimeoutSeconds": 20, "endCallMessage": "Thanks for calling, goodbye!",
+ "messagePlan": {"idleMessages": ["Are you still there?"], "idleTimeoutSeconds": 8}}
+```
+
 ### Phone calls
 
 Twilio has to reach your server, so it needs a public https URL. On your own computer, start a tunnel

@@ -745,6 +745,8 @@ async function viewAssistant(id) {
   const tab = location.hash.endsWith("/json") ? "json" : "setup";
   const m = a.model || {}, vo = a.voice || {}, t = a.transcriber || {};
   const system = (m.messages || []).find(x => x.role === "system")?.content || "";
+  // The call limits as the editor shows them (Vapi's defaults when unset: 10 minutes, 30 seconds of silence).
+  const limitsShown = { minutes: Math.round((a.maxDurationSeconds ?? 600) / 60), silence: a.silenceTimeoutSeconds ?? 30 };
   const base = "#assistants/" + (a.id || "new");
   const v = $("#view");
   v.innerHTML = `<div class="toolbar">${tabs([["setup", "Setup"], ["json", "JSON"]], tab)}<span class="spacer"></span>${a.id ? `<button type="button" class="btn ghost" id="test">${ICON.mic}Test</button>` : ""}</div>
@@ -781,6 +783,11 @@ async function viewAssistant(id) {
     <div class="field" style="margin-top:22px"><label for="name">Name</label><input id="name" name="name" required value="${esc(a.name || "")}" placeholder="Front desk"></div>
     <div class="field"><label for="greet">Greeting</label><p class="hint">The first thing callers hear.</p><input id="greet" name="greet" value="${esc(a.firstMessage || "")}" placeholder="Hi! How can I help you today?"></div>
     <div class="field"><label for="sys">Instructions</label><p class="hint">How the assistant should behave on the call.</p><textarea id="sys" name="sys" placeholder="You are a friendly assistant for...">${esc(system)}</textarea></div>
+    <div class="field-row">
+      <div class="field narrow"><label for="maxmin">Max length</label><p class="hint">Minutes</p><input id="maxmin" name="maxmin" type="number" min="1" max="720" value="${limitsShown.minutes}"></div>
+      <div class="field narrow"><label for="silence">Silence limit</label><p class="hint">Seconds</p><input id="silence" name="silence" type="number" min="10" max="3600" value="${limitsShown.silence}"></div>
+      <div class="field"><label for="idle">If the caller goes quiet, say</label><p class="hint">Optional. After ${a.messagePlan?.idleTimeoutSeconds ?? 10} s without an answer, up to ${a.messagePlan?.idleMessageMaxSpokenCount ?? 3} times.</p><input id="idle" name="idle" value="${esc((a.messagePlan?.idleMessages || [])[0] || "")}" placeholder="Are you still there?"></div>
+    </div>
     <div class="field"><label for="hook">Call report URL</label><p class="hint">Optional. We send the transcript here when a call ends.</p><input id="hook" name="hook" value="${esc((a.server || {}).url || "")}" placeholder="https://your-app.com/webhook"></div>
     ${footer}</form>`;
     const mp = $("[name=mp]"), mm = $("[name=mm]");
@@ -829,6 +836,10 @@ async function viewAssistant(id) {
         model: { ...m, ...routeModel(routes.find(r => r.id === f.get("mr")), f), messages: [...(m.messages || []).filter(x => x.role !== "system"), ...(f.get("sys") ? [{ role: "system", content: f.get("sys") }] : [])] },
         voice: { ...vo, provider: f.get("vp"), voiceId: f.get("vv") || undefined, model: f.get("vp") === (vo.provider || "kokoro") ? vo.model : undefined },
         server: f.get("hook") ? { ...(a.server || {}), url: f.get("hook") } : undefined,
+        // Vapi's call limits, in seconds; untouched fields keep what was saved (or Vapi's defaults).
+        maxDurationSeconds: Number(f.get("maxmin")) !== limitsShown.minutes ? Number(f.get("maxmin")) * 60 : a.maxDurationSeconds,
+        silenceTimeoutSeconds: Number(f.get("silence")) !== limitsShown.silence ? Number(f.get("silence")) : a.silenceTimeoutSeconds,
+        messagePlan: f.get("idle") || a.messagePlan?.idleMessages?.length ? { ...(a.messagePlan || {}), idleMessages: f.get("idle") ? [f.get("idle"), ...(a.messagePlan?.idleMessages || []).slice(1)] : [] } : a.messagePlan,
       });
     };
   }

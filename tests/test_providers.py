@@ -190,3 +190,22 @@ def test_multi_language_follows_the_caller(keys):
     assert "one language" in single.warnings[0]
     fixed = resolve_plan(assistant(transcriber={"provider": "deepgram", "language": "pt-BR"}))
     assert all(m["content"] != FOLLOW_LANGUAGE for m in fixed.messages)
+
+
+def test_call_limits_follow_vapi_fields_and_defaults():
+    plan = resolve_plan(assistant(), check_keys=False)
+    assert (plan.max_duration_seconds, plan.silence_timeout_seconds, plan.idle_messages) == (600, 30, [])
+    plan = resolve_plan({**assistant(), "maxDurationSeconds": 120, "silenceTimeoutSeconds": 15,
+                         "endCallMessage": "Bye for now.",
+                         "messagePlan": {"idleMessages": ["Are you still there?", " "], "idleTimeoutSeconds": 8,
+                                         "idleMessageMaxSpokenCount": 2,
+                                         "idleMessageResetCountOnUserSpeechEnabled": True}}, check_keys=False)
+    assert (plan.max_duration_seconds, plan.silence_timeout_seconds, plan.end_call_message) == (120, 15, "Bye for now.")
+    assert (plan.idle_messages, plan.idle_timeout_seconds, plan.idle_max_spoken, plan.idle_reset_on_speech) == (
+        ["Are you still there?"], 8, 2, True)
+    for change, words in (({"maxDurationSeconds": 5}, "maxDurationSeconds"),
+                          ({"silenceTimeoutSeconds": "30"}, "silenceTimeoutSeconds"),
+                          ({"messagePlan": {"idleTimeoutSeconds": 1}}, "idleTimeoutSeconds"),
+                          ({"messagePlan": {"idleMessages": "hello"}}, "idleMessages")):
+        with pytest.raises(ProviderError, match=words):
+            resolve_plan({**assistant(), **change}, check_keys=False)

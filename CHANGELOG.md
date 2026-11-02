@@ -6,6 +6,19 @@ All notable changes to OpenRing are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Call limits, in Vapi's fields: a call ends by itself after `maxDurationSeconds` or when the caller has said
+  nothing for `silenceTimeoutSeconds`, with Vapi's `endedReason` (`exceeded-max-duration`, `silence-timed-out`),
+  saying `endCallMessage` first. When the caller goes quiet after the assistant spoke,
+  `messagePlan.idleMessages` are said ("Are you still there?"), after `idleTimeoutSeconds`, up to
+  `idleMessageMaxSpokenCount` times. The assistant editor has the length, the silence and the idle message.
+
+### Changed
+
+- Calls now have Vapi's default limits: 10 minutes at most, and 30 seconds of silence from the caller. Before,
+  a call with nobody on the line kept running (and billing the providers) until the phone company dropped it.
+
 ### Fixed
 
 - When a provider stopped working during a call (a rejected key, no credit left, an outage) and no fallback could

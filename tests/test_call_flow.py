@@ -209,3 +209,96 @@ def test_a_provider_that_fails_to_start_ends_the_call(monkeypatch):
     call = store.get("calls", call["id"])
     assert call["status"] == "ended" and call["endedReason"].startswith("pipeline-error: provider 'cartesia'")
     assert call["messages"] == []
+
+
+@pytest.mark.parametrize("limits, reason", [((600, 1.0), "silence-timed-out"), ((1.0, 0), "exceeded-max-duration")])
+def test_a_call_ends_itself_when_the_caller_is_silent_or_it_runs_too_long(monkeypatch, limits, reason):
+    """Vapi's silenceTimeoutSeconds and maxDurationSeconds: the call hangs up by itself, with Vapi's endedReason
+    (made a second long here; the dashboard and the API keep them at 10 s or more)."""
+    from pipecat.processors.frame_processor import FrameProcessor
+
+    from openring import bot
+
+    class Quiet(FrameProcessor):  # a provider that passes everything along: nobody ever speaks
+        def __init__(self, layer):
+            super().__init__()
+            self.openring_label = layer
+            self.openring_price = (layer, "none", None, None)
+
+        async def process_frame(self, frame, direction):
+            await super().process_frame(frame, direction)
+            await self.push_frame(frame, direction)
+
+    real = bot.CallLimits
+    monkeypatch.setattr(bot, "CallLimits", lambda _duration, _silence, now: real(*limits, now))
+    monkeypatch.setattr(bot, "build_services", lambda plan: (Quiet("transcriber"), Quiet("model"), Quiet("voice")))
+    _pipeline_started(monkeypatch)
+    client, store, params = _answered_call(monkeypatch)
+    started = time.monotonic()
+    with client.websocket_connect("/ws/twilio") as ws:
+        _handshake(ws, params)
+        call = _wait_until_ended(store, params["callId"])  # the caller stays on the line
+    assert call["endedReason"] == reason
+    assert time.monotonic() - started < 10
+
+
+def _scripted_call(monkeypatch, limits, on_start=()):
+    """A call through stub providers: the transcriber pushes `on_start` when the call starts, and the voice "says"
+    each sentence at once, recording it. Returns (client, store, params, sentences said)."""
+    from pipecat.frames.frames import BotStartedSpeakingFrame, BotStoppedSpeakingFrame, StartFrame, TTSSpeakFrame
+    from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+    from openring import bot
+
+    said = []
+
+    class Stub(FrameProcessor):
+        def __init__(self, layer):
+            super().__init__()
+            self.layer, self.openring_label, self.openring_price = layer, layer, (layer, "none", None, None)
+
+        async def process_frame(self, frame, direction):
+            await super().process_frame(frame, direction)
+            await self.push_frame(frame, direction)
+            if self.layer == "transcriber" and isinstance(frame, StartFrame):
+                for early in on_start:
+                    await self.push_frame(early)
+            if self.layer == "voice" and isinstance(frame, TTSSpeakFrame):
+                said.append(frame.text)
+                await self.push_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+                await self.push_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+    real = bot.CallLimits
+    monkeypatch.setattr(bot, "CallLimits", lambda _duration, _silence, now: real(*limits, now))
+    monkeypatch.setattr(bot, "build_services", lambda plan: (Stub("transcriber"), Stub("model"), Stub("voice")))
+    _pipeline_started(monkeypatch)
+    return (*_answered_call(monkeypatch), said)
+
+
+def test_a_caller_who_is_talking_is_not_hung_up_on_for_silence(monkeypatch):
+    from pipecat.frames.frames import UserStartedSpeakingFrame
+
+    client, store, params, _said = _scripted_call(monkeypatch, (2.0, 0.5), on_start=[UserStartedSpeakingFrame()])
+    with client.websocket_connect("/ws/twilio") as ws:
+        _handshake(ws, params)
+        call = _wait_until_ended(store, params["callId"])
+    assert call["endedReason"] == "exceeded-max-duration"  # the silence limit (0.5 s) never fired
+
+
+def test_a_quiet_caller_hears_the_idle_message_then_the_call_ends(monkeypatch):
+    """Vapi's messagePlan: after the assistant speaks, a quiet caller hears an idle message, up to the limit;
+    the end-call message comes last."""
+    from openring import providers
+
+    monkeypatch.setattr(providers, "IDLE_LIMITS", (("idleTimeoutSeconds", 0.1, 60),
+                                                   ("idleMessageMaxSpokenCount", 1, 10)))
+    client, store, params, said = _scripted_call(monkeypatch, (600, 2.0))
+    assistant = store.list("assistants")[0]
+    store.update("assistants", assistant["id"], {
+        "endCallMessage": "Goodbye.",
+        "messagePlan": {"idleMessages": ["Still there?"], "idleTimeoutSeconds": 0.2, "idleMessageMaxSpokenCount": 2}})
+    with client.websocket_connect("/ws/twilio") as ws:
+        _handshake(ws, params)
+        call = _wait_until_ended(store, params["callId"])
+    assert call["endedReason"] == "silence-timed-out"
+    assert said == [ASSISTANT["firstMessage"], "Still there?", "Still there?", "Goodbye."]

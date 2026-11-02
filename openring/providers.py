@@ -289,6 +289,16 @@ class StackPlan:
     max_latency_ms: int | None = None
     # The model route the models came from (`routes.expand`): {"id", "name", "cooldownMinutes"}.
     route: dict[str, Any] | None = None
+    # Vapi's call limits, in seconds: the call ends when it has lasted this long, or when the caller has said
+    # nothing for this long; Vapi's defaults. `end_call_message` is said before the line is hung up.
+    max_duration_seconds: float = 600
+    silence_timeout_seconds: float = 30
+    end_call_message: str | None = None
+    # Vapi's messagePlan: said when the caller goes quiet after the assistant spoke (up to `idle_max_spoken`).
+    idle_messages: list[str] = field(default_factory=list)
+    idle_timeout_seconds: float = 10
+    idle_max_spoken: int = 3
+    idle_reset_on_speech: bool = False
 
 
 def _require_key(env_name: str | None, what: str) -> None:
@@ -316,6 +326,41 @@ def _supported(table: dict[str, Any], extra: tuple[str, ...] = ()) -> list[str]:
 # tells the model to answer in it, and a multilingual voice reads whatever language it is given.
 FOLLOW_LANGUAGE = "Reply in the language the caller is speaking, and switch whenever they switch."
 MULTILINGUAL_VOICES = {"elevenlabs", "openai"}
+
+
+# Vapi's ranges for the call limits: (field, lowest, highest).
+LIMITS = (("maxDurationSeconds", 10, 43_200), ("silenceTimeoutSeconds", 10, 3_600))
+IDLE_LIMITS = (("idleTimeoutSeconds", 5, 60), ("idleMessageMaxSpokenCount", 1, 10))
+
+
+def call_limits(assistant: dict[str, Any]) -> dict[str, Any]:
+    """The assistant's call limits and idle messages as StackPlan fields; ProviderError for values out of range."""
+    def number(where: dict[str, Any], name: str, low: float, high: float) -> float | None:
+        value = where.get(name)
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
+            raise ProviderError(f"{name} goes from {low} to {high}")
+        return value
+
+    plan = assistant.get("messagePlan") or {}
+    if not isinstance(plan, dict):
+        raise ProviderError("messagePlan must be an object")
+    messages = plan.get("idleMessages") or []
+    if not isinstance(messages, list) or not all(isinstance(m, str) for m in messages):
+        raise ProviderError("messagePlan.idleMessages must be a list of sentences")
+    limits = {f: number(assistant, f, low, high) for f, low, high in LIMITS}
+    idle = {f: number(plan, f, low, high) for f, low, high in IDLE_LIMITS}
+    out: dict[str, Any] = {"idle_messages": [m.strip() for m in messages if m.strip()],
+                           "idle_reset_on_speech": bool(plan.get("idleMessageResetCountOnUserSpeechEnabled")),
+                           "end_call_message": assistant.get("endCallMessage") or None}
+    for key, value in (("max_duration_seconds", limits["maxDurationSeconds"]),
+                       ("silence_timeout_seconds", limits["silenceTimeoutSeconds"]),
+                       ("idle_timeout_seconds", idle["idleTimeoutSeconds"]),
+                       ("idle_max_spoken", idle["idleMessageMaxSpokenCount"])):
+        if value is not None:
+            out[key] = int(value) if key == "idle_max_spoken" else value
+    return out
 
 
 def fallback_layers(assistant: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
@@ -424,6 +469,7 @@ def resolve_plan(assistant: dict[str, Any], *, check_keys: bool = True, with_fal
         assistant=assistant,
         route=model.get("route"),
         max_latency_ms=(model.get("route") or {}).get("maxLatencyMs") or model.get("maxLatencyMs"),
+        **call_limits(assistant),
     )
     if multilingual and plan.tts_provider not in MULTILINGUAL_VOICES:
         plan.warnings.append(f"the {plan.tts_provider} voice speaks one language; to follow callers in several "

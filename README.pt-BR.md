@@ -192,6 +192,14 @@ Cada ligação grava quanto os provedores cobram, a preço de tabela, nos campos
 ainda não entra. Provedor sem preço conhecido aparece em `costBreakdown.unpriced` e fica fora do total. Para
 usar os seus preços, escreva `~/.openring/prices.json` ([formato no README em inglês](README.md#what-a-call-costs)).
 
+### Limites da ligação
+
+A ligação termina sozinha depois de `maxDurationSeconds` (10 minutos por padrão) ou quando quem ligou fica
+`silenceTimeoutSeconds` sem falar (30 segundos por padrão), com o `endedReason` do Vapi; antes, o assistente
+diz o `endCallMessage`. Se a pessoa fica quieta depois que o assistente falou, ele diz uma das
+`messagePlan.idleMessages` ("Você ainda está aí?"), até `idleMessageMaxSpokenCount` vezes. No painel, ficam
+no editor do assistente.
+
 ### Ligações por telefone
 
 O Twilio precisa alcançar o seu servidor por uma URL https pública. No seu computador, abra um túnel
