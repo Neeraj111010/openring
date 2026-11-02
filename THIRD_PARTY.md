@@ -60,6 +60,7 @@ Direct dependencies:
 | [python-multipart](https://github.com/Kludex/python-multipart) | 0.0.32 | Apache-2.0 |
 | [aiortc](https://github.com/aiortc/aiortc) | 1.15 | BSD-3-Clause |
 | [cryptography](https://github.com/pyca/cryptography) | 50.0 | Apache-2.0 or BSD-3-Clause |
+| [pypdf](https://github.com/py-pdf/pypdf) | 6.2 | BSD-3-Clause |
 | [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) (`kokoro` extra) | 0.6 | MIT |
 | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (`whisper` extra, through Pipecat's) | 1.2 | MIT |
 

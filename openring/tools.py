@@ -26,7 +26,7 @@ from . import knowledge, netguard, overrides
 from .store import Store
 
 # Tool types OpenRing runs. Assistants imported with other types still load; those tools are skipped.
-SUPPORTED = ("function", "apiRequest", "endCall", "transferCall", "query")
+SUPPORTED = ("function", "apiRequest", "endCall", "transferCall", "query", "handoff")
 DEFAULT_TIMEOUT = 20  # seconds, like Vapi's server.timeoutSeconds default
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 MAX_RESPONSE_BYTES = 100_000  # what's read of an apiRequest's answer; the rest is never downloaded
@@ -41,8 +41,21 @@ class ToolError(ValueError):
     """A tool definition OpenRing cannot use, or a tool server that failed."""
 
 
+def destination_key(destination: dict[str, Any]) -> str:
+    """What a handoff destination goes by: the assistant's name in a squad, or its id."""
+    inline = destination.get("assistant") if isinstance(destination.get("assistant"), dict) else {}
+    return str(destination.get("assistantName") or inline.get("name") or destination.get("assistantId") or "")
+
+
 def tool_name(tool: dict[str, Any]) -> str:
     """The function name the model sees."""
+    if tool.get("type") == "handoff":
+        if name := (tool.get("function") or {}).get("name"):
+            return str(name)
+        destinations = [d for d in tool.get("destinations") or [] if isinstance(d, dict)]
+        if len(destinations) == 1:  # so each of several handoff tools has a name of its own
+            return ("handoff_to_" + re.sub(r"[^A-Za-z0-9_-]+", "_", destination_key(destinations[0])))[:MAX_NAME_CHARS]
+        return "handoff"
     if tool.get("type") == "function":
         return str((tool.get("function") or {}).get("name") or "")
     if tool.get("type") == "apiRequest":
@@ -113,6 +126,16 @@ def check_tool(tool: dict[str, Any]) -> None:
             raise ToolError("a tool's timeoutSeconds must be a number")
     if kind == "apiRequest":
         _check_api_request(tool)
+    if kind == "handoff":
+        _check_name(tool_name(tool), "a handoff tool's function.name")
+        destinations = tool.get("destinations")
+        if not isinstance(destinations, list) or not destinations:
+            raise ToolError("a handoff tool needs destinations: the assistants it can hand the call to")
+        for destination in destinations:
+            if not isinstance(destination, dict) or destination.get("type", "assistant") != "assistant":
+                raise ToolError("handoff destinations of type 'assistant' only for now")
+            if not destination_key(destination):
+                raise ToolError("a handoff destination needs assistantName, assistantId or assistant")
     if kind == "query":
         _check_name(tool_name(tool), "a query tool's function.name")
         bases = tool.get("knowledgeBases")
@@ -176,6 +199,20 @@ def function_schema(tool: dict[str, Any]) -> dict[str, Any]:
             "description": str(tool.get("description") or (tool.get("function") or {}).get("description") or ""),
             "properties": _fillable(tool),
             "required": [name for name in body.get("required") or [] if name in _fillable(tool)],
+        }
+    if tool["type"] == "handoff":
+        fn = tool.get("function") or {}
+        params = fn.get("parameters") if isinstance(fn.get("parameters"), dict) else {}
+        destinations = tool["destinations"]
+        options = "; ".join(f"{destination_key(d)}: {d.get('description') or 'no description'}" for d in destinations)
+        extra = {k: v for k, v in (params.get("properties") or {}).items() if k != "destination"}
+        return {
+            "name": tool_name(tool),
+            "description": fn.get("description")
+            or f"Hand the caller to another assistant, when they are the right one for this. Options: {options}",
+            "properties": {"destination": {"type": "string", "enum": [destination_key(d) for d in destinations],
+                                           "description": "Who takes over the call."}, **extra},
+            "required": ["destination", *[k for k in params.get("required") or [] if k != "destination"]],
         }
     if tool["type"] == "query":
         fn = tool.get("function") or {}
@@ -425,6 +462,8 @@ class CallControls:
     default_url: str | None
     store: Store | None = None  # where knowledge base files are searched
     messages: Callable[[], list[dict[str, Any]]] = list  # the conversation so far
+    # Moves the call to another assistant; answers why it can't, or None. Only calls with more than one assistant.
+    hand_off: Callable[[dict[str, Any], dict[str, Any], str | None, str], str | None] | None = None
 
 
 def make_handler(tool: dict[str, Any], controls: CallControls):
@@ -497,8 +536,27 @@ def make_handler(tool: dict[str, Any], controls: CallControls):
         message = destination.get("message") or tool_message(tool, "request-start")
         await controls.transfer(destination["number"], message)
 
+    async def hand_off(params) -> None:
+        arguments = _arguments(params.arguments)
+        wanted = str(arguments.pop("destination", "") or "")
+        destinations = tool.get("destinations") or []
+        destination = next((d for d in destinations if destination_key(d) == wanted), None)
+        if destination is None and len(destinations) == 1:
+            destination = destinations[0]
+        if destination is None:
+            await params.result_callback(f"Unknown destination '{wanted}'. Choose one of the listed assistants.")
+            return
+        message = destination.get("message") or tool_message(tool, "request-start")
+        problem = "No other assistant is on this call." if controls.hand_off is None \
+            else controls.hand_off(destination, arguments, message, params.tool_call_id)
+        if problem:
+            await params.result_callback(f"{problem} Carry on with the caller yourself.")
+            return
+        await params.result_callback(f"The call went to {destination_key(destination)}.",
+                                     properties=FunctionCallResultProperties(run_llm=False))
+
     return {"function": run_function, "apiRequest": run_function, "query": run_function, "endCall": end_call,
-            "transferCall": transfer_call}[tool["type"]]
+            "transferCall": transfer_call, "handoff": hand_off}[tool["type"]]
 
 
 def register_tools(llm: Any, tools: list[dict[str, Any]], controls: CallControls) -> Any:
@@ -518,7 +576,7 @@ def register_tools(llm: Any, tools: list[dict[str, Any]], controls: CallControls
         llm.register_function(
             tool_name(tool),
             make_handler(tool, controls),
-            cancel_on_interruption=not tool.get("async") and tool["type"] != "apiRequest",
+            cancel_on_interruption=not tool.get("async") and tool["type"] not in ("apiRequest", "handoff"),
             timeout_secs=timeout,
         )
     return ToolsSchema(standard_tools=schemas)

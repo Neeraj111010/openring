@@ -106,11 +106,15 @@ async def import_account(
         tools = await _list_all(client, base_url, "tool")
         assistants = await _list_all(client, base_url, "assistant")
         numbers = await _list_all(client, base_url, "phone-number")
+        try:
+            squads = await _list_all(client, base_url, "squad")
+        except SourceError:  # not every Vapi-compatible API has squads
+            squads = []
     finally:
         if owned:
             await client.aclose()
 
-    report: dict[str, Any] = {"tools": [], "assistants": [], "phoneNumbers": []}
+    report: dict[str, Any] = {"tools": [], "assistants": [], "squads": [], "phoneNumbers": []}
     tool_ids: dict[str, str] = {}
     for tool in tools:
         doc, created = _upsert(store, "tools", _clean(tool, base_url))
@@ -140,6 +144,21 @@ async def import_account(
         report["assistants"].append({"id": doc["id"], "name": doc.get("name") or "Untitled", "created": created,
                                      "problems": _assistant_problems(doc)})
 
+    # Handoffs name assistants by id, so they can only be pointed at the copies now.
+    for collection in ("tools", "assistants"):
+        for doc in store.list(collection, limit=100_000):
+            if doc.get("importedFrom") and (mapped := _mapped(doc, assistant_ids)) != doc:
+                store.update(collection, doc["id"], mapped)
+    squad_ids: dict[str, str] = {}
+    for squad in squads:
+        clean = _mapped(_clean(squad, base_url), assistant_ids)
+        doc, created = _upsert(store, "squads", clean)
+        squad_ids[str(squad.get("id"))] = doc["id"]
+        missing = [m["assistantId"] for m in doc.get("members") or []
+                   if isinstance(m, dict) and m.get("assistantId") and not store.get("assistants", m["assistantId"])]
+        report["squads"].append({"id": doc["id"], "name": doc.get("name") or "Untitled", "created": created,
+                                 "problems": [f"assistant {m} was not imported" for m in missing]})
+
     for number in numbers:
         provider = str(number.get("provider") or "")
         label = number.get("number") or number.get("sipUri") or number.get("name") or number.get("id")
@@ -152,6 +171,7 @@ async def import_account(
             continue
         clean = _clean(number, base_url)
         clean["assistantId"] = assistant_ids.get(str(number.get("assistantId")))
+        clean["squadId"] = squad_ids.get(str(number.get("squadId")))
         existing = store.find_phone_number(number["number"])
         if existing and existing.get("importedFrom") != clean["importedFrom"]:
             report["phoneNumbers"].append({"number": label, "skipped": "already on this server"})
@@ -159,6 +179,16 @@ async def import_account(
         doc, created = _upsert(store, "phone_numbers", clean)
         report["phoneNumbers"].append({"id": doc["id"], "number": label, "created": created})
     return report
+
+
+def _mapped(value: Any, assistant_ids: dict[str, str]) -> Any:
+    """A document with its `assistantId`s turned into the ids of the copies here."""
+    if isinstance(value, list):
+        return [_mapped(item, assistant_ids) for item in value]
+    if not isinstance(value, dict):
+        return value
+    return {key: assistant_ids.get(str(item), item) if key == "assistantId" else _mapped(item, assistant_ids)
+            for key, item in value.items()}
 
 
 def _tool_label(tool: dict[str, Any]) -> str:

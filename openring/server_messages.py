@@ -130,7 +130,8 @@ async def request_assistant(
 ) -> dict[str, Any]:
     """Ask the phone number's server which assistant answers this call.
 
-    Returns {"assistantId": ...} or {"assistant": {...}} (a transient assistant), as Vapi's servers answer.
+    Returns {"assistantId": ...} or {"assistant": {...}} (a transient assistant), or the same for a squad, as Vapi's
+    servers answer.
     """
     payload = message("assistant-request", call, phoneNumber=phone_number, customer=call.get("customer"))
     where = netguard.safe_url_for_logs(server["url"])  # the detail is logged; the full URL may hold a secret
@@ -152,4 +153,8 @@ async def request_assistant(
         return {"assistantId": str(body["assistantId"])}
     if isinstance(body.get("assistant"), dict):
         return {"assistant": body["assistant"]}
+    if body.get("squadId"):
+        return {"squadId": str(body["squadId"])}
+    if isinstance(body.get("squad"), dict):
+        return {"squad": body["squad"]}
     raise AssistantRequestError("assistant-request-returned-no-assistant", "the answer has no assistantId or assistant")

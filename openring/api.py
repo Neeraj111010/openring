@@ -31,6 +31,7 @@ from . import (
     providers,
     recordings,
     routes,
+    squads,
     stats,
     telnyx,
     twilio,
@@ -99,6 +100,8 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         dialer.resume()
         for assistant in store.list("assistants", limit=10_000):  # their local models load in the background
             providers.prepare_local(assistant)
+        for squad in store.list("squads", limit=10_000):
+            _prepare_squad(squad)
         cleaning = asyncio.create_task(clean_recordings_forever())
         yield
         cleaning.cancel()
@@ -174,6 +177,36 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         """The assistant's stack, with its model route (if any) filled in."""
         return resolve_plan(routes.expand(assistant, lambda route_id: store.get("routes", route_id)), **options)
 
+    def _call_plan(target: dict[str, Any], extra: dict[str, Any] | None = None, customer: dict[str, Any] | None = None,
+                   **options: Any) -> providers.StackPlan:
+        """The stack of a call to a squad or an assistant, with everyone a handoff can reach."""
+        first, *others = squads.cast(target, store, extra, customer)
+        plan = _plan(first, **options)
+        plan.team = [_plan(other, **options) for other in others]
+        return plan
+
+    def _call_target(call: dict[str, Any]) -> dict[str, Any] | None:
+        """Who a call record says should answer: its squad or its assistant."""
+        return (call.get("squad") or store.get("squads", call.get("squadId") or "") or call.get("assistant")
+                or store.get("assistants", call.get("assistantId") or ""))
+
+    def _prepare_squad(squad: dict[str, Any]) -> None:
+        try:
+            for member in squads.cast(squad, store):
+                providers.prepare_local(member)
+        except ProviderError as exc:
+            logger.warning("squad {} can't take calls: {}", squad.get("name") or squad.get("id"), exc)
+
+    def _validate_squad(doc: dict[str, Any]) -> None:
+        if not isinstance(doc.get("members"), list):
+            raise HTTPException(status_code=400, detail="members is required: the assistants of the squad, in a list")
+        try:
+            squads.check(doc, store)
+            for member in squads.cast(doc, store):
+                _validate_assistant(member)
+        except ProviderError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     def _validate_assistant(doc: dict[str, Any], current: dict[str, Any] | None = None) -> None:
         route_id = (doc.get("model") or {}).get("routeId")
         kept = current is not None and route_id == (current.get("model") or {}).get("routeId")
@@ -191,6 +224,10 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
                 raise HTTPException(status_code=400, detail=f"model.toolIds: tool {tool_id} not found")
         for tool in (doc.get("model") or {}).get("tools") or []:
             _check_files(tool)
+            for destination in (tool.get("destinations") or []) if tool.get("type") == "handoff" else []:
+                wanted = destination.get("assistantId")
+                if wanted and not destination.get("assistant") and store.get("assistants", str(wanted)) is None:
+                    raise HTTPException(status_code=400, detail=f"handoff destination: assistant {wanted} not found")
         base_id = (doc.get("model") or {}).get("knowledgeBaseId")
         if base_id and store.get("knowledge_bases", str(base_id)) is None:
             raise HTTPException(status_code=400, detail=f"model.knowledgeBaseId: knowledge base {base_id} not found")
@@ -418,7 +455,41 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
     @app.delete("/assistant/{assistant_id}", dependencies=auth_deps)
     def delete_assistant(assistant_id: str) -> dict[str, Any]:
         _get_or_404("assistants", assistant_id)
+        for squad in store.list("squads", limit=100_000):
+            if any(isinstance(m, dict) and m.get("assistantId") == assistant_id for m in squad.get("members") or []):
+                raise HTTPException(status_code=409, detail=f"squad '{squad.get('name') or squad['id']}' uses this "
+                                                            "assistant: take it out of the squad first")
         return store.delete("assistants", assistant_id)
+
+    # ---- Squads (Vapi's /squad): several assistants on one call ----------------------
+    @app.post("/squad", status_code=201, dependencies=auth_deps)
+    def create_squad(body: dict[str, Any]) -> dict[str, Any]:
+        _validate_squad(body)
+        _prepare_squad(body)
+        return store.create("squads", body)
+
+    @app.get("/squad", dependencies=auth_deps)
+    def list_squads(limit: int = 100) -> list[dict[str, Any]]:
+        return store.list("squads", limit)
+
+    @app.get("/squad/{squad_id}", dependencies=auth_deps)
+    def get_squad(squad_id: str) -> dict[str, Any]:
+        return _get_or_404("squads", squad_id)
+
+    @app.patch("/squad/{squad_id}", dependencies=auth_deps)
+    def update_squad(squad_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        _validate_squad({**_get_or_404("squads", squad_id), **body})
+        _prepare_squad({**store.get("squads", squad_id), **body})
+        return store.update("squads", squad_id, body)
+
+    @app.delete("/squad/{squad_id}", dependencies=auth_deps)
+    def delete_squad(squad_id: str) -> dict[str, Any]:
+        """Numbers it answered go back to having nobody attached."""
+        _get_or_404("squads", squad_id)
+        for number in store.list("phone_numbers", limit=100_000):
+            if number.get("squadId") == squad_id:
+                store.update("phone_numbers", number["id"], {"squadId": None})
+        return store.delete("squads", squad_id)
 
     # ---- Model routes: models in order, shared by assistants (an OpenRing addition, like OmniRoute's combos)
     def _route_doc(body: dict[str, Any], current: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -601,6 +672,8 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
                                                         "(E.164, e.g. +15551234567)")
         if body.get("assistantId"):
             _get_or_404("assistants", body["assistantId"])
+        if body.get("squadId"):
+            _get_or_404("squads", body["squadId"])
         body.setdefault("provider", "twilio")
         return store.create("phone_numbers", body)
 
@@ -620,6 +693,8 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
                                                         "(E.164, e.g. +15551234567)")
         if body.get("assistantId"):
             _get_or_404("assistants", body["assistantId"])
+        if body.get("squadId"):
+            _get_or_404("squads", body["squadId"])
         return store.update("phone_numbers", number_id, body)
 
     @app.delete("/phone-number/{number_id}", dependencies=auth_deps)
@@ -763,17 +838,32 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         """Outbound phone call, Vapi-style: the assistant calls `customer.number` from one of your numbers."""
         number = _outbound_number(str(body.get("phoneNumberId") or ""))
         customer = _customer(body.get("customer"), "customer")
-        transient = body.get("assistant") if isinstance(body.get("assistant"), dict) else None
-        if transient is not None:
-            _validate_assistant(transient)
-            assistant = transient
-        else:
-            assistant = _get_or_404("assistants", str(body.get("assistantId") or number.get("assistantId") or ""))
         extra = overrides.combine(customer.get("assistantOverrides"), body.get("assistantOverrides"))
-        applied = overrides.apply(assistant, extra, customer)
-        _check_outbound(applied)
-        # A transient assistant lives in the call record, as on Vapi.
-        record: dict[str, Any] = {"assistant": transient} if transient is not None else {"assistantId": assistant["id"]}
+        transient = body.get("assistant") if isinstance(body.get("assistant"), dict) else None
+        squad = body.get("squad") if isinstance(body.get("squad"), dict) else None
+        squad_id = body.get("squadId") or (None if transient or body.get("assistantId") or number.get("assistantId")
+                                           else number.get("squadId"))
+        # A transient assistant or squad lives in the call record, as on Vapi.
+        record: dict[str, Any]
+        if squad is not None:
+            _validate_squad(squad)
+            target, record = squad, {"squad": squad}
+        elif squad_id:
+            target = _get_or_404("squads", str(squad_id))
+            record = {"squadId": target["id"]}
+        elif transient is not None:
+            _validate_assistant(transient)
+            target, record = transient, {"assistant": transient}
+        else:
+            target = _get_or_404("assistants", str(body.get("assistantId") or number.get("assistantId") or ""))
+            record = {"assistantId": target["id"]}
+        try:
+            team = squads.cast(target, store, extra, customer)
+        except ProviderError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        applied = team[0]
+        for member in team:
+            _check_outbound(member)
         if extra:
             record["assistantOverrides"] = extra
         try:
@@ -946,15 +1036,16 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
 
         from .bot import run_call, web_transport
 
-        assistant = _get_or_404("assistants", str(body.get("assistantId") or ""))
+        target = _get_or_404("squads", str(body["squadId"])) if body.get("squadId") else \
+            _get_or_404("assistants", str(body.get("assistantId") or ""))
         if not body.get("sdp"):
             raise HTTPException(status_code=400, detail="sdp is required: the browser's WebRTC offer")
         # Variables have no caller to fill them here; they say nothing rather than "{{customer.name}}".
-        assistant = overrides.apply(assistant, body.get("assistantOverrides"))
-        if overrides.changes_assistant(body.get("assistantOverrides")):
-            _validate_assistant(assistant)
         try:
-            plan = _plan(assistant)
+            if overrides.changes_assistant(body.get("assistantOverrides")):
+                for member in squads.cast(target, store, body.get("assistantOverrides")):
+                    _validate_assistant(member)
+            plan = _call_plan(target, body.get("assistantOverrides"))
         except ProviderError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         connection = SmallWebRTCConnection()
@@ -964,7 +1055,8 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             raise HTTPException(status_code=400, detail=f"invalid WebRTC offer: {exc}") from exc
         call = store.create(
             "calls",
-            {"type": "webCall", "status": "in-progress", "startedAt": now_iso(), "assistantId": assistant["id"]},
+            {"type": "webCall", "status": "in-progress", "startedAt": now_iso(),
+             "squadId" if squads.is_squad(target) else "assistantId": target["id"]},
         )
         task = asyncio.create_task(run_call(web_transport(connection), plan=plan, call_id=call["id"], store=store))
         web_calls.add(task)
@@ -998,9 +1090,11 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         """Record an incoming call and pick its assistant. Returns the call, or what to tell the caller."""
         number = store.find_phone_number(called)
         assistant_id = (number or {}).get("assistantId")
-        ask = server_of(number) if number and not assistant_id else None
-        assistant_id = assistant_id or (None if ask else settings.default_assistant_id)
-        if not ask and (not assistant_id or store.get("assistants", assistant_id) is None):
+        squad_id = None if assistant_id else (number or {}).get("squadId")
+        ask = server_of(number) if number and not assistant_id and not squad_id else None
+        assistant_id = assistant_id or (None if ask or squad_id else settings.default_assistant_id)
+        answers = store.get("squads", squad_id) if squad_id else store.get("assistants", assistant_id or "")
+        if not ask and answers is None:
             return "No assistant is attached to this number."
 
         call = store.create(
@@ -1008,7 +1102,7 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
             {
                 "type": "inboundPhoneCall",
                 "status": "queued",
-                "assistantId": assistant_id,
+                "squadId" if squad_id else "assistantId": squad_id or assistant_id,
                 "phoneNumberId": (number or {}).get("id"),
                 "customer": {"number": caller},
                 "phoneCallProvider": provider,
@@ -1021,8 +1115,13 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
                 if "assistantId" in answer and store.get("assistants", answer["assistantId"]) is None:
                     raise AssistantRequestError("assistant-request-returned-unknown-assistant",
                                                 f"assistant {answer['assistantId']} not found")
+                if "squadId" in answer and store.get("squads", answer["squadId"]) is None:
+                    raise AssistantRequestError("assistant-request-returned-unknown-assistant",
+                                                f"squad {answer['squadId']} not found")
                 if "assistant" in answer:
                     _validate_assistant(answer["assistant"])
+                if "squad" in answer:
+                    _validate_squad(answer["squad"])
             except (AssistantRequestError, HTTPException) as exc:
                 reason = getattr(exc, "ended_reason", "assistant-request-returned-invalid-assistant")
                 logger.warning("call {}: assistant-request to {} failed: {}", call["id"],
@@ -1031,14 +1130,17 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
                 return "Sorry, this line cannot take calls right now."
             call = store.update("calls", call["id"], answer)
         logger.info("{} call {} from {} to {}; streaming it to {}", provider, call["id"], caller, called,
-                    call.get("assistantId") or "a transient assistant")
+                    call.get("assistantId") or call.get("squadId") or "a transient assistant")
         return call
 
     def left_on_voicemail(call: dict[str, Any], answered_by: str) -> str | None:
         """A machine answered an outbound call. The TwiML that ends the call: a recording, or just hanging up.
         None when the assistant has a sentence to leave: the call goes on to it, with `answeredBy` on the record."""
-        assistant = call.get("assistant") or store.get("assistants", call.get("assistantId") or "") or {}
-        assistant = overrides.apply(assistant, call.get("assistantOverrides"), call.get("customer"))
+        try:
+            assistant = squads.cast(_call_target(call) or {}, store, call.get("assistantOverrides"),
+                                    call.get("customer"))[0]
+        except ProviderError:  # nobody left to answer: hang up
+            assistant = {}
         message = str(assistant.get("voicemailMessage") or "").strip()
         logger.info("call {}: answered by {}", call["id"], answered_by)
         if message and answered_by != "fax" and not twilio.is_recording(message):
@@ -1131,22 +1233,21 @@ def create_app(settings: Settings | None = None, store: Store | None = None) -> 
         call_id = call["id"]
         logger.info("call {} media stream connected", call_id)
         # The assistant comes from the call record, never from the stream's parameters.
-        assistant = call.get("assistant") or store.get("assistants", call.get("assistantId") or "")
-        if assistant is None:
+        target = _call_target(call)
+        if target is None:
             store.update("calls", call_id, {"status": "ended", "endedReason": "assistant-not-found"})
             await refuse("the call's assistant was deleted")
             return
         # This call's overrides and variables: a campaign's `{{customer.name}}`, an assistant-request's changes.
-        assistant = overrides.apply(assistant, call.get("assistantOverrides"), call.get("customer"))
         try:
-            plan = _plan(assistant)
+            plan = _call_plan(target, call.get("assistantOverrides"), call.get("customer"))
         except ProviderError as exc:
             logger.error("call {} cannot start: {}", call_id, exc)
             store.update("calls", call_id, {"status": "ended", "endedReason": f"provider-error: {exc}"})
             await refuse(str(exc))
             return
         if call.get("answeredBy"):  # a voicemail answered (see left_on_voicemail): leave the message and hang up
-            plan.first_message, plan.leave_message = assistant.get("voicemailMessage"), True
+            plan.first_message, plan.leave_message = plan.assistant.get("voicemailMessage"), True
         await run_call(build(), plan=plan, call_id=call_id, store=store, sample_rate=PHONE_SAMPLE_RATE,
                        transfer=transfer)
 

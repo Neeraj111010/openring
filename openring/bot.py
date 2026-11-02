@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import WebSocket
 from loguru import logger
 
-from . import prices, recordings, routes, server_messages
+from . import overrides, prices, recordings, routes, server_messages, squads
 from .config import Settings
 from .providers import StackPlan, build_services
 from .store import Store, now_iso
@@ -212,6 +212,17 @@ def transcript_messages(messages: list[Any]) -> list[dict[str, Any]]:
     return transcript
 
 
+def opening(plan: StackPlan) -> str | None:
+    """What an assistant does on taking a call, by Vapi's `firstMessageMode`: "speak" its first message, "generate"
+    one with the model, or None to wait for the caller."""
+    mode = plan.assistant.get("firstMessageMode")
+    if mode == "assistant-waits-for-user":
+        return None
+    if plan.first_message and mode != "assistant-speaks-first-with-model-generated-message":
+        return "speak"
+    return "generate"
+
+
 def _plain(content: Any) -> Any:
     """Pipecat stores a text result JSON-encoded ('"Booked"'); keep the text itself."""
     if isinstance(content, str):
@@ -355,7 +366,7 @@ async def run_call(
     from pipecat.pipeline.service_switcher import ServiceSwitcher
     from pipecat.pipeline.task import PipelineParams, PipelineTask
     from pipecat.pipeline.worker import ProcessorUnusablePolicy
-    from pipecat.processors.aggregators.llm_context import LLMContext
+    from pipecat.processors.aggregators.llm_context import NOT_GIVEN, LLMContext
     from pipecat.processors.aggregators.llm_response_universal import (
         LLMContextAggregatorPair,
         LLMUserAggregatorParams,
@@ -376,6 +387,13 @@ async def run_call(
     recorder = recordings.Recorder(call_id) if plan.record else None
     recording = None
     recording_over = asyncio.Event()
+    team = [plan, *plan.team]  # everyone on this call; the first answers it
+    who = {"plan": plan}  # whose turn it is
+    handoffs: list[dict[str, str]] = []
+    said_before: list[dict[str, Any]] = []  # the conversation with the assistants before the current one
+    inherited = 0  # how much of the current assistant's context came from them
+    variables: dict[str, Any] = {}  # what handoffs added to the call's variables
+    handing_off: set[asyncio.Task] = set()
     outbox = server_messages.Outbox(plan.assistant, lambda: store.get("calls", call_id))
     # The setup runs inside the try as well, so the call record ends however the call does: a caller
     # who hangs up while the services are still being built, or a provider that fails to start.
@@ -404,7 +422,7 @@ async def run_call(
                     why["model"] = ""
                     logger.warning("call {}: model slow ({:.1f} s) and no faster one left", call_id, seconds)
 
-            watch = fallback.model_watch(plan.max_latency_ms, too_slow)
+            watch = fallback.model_watch(lambda: who["plan"].max_latency_ms, too_slow)
 
         def watch_fallback(layer: str, service: Any) -> None:
             """Record each provider that takes over; a new model answers the turn the failed one dropped."""
@@ -413,14 +431,18 @@ async def run_call(
             current = {"service": service.strategy.active_service}
 
             @service.strategy.event_handler("on_service_switched")
-            async def _switched(_strategy, active):
+            async def _switched(strategy, active):
+                if getattr(strategy, "entered", None) is active:  # a handoff, not a failure
+                    strategy.entered = None
+                    current["service"] = active
+                    return
                 to = getattr(active, "openring_label", active.name)
                 reason, why[layer] = why.get(layer) or "failed", ""
                 switches.append({"layer": layer, "to": to, "at": now_iso(), "reason": reason})
                 logger.warning("call {}: {} switched to {} ({})", call_id, layer, to, reason)
                 left, current["service"] = current["service"], active
                 if layer == "model":
-                    routes.let_down(plan.route, left)  # so the next calls start on the next model
+                    routes.let_down(who["plan"].route, left)  # so the next calls start on the next model
                     if watch is not None:
                         await watch.replaced(left)
                     await task.queue_frames([LLMRunFrame()])
@@ -466,18 +488,86 @@ async def run_call(
                 ended_reason, transfer_until = CALLER_ENDED, 0.0
                 raise
 
+        def conversation() -> list[dict[str, Any]]:
+            """Everything said on this call, whatever each assistant was given of it."""
+            messages = [m for m in context.get_messages() if isinstance(m, dict)]
+            prompt = sum(m.get("role") == "system" for m in messages)
+            return [*said_before, *messages[prompt + inherited:]]
 
-        controls = CallControls(
-            speak=speak,
-            end_call=end_call,
-            transfer=transfer_to if transfer else None,
-            current_call=lambda: store.get("calls", call_id),
-            assistant=plan.assistant,
-            default_url=plan.server_url,
-            store=store,
-            messages=lambda: [m for m in context.get_messages() if isinstance(m, dict)],
-        )
-        tools = register_tools(llm, assistant_tools(plan.assistant, store), controls)
+        def hand_off(destination: dict[str, Any], arguments: dict[str, Any], message: str | None,
+                     tool_call_id: str) -> str | None:
+            """Move the call to another assistant, once this one has finished talking. Says why it can't, or None."""
+            position = squads.find(team, destination)
+            if position is None:
+                return "That assistant is not on this call."
+            if team[position] is who["plan"]:
+                return "You already are that assistant."
+            if len(handoffs) >= squads.MAX_HANDOFFS:
+                return "This call has been handed off too many times."
+            moving = asyncio.ensure_future(finish_hand_off(position, destination, arguments, message, tool_call_id))
+            handing_off.add(moving)
+            moving.add_done_callback(handing_off.discard)
+            return None
+
+        async def finish_hand_off(position: int, destination: dict[str, Any], arguments: dict[str, Any],
+                                  message: str | None, tool_call_id: str) -> None:
+            nonlocal said_before, inherited
+            target = team[position]
+            try:
+                if message:
+                    await speak(message)
+                await wait_until_quiet(expect_speech=bool(message))
+                for layer in (stt, llm, tts):
+                    if isinstance(layer, ServiceSwitcher) and hasattr(layer.strategy, "enter"):
+                        await layer.strategy.enter(position)
+                given = (destination.get("assistantOverrides") or {}).get("variableValues")
+                variables.update(arguments, **(given if isinstance(given, dict) else {}))
+                values = {**overrides.call_context(store.get("calls", call_id)), **variables}
+                everything = conversation()
+                kept = squads.carry_over(
+                    [m for m in context.get_messages() if isinstance(m, dict) and m.get("role") != "system"],
+                    said_before, destination.get("contextEngineeringPlan"), tool_call_id,
+                )
+                prompt = [{**m, "content": overrides.fill(m["content"], values)} for m in target.messages]
+                # The new assistant gets its own prompt, tools and voice, and the part of the conversation it should.
+                said_before, inherited = everything, len(kept)
+                context.set_messages([*prompt, *kept])
+                context.set_tools(schemas[position] or NOT_GIVEN)
+                came_from = who["plan"]
+                who["plan"] = target
+                handoffs.append({"from": squads.name_of(came_from.assistant), "to": squads.name_of(target.assistant),
+                                 "at": now_iso()})
+                logger.info("call {}: {} handed off to {}", call_id, handoffs[-1]["from"], handoffs[-1]["to"])
+                how = opening(target)
+                first = overrides.fill(target.first_message or "", values)
+                if how == "speak" and first:
+                    context.add_message({"role": "assistant", "content": first})
+                    await speak(first)
+                elif how:
+                    await task.queue_frames([LLMRunFrame()])
+            except Exception:  # the caller stays on the line with whoever has them
+                logger.exception("call {}: handoff failed", call_id)
+
+        schemas: list[Any] = []
+        for position, member in enumerate(team):
+            controls = CallControls(
+                speak=speak,
+                end_call=end_call,
+                transfer=transfer_to if transfer else None,
+                current_call=lambda: store.get("calls", call_id),
+                assistant=member.assistant,
+                default_url=member.server_url or plan.server_url,
+                store=store,
+                messages=lambda: [m for m in context.get_messages() if isinstance(m, dict)],
+                hand_off=hand_off if plan.team else None,
+            )
+            groups = getattr(getattr(llm, "strategy", None), "groups", None)
+            schema = None
+            # A model with fallbacks registers on all of them; on a team, each assistant's model gets its own tools.
+            for model_service in (groups[position] if groups else [llm]):
+                schema = register_tools(model_service, assistant_tools(member.assistant, store), controls)
+            schemas.append(schema)
+        tools = schemas[0]
         context = LLMContext(messages=list(plan.messages), **({"tools": tools} if tools else {}))
         aggregators = LLMContextAggregatorPair(
             context, user_params=LLMUserAggregatorParams(
@@ -591,8 +681,8 @@ async def run_call(
             if ended_reason == CALLER_ENDED:  # a call already ending for another reason keeps that reason
                 ended_reason = reason
                 logger.info("call {} ending: {}", call_id, reason)
-                if plan.end_call_message:
-                    await speak(plan.end_call_message)
+                if who["plan"].end_call_message:
+                    await speak(who["plan"].end_call_message)
                 await task.queue_frames([EndFrame()])  # after whatever is still being said
             await asyncio.sleep(END_GRACE_SECONDS)
             logger.warning("call {}: not finished {} s after {}; cutting it off", call_id, END_GRACE_SECONDS, reason)
@@ -616,7 +706,7 @@ async def run_call(
             limits = CallLimits(plan.max_duration_seconds, plan.silence_timeout_seconds, time.monotonic())
             watching = asyncio.ensure_future(watch_limits())
             outbox.send("status-update", status="in-progress")
-            if plan.first_message:
+            if plan.leave_message or opening(plan) == "speak":
                 # In the context (and transcript) right away, even if the voice fails to say it.
                 context.add_message({"role": "assistant", "content": plan.first_message})
                 greeting = TTSSpeakFrame(plan.first_message, append_to_context=False)
@@ -624,7 +714,7 @@ async def run_call(
                     greeting.interruptible = False
                     ended_reason = "voicemail"
                 await task.queue_frames([greeting, *([EndFrame()] if plan.leave_message else [])])
-            else:
+            elif opening(plan):
                 await task.queue_frames([LLMRunFrame()])
 
         @transport.event_handler("on_client_disconnected")
@@ -633,17 +723,16 @@ async def run_call(
 
         @aggregators.assistant().event_handler("on_assistant_turn_stopped")
         async def _conversation_update(_aggregator, _message):
-            messages = [m for m in context.get_messages() if isinstance(m, dict)]
+            messages = conversation()
             outbox.send("conversation-update", messages=transcript_messages(messages), messagesOpenAIFormatted=messages)
 
-        if plan.end_call_phrases:
-            phrases = [p.lower() for p in plan.end_call_phrases]
+        if any(member.end_call_phrases for member in team):
 
             @aggregators.assistant().event_handler("on_assistant_turn_stopped")
             async def _maybe_hang_up(_aggregator, message):
                 nonlocal ended_reason
                 text = str(getattr(message, "content", message) or "").lower()
-                if any(p in text for p in phrases):
+                if any(p.lower() in text for p in who["plan"].end_call_phrases):
                     ended_reason = "assistant-said-end-call-phrase"
                     await task.queue_frames([EndFrame()])
 
@@ -654,7 +743,9 @@ async def run_call(
     finally:
         if watching is not None:
             watching.cancel()
-        transcript = transcript_messages(context.get_messages()) if context is not None else []
+        for moving in list(handing_off):
+            moving.cancel()
+        transcript = transcript_messages(conversation()) if context is not None else []
         breakdown = usage.cost_breakdown(services)
         routes.save_speed(store)
         recorded = False
@@ -684,6 +775,7 @@ async def run_call(
                 "cost": breakdown["total"],
                 "costBreakdown": breakdown,
                 **({"providerFallbacks": switches} if switches else {}),
+                **({"handoffs": handoffs} if handoffs else {}),
             },
         )
         if call:

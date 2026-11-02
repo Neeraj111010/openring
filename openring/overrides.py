@@ -20,18 +20,23 @@ def _merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _lookup(context: dict[str, Any], path: str) -> str:
+def _lookup(context: dict[str, Any], path: str) -> str | None:
     value: Any = context
     for part in path.split("."):
         if not isinstance(value, dict) or part not in value:
-            return ""  # as on Vapi, an unknown variable says nothing rather than "{{name}}"
+            return None
         value = value[part]
     return "" if value is None or isinstance(value, (dict, list)) else str(value)
 
 
-def fill(text: str, context: dict[str, Any], encode: Callable[[str], str] = str) -> str:
-    """The text with its variables' values in; `encode` makes a value safe where it lands (in a URL, say)."""
-    return VARIABLE.sub(lambda m: encode(_lookup(context, m.group(1))), text)
+def fill(text: str, context: dict[str, Any], encode: Callable[[str], str] = str, *, keep_unknown: bool = False) -> str:
+    """The text with its variables' values in; `encode` makes a value safe where it lands (in a URL, say). As on Vapi,
+    an unknown variable says nothing rather than "{{name}}", unless `keep_unknown` leaves it for later."""
+    def value(match: re.Match) -> str:
+        found = _lookup(context, match.group(1))
+        return match.group(0) if found is None and keep_unknown else encode(found or "")
+
+    return VARIABLE.sub(value, text)
 
 
 def call_context(call: dict[str, Any] | None) -> dict[str, Any]:
@@ -57,25 +62,35 @@ def changes_assistant(overrides: dict[str, Any] | None) -> bool:
 
 
 def apply(
-    assistant: dict[str, Any], overrides: dict[str, Any] | None = None, customer: dict[str, Any] | None = None
+    assistant: dict[str, Any], overrides: dict[str, Any] | None = None, customer: dict[str, Any] | None = None,
+    *, keep_unknown: bool = False,
 ) -> dict[str, Any]:
-    """The assistant for one call: the overrides merged in, and its variables filled."""
+    """The assistant for one call: the overrides merged in, and its variables filled. `keep_unknown` leaves the ones
+    with no value yet, for an assistant a handoff reaches later."""
     overrides = dict(overrides or {})
     values = overrides.pop("variableValues", None)
+    added = overrides.pop("tools:append", None)
     out = _merge(assistant, overrides)
+    if isinstance(added, list):  # Vapi's way to add tools without repeating the assistant's
+        model = out.get("model") if isinstance(out.get("model"), dict) else {}
+        out["model"] = {**model, "tools": [*(model.get("tools") or []), *added]}
     context = {**(values if isinstance(values, dict) else {}), "customer": customer or {}}
+
+    def filled(text: str) -> str:
+        return fill(text, context, keep_unknown=keep_unknown)
+
     for key in TEXT_FIELDS:
         if isinstance(out.get(key), str):
-            out[key] = fill(out[key], context)
+            out[key] = filled(out[key])
     model = out.get("model")
     if isinstance(model, dict) and isinstance(model.get("messages"), list):
         out["model"] = {**model, "messages": [
-            {**m, "content": fill(m["content"], context)} if isinstance(m, dict) and isinstance(m.get("content"), str)
+            {**m, "content": filled(m["content"])} if isinstance(m, dict) and isinstance(m.get("content"), str)
             else m
             for m in model["messages"]
         ]}
     plan = out.get("messagePlan")
     if isinstance(plan, dict) and isinstance(plan.get("idleMessages"), list):
-        out["messagePlan"] = {**plan, "idleMessages": [fill(m, context) if isinstance(m, str) else m
+        out["messagePlan"] = {**plan, "idleMessages": [filled(m) if isinstance(m, str) else m
                                                        for m in plan["idleMessages"]]}
     return out

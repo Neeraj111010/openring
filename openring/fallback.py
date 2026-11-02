@@ -33,31 +33,49 @@ class Failover(ServiceSwitcherStrategyManual):
     def __init__(self, services: list[Any]):
         super().__init__(services)
         self._failed: set[int] = set()
+        # On a call with several assistants: each one's providers, in order, and whose turn it is.
+        self.groups: list[list[Any]] | None = None
+        self.group = 0
+        self.entered: Any = None  # the provider a handoff is switching to: that switch is no failure
+
+    def _next(self, *, any_group: bool) -> Any:
+        own = self.groups[self.group] if self.groups else self.services
+        for candidate in [*own, *(self.services if any_group else [])]:
+            if id(candidate) not in self._failed and candidate.is_usable:
+                return candidate
+        return None
 
     async def handle_error(self, error: Any) -> Any:
         failed = error.processor or self.active_service
         if failed.is_usable and error.category not in SWITCH_ON:
             return None  # a hiccup the provider carries on from
         self._failed.add(id(failed))
-        for candidate in self.services:
-            if id(candidate) not in self._failed and candidate.is_usable:
-                return await self._set_active_if_available(candidate)
-        return None  # nothing left to switch to: the error goes on as usual
+        # Past this assistant's own providers, another assistant's voice beats leaving the caller in silence.
+        candidate = self._next(any_group=True)
+        return await self._set_active_if_available(candidate) if candidate else None
 
     async def skip(self, service: Any) -> Any:
-        """Leave `service` (too slow, say) for the next usable one. None when there is none."""
+        """Leave `service` (too slow, say) for this assistant's next usable one. None when there is none."""
         self._failed.add(id(service))
-        for candidate in self.services:
-            if id(candidate) not in self._failed and candidate.is_usable:
-                return await self._set_active_if_available(candidate)
-        return None
+        candidate = self._next(any_group=False)
+        return await self._set_active_if_available(candidate) if candidate else None
+
+    async def enter(self, group: int) -> None:
+        """A handoff: on to the next assistant's first provider that still works."""
+        self.group = group
+        candidate = self._next(any_group=True)
+        if candidate is not None and candidate is not self.active_service:
+            self.entered = candidate
+            await self._set_active_if_available(candidate)
 
 
-def model_watch(max_latency_ms: int | None, on_slow: Callable[[float], Awaitable[None]]) -> Any:
+def model_watch(
+    max_latency_ms: int | None | Callable[[], int | None], on_slow: Callable[[float], Awaitable[None]]
+) -> Any:
     """A processor for right after a model switcher. When the switcher replaces a model, `replaced(old)` stops
     the old one and cleans up after it (Pipecat's switcher gates what goes into an inactive service, not what
     comes out), so the caller hears one answer and it reaches the transcript. With `max_latency_ms` it calls
-    `on_slow(seconds)` when a model takes longer than that to start answering."""
+    `on_slow(seconds)` when a model takes longer than that to start answering (a function: the limit right now)."""
     from pipecat.frames.frames import (
         FunctionCallInProgressFrame,
         FunctionCallsStartedFrame,
@@ -85,8 +103,9 @@ def model_watch(max_latency_ms: int | None, on_slow: Callable[[float], Awaitable
                 self._stale = False
                 self._open += 1
                 await self._disarm()
-                if max_latency_ms:
-                    self._timer = self.create_task(self._wait(), name="slow-model")
+                limit = max_latency_ms() if callable(max_latency_ms) else max_latency_ms
+                if limit:
+                    self._timer = self.create_task(self._wait(limit), name="slow-model")
             elif isinstance(frame, (LLMTextFrame, FunctionCallsStartedFrame, InterruptionFrame)):
                 await self._disarm()  # the model is answering, or the caller interrupted
             elif isinstance(frame, LLMFullResponseEndFrame):
@@ -94,9 +113,9 @@ def model_watch(max_latency_ms: int | None, on_slow: Callable[[float], Awaitable
                 await self._disarm()
             await self.push_frame(frame, direction)
 
-        async def _wait(self) -> None:
+        async def _wait(self, limit: int) -> None:
             started = time.monotonic()
-            await asyncio.sleep(max_latency_ms / 1000)
+            await asyncio.sleep(limit / 1000)
             self._timer = None
             await on_slow(time.monotonic() - started)
 

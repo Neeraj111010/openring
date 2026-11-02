@@ -314,6 +314,8 @@ class StackPlan:
     record: bool = False
     # Settings for the words the transcriber should listen for (`stt_words`).
     stt_words: dict[str, Any] = field(default_factory=dict)
+    # The other assistants a handoff can reach on this call (squads.py).
+    team: list[StackPlan] = field(default_factory=list)
 
 
 def _require_key(env_name: str | None, what: str) -> None:
@@ -704,6 +706,8 @@ def _llm_headers(provider: str) -> dict[str, str] | None:
 def build_services(plan: StackPlan):
     """Instantiate Pipecat STT, LLM and TTS services for a call. A layer with fallbacks becomes one switcher
     that runs the first provider and moves to the next when it fails (see `fallback.py`)."""
+    if plan.team:
+        return _build_team(plan)
     stt = _labeled(_build_stt(plan), "transcriber", plan)
     llm = _labeled(_build_llm(plan), "model", plan)
     tts = _labeled(_build_tts(plan), "voice", plan)
@@ -718,6 +722,38 @@ def build_services(plan: StackPlan):
         services = [service, *(_labeled(build(alt), layer, alt) for alt in alternatives)]
         built[layer] = fallback.switcher(services, llm=layer == "model") if alternatives else service
     return built["transcriber"], built["model"], built["voice"]
+
+
+def _build_team(plan: StackPlan):
+    """The services of everyone on the call: one switcher per layer, with each assistant's providers as a group. They
+    share a transcriber or a voice they have in common. Each has a model of its own, for its own tools."""
+    from . import fallback
+
+    def stt_key(p: StackPlan) -> Any:
+        return p.stt_provider, p.stt_model, p.stt_language, str(sorted(p.stt_words.items()))
+
+    def tts_key(p: StackPlan) -> Any:
+        return p.tts_provider, p.tts_voice, p.tts_model, p.tts_language
+
+    built = []
+    layers = (("transcriber", _build_stt, stt_key), ("model", _build_llm, id), ("voice", _build_tts, tts_key))
+    for layer, build, key in layers:
+        services: dict[Any, Any] = {}
+        groups = []
+        for member in (plan, *plan.team):
+            group = []
+            for option in (member, *member.fallbacks.get(layer, [])):
+                if key(option) not in services:
+                    services[key(option)] = _labeled(build(option), layer, option)
+                group.append(services[key(option)])
+            groups.append(group)
+        if len(services) == 1:
+            built.append(next(iter(services.values())))
+        else:
+            switcher = fallback.switcher(list(services.values()), llm=layer == "model")
+            switcher.strategy.groups = groups
+            built.append(switcher)
+    return tuple(built)
 
 
 def label(layer: str, plan: StackPlan) -> str:
