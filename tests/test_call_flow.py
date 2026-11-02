@@ -1,8 +1,8 @@
 """End-to-end call lifecycle over a simulated Twilio media stream.
 
-Providers point at fake keys, so they fail to connect; the test checks that the
-call is still tracked from start to finish and the transcript is saved. The other
-tests swap the pipeline for a stub to check which media streams are accepted.
+The providers are stubs (`quiet_providers`), so tests stay off the network; they check that the
+call is tracked from start to finish and the transcript is saved. Other tests swap the
+whole pipeline for a stub to check which media streams are accepted.
 """
 
 import asyncio
@@ -83,7 +83,7 @@ def _pipeline_started(monkeypatch):
     return sent
 
 
-def test_call_lifecycle(monkeypatch):
+def test_call_lifecycle(monkeypatch, quiet_providers):
     sent = _pipeline_started(monkeypatch)
     client, store, params = _answered_call(monkeypatch)
 
@@ -151,8 +151,17 @@ def _wait_until_ended(store, call_id, seconds=20):
     return call
 
 
-def test_caller_who_hangs_up_at_once_ends_the_call(monkeypatch):
+def test_caller_who_hangs_up_at_once_ends_the_call(monkeypatch, quiet_providers):
     """Hanging up while the services are still being built used to leave the call 'in-progress' for good."""
+    from openring import bot
+
+    built = bot.build_services
+
+    def slow(plan):
+        time.sleep(0.5)  # a local voice model takes a moment to load
+        return built(plan)
+
+    monkeypatch.setattr(bot, "build_services", slow)
     _pipeline_started(monkeypatch)
     client, store, params = _answered_call(monkeypatch)
     with client.websocket_connect("/ws/twilio") as ws:
@@ -162,7 +171,7 @@ def test_caller_who_hangs_up_at_once_ends_the_call(monkeypatch):
     assert (call["status"], call["endedReason"]) == ("ended", "customer-ended-call")
 
 
-def test_a_provider_that_stops_working_mid_call_ends_the_call_with_the_reason(monkeypatch):
+def test_a_provider_that_stops_working_mid_call_ends_the_call_with_the_reason(monkeypatch, quiet_providers):
     """A rejected key (or no credit, or an outage) left the caller in silence until they hung up, and the call was
     recorded as 'customer-ended-call', a success."""
     from pipecat.frames.frames import StartFrame
@@ -180,8 +189,8 @@ def test_a_provider_that_stops_working_mid_call_ends_the_call_with_the_reason(mo
             if isinstance(frame, StartFrame):  # as Deepgram answers a bad key: right when the call starts
                 await self.push_error("HTTP 401 (bad.py:12): Invalid credentials", force_treat_as_permanent=True)
 
-    real = bot.build_services
-    monkeypatch.setattr(bot, "build_services", lambda plan: (RejectedTranscriber(), *real(plan)[1:]))
+    quiet = quiet_providers
+    monkeypatch.setattr(bot, "build_services", lambda plan: (RejectedTranscriber(), quiet("model"), quiet("voice")))
     _pipeline_started(monkeypatch)
     client, store, params = _answered_call(monkeypatch)
     with client.websocket_connect("/ws/twilio") as ws:
@@ -213,26 +222,13 @@ def test_a_provider_that_fails_to_start_ends_the_call(monkeypatch):
 
 
 @pytest.mark.parametrize("limits, reason", [((600, 1.0), "silence-timed-out"), ((1.0, 0), "exceeded-max-duration")])
-def test_a_call_ends_itself_when_the_caller_is_silent_or_it_runs_too_long(monkeypatch, limits, reason):
+def test_a_call_ends_itself_when_the_caller_is_silent_or_it_runs_too_long(monkeypatch, quiet_providers, limits, reason):
     """Vapi's silenceTimeoutSeconds and maxDurationSeconds: the call hangs up by itself, with Vapi's endedReason
     (made a second long here; the dashboard and the API keep them at 10 s or more)."""
-    from pipecat.processors.frame_processor import FrameProcessor
-
     from openring import bot
-
-    class Quiet(FrameProcessor):  # a provider that passes everything along: nobody ever speaks
-        def __init__(self, layer):
-            super().__init__()
-            self.openring_label = layer
-            self.openring_price = (layer, "none", None, None)
-
-        async def process_frame(self, frame, direction):
-            await super().process_frame(frame, direction)
-            await self.push_frame(frame, direction)
 
     real = bot.CallLimits
     monkeypatch.setattr(bot, "CallLimits", lambda _duration, _silence, now: real(*limits, now))
-    monkeypatch.setattr(bot, "build_services", lambda plan: (Quiet("transcriber"), Quiet("model"), Quiet("voice")))
     _pipeline_started(monkeypatch)
     client, store, params = _answered_call(monkeypatch)
     started = time.monotonic()

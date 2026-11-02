@@ -280,7 +280,8 @@ n8n, Make or Zapier webhook, your CRM's API. There's no Vapi envelope, and the m
               {"type": "request-failed", "role": "system", "content": "Apologize, and don't promise it was booked."}]}
 ```
 
-The URL, the headers and `parameters` are yours, not the model's, and `parameters` win over what it fills in. They
+The URL, the headers and `parameters` are yours, not the model's, and `parameters` win over what it fills in: it can
+only send the fields `body` declares, and a field with a `value` is fixed and hidden from it. They
 can use `{{variables}}`, though not in the URL's host and not Liquid filters; a GET or DELETE carries the values
 in its query. Vapi's `credentialId` isn't available: the key goes in `headers`, which stay on your server. A non-2xx
 answer counts as a failure, and nothing is retried or redirected, so a booking isn't sent twice. Link-local and

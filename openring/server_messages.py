@@ -15,6 +15,7 @@ import httpx
 from loguru import logger
 
 from . import netguard
+from .tools import without_secrets
 
 # What Vapi sends when the assistant doesn't list `serverMessages`. OpenRing sends these three of them;
 # tool-calls go to each tool's server (see tools.py).
@@ -50,7 +51,7 @@ def _headers(server: dict[str, Any]) -> dict[str, str]:
 
 
 def message(kind: str, call: dict[str, Any] | None, **fields: Any) -> dict[str, Any]:
-    return {"message": {"type": kind, "timestamp": int(time.time() * 1000), "call": call, **fields}}
+    return {"message": {"type": kind, "timestamp": int(time.time() * 1000), "call": without_secrets(call), **fields}}
 
 
 async def post(server: dict[str, Any], payload: dict[str, Any], *, timeout: float | None = None,

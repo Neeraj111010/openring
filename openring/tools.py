@@ -17,7 +17,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import httpx
 from loguru import logger
@@ -31,6 +31,10 @@ DEFAULT_TIMEOUT = 20  # seconds, like Vapi's server.timeoutSeconds default
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 MAX_RESPONSE_BYTES = 100_000  # what's read of an apiRequest's answer; the rest is never downloaded
 MAX_RESULT_CHARS = 4_000  # what the model reads of it: every word costs tokens, on every turn after
+MAX_NAME_CHARS = 64  # what model APIs accept for a tool's name
+HEADER_NAME = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
+# What a tool's server or a webhook has no need to see of an assistant: other tools' keys and addresses, its own.
+PRIVATE_FIELDS = {"headers", "secret", "credentials", "credentialId", "credentialIds", "url", "server", "value"}
 
 
 class ToolError(ValueError):
@@ -51,6 +55,8 @@ def _check_name(name: str, where: str) -> None:
         raise ToolError(f"{where} is required")
     if not name.replace("_", "").replace("-", "").isalnum():
         raise ToolError(f"{where} may only have letters, digits, '_' and '-'")
+    if len(name) > MAX_NAME_CHARS:
+        raise ToolError(f"{where} has at most {MAX_NAME_CHARS} characters")
 
 
 def _check_api_request(tool: dict[str, Any]) -> None:
@@ -62,7 +68,10 @@ def _check_api_request(tool: dict[str, Any]) -> None:
     if str(tool.get("method") or "").upper() not in METHODS:
         raise ToolError(f"an apiRequest tool's method is one of {', '.join(METHODS)}")
     url = str(tool.get("url") or "")
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+    except ValueError as exc:
+        raise ToolError("an apiRequest tool's url is not a valid address") from exc
     if parts.scheme not in ("http", "https") or not parts.netloc:
         raise ToolError("an apiRequest tool's url must start with https:// or http://")
     if "{{" in parts.netloc:  # a caller's data must never choose where the request goes
@@ -72,8 +81,13 @@ def _check_api_request(tool: dict[str, Any]) -> None:
                                 or not 1 <= timeout <= 300):
         raise ToolError("an apiRequest tool's timeoutSeconds goes from 1 to 300")
     for field in ("body", "headers"):
-        if tool.get(field) is not None and not isinstance(tool[field], dict):
+        schema = {} if tool.get(field) is None else tool[field]
+        if not (isinstance(schema, dict) and isinstance(schema.get("properties") or {}, dict)
+                and isinstance(schema.get("required") or [], list)):
             raise ToolError(f"an apiRequest tool's {field} must be a JSON schema object")
+    for name, header in ((tool.get("headers") or {}).get("properties") or {}).items():
+        if not HEADER_NAME.fullmatch(name) or not isinstance(header, dict):
+            raise ToolError(f"an apiRequest tool's headers need a valid name and a value: {name!r}")
     static = tool.get("parameters")
     if static is not None and not (isinstance(static, list)
                                    and all(isinstance(p, dict) and p.get("key") for p in static)):
@@ -91,6 +105,10 @@ def check_tool(tool: dict[str, Any]) -> None:
             raise ToolError("a function tool needs function.name")
         if not str(fn["name"]).replace("_", "").replace("-", "").isalnum():
             raise ToolError("function.name may only have letters, digits, '_' and '-'")
+    server = tool.get("server") if isinstance(tool.get("server"), dict) else {}
+    for timeout in (tool.get("timeoutSeconds"), server.get("timeoutSeconds")):
+        if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float))):
+            raise ToolError("a tool's timeoutSeconds must be a number")
     if kind == "apiRequest":
         _check_api_request(tool)
     if kind == "transferCall":
@@ -111,6 +129,11 @@ def assistant_tools(assistant: dict[str, Any], store: Store) -> list[dict[str, A
     for tool in tools:
         if tool.get("type") not in SUPPORTED:
             logger.warning("tool type '{}' is not supported yet; the call runs without it", tool.get("type"))
+            continue
+        try:
+            check_tool(tool)
+        except ToolError as exc:  # an import keeps what the other account has, and only reports what's wrong with it
+            logger.warning("tool '{}' cannot work; the call runs without it: {}", tool_name(tool), exc)
             continue
         if tool_name(tool) in {tool_name(t) for t in usable}:
             continue  # the model needs unique names
@@ -133,9 +156,9 @@ def function_schema(tool: dict[str, Any]) -> dict[str, Any]:
         body = tool.get("body") or {}
         return {
             "name": tool_name(tool),
-            "description": tool.get("description") or (tool.get("function") or {}).get("description") or "",
-            "properties": body.get("properties") or {},
-            "required": list(body.get("required") or []),
+            "description": str(tool.get("description") or (tool.get("function") or {}).get("description") or ""),
+            "properties": _fillable(tool),
+            "required": [name for name in body.get("required") or [] if name in _fillable(tool)],
         }
     if tool["type"] == "endCall":
         return {
@@ -175,6 +198,22 @@ def tool_message(tool: dict[str, Any], kind: str) -> str | None:
     return str(message["content"]) if message else None
 
 
+def _fillable(tool: dict[str, Any]) -> dict[str, Any]:
+    """The fields of an apiRequest's body the model fills in. One with a `value` is yours, like a header."""
+    properties = (tool.get("body") or {}).get("properties") or {}
+    return {name: p for name, p in properties.items() if not (isinstance(p, dict) and "value" in p)}
+
+
+def without_secrets(doc: Any) -> Any:
+    """A call or an assistant as a tool's server or a webhook sees it: one tool's key is none of another's business."""
+    if isinstance(doc, list):
+        return [without_secrets(item) for item in doc]
+    if not isinstance(doc, dict):
+        return doc
+    return {key: value if key == "variableValues" else without_secrets(value) for key, value in doc.items()
+            if key not in PRIVATE_FIELDS and not (key == "parameters" and isinstance(value, list))}
+
+
 def _arguments(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
         return raw
@@ -196,8 +235,8 @@ def tool_calls_message(
             "timestamp": int(time.time() * 1000),
             "toolCallList": [tool_call],
             "toolWithToolCallList": [{**tool, "toolCall": tool_call}],
-            "call": call,
-            "assistant": assistant,
+            "call": without_secrets(call),
+            "assistant": without_secrets(assistant),
         }
     }
 
@@ -264,10 +303,21 @@ def _one_line(value: str) -> str:
     return re.sub(r"[\x00-\x1f\x7f]+", " ", value)
 
 
+def _in_url(value: str) -> str:
+    """A variable's value in a URL, unable to change what it means. `..` would climb the path: httpx resolves it."""
+    if value and not value.strip("."):
+        raise ToolError("a {{variable}} in the tool's url has no usable value")
+    return quote(value, safe="")
+
+
 def _with_query(url: str, arguments: dict[str, Any]) -> str:
-    """Where a GET or DELETE, which have no body, carries what the model filled in."""
-    values = {k: v if isinstance(v, str) else json.dumps(v) for k, v in arguments.items() if v is not None}
-    return f"{url}{'&' if urlsplit(url).query else '?'}{urlencode(values)}" if values else url
+    """Where a GET or DELETE, which have no body, carries what the model filled in. The URL's own query wins."""
+    parts = urlsplit(url)
+    fixed = {key for key, _ in parse_qsl(parts.query, keep_blank_values=True)}
+    values = {k: v if isinstance(v, str) else json.dumps(v) for k, v in arguments.items()
+              if v is not None and k not in fixed}
+    query = "&".join(q for q in (parts.query, urlencode(values)) if q)
+    return urlunsplit(parts._replace(query=query))
 
 
 async def call_api(
@@ -279,20 +329,24 @@ async def call_api(
 ) -> str:
     """Send an apiRequest tool's request and return what the model should read.
 
-    The model only fills in the body: the URL, the headers and the `parameters` (which win over the model's
-    values) are yours. Errors never contain the URL or headers, which often carry secrets: the model reads them and
-    may say them to the caller. Nothing is retried or followed, since a repeated POST could book something twice.
+    The model only fills in what the body declares: a caller can talk it into other fields. The URL, the headers and
+    the `parameters` (which win over the model's values) are yours. Errors never contain the URL or headers, which
+    often carry secrets: the model reads them and may say them to the caller. Nothing is retried or followed, since a
+    repeated POST could book something twice.
     """
+    _check_api_request(tool)  # an import keeps what the other account has: its data must not choose the host either
     context = overrides.call_context(call)
-    url = overrides.fill(str(tool["url"]), context, lambda value: quote(value, safe=""))
+    url = overrides.fill(str(tool["url"]), context, _in_url)
     method = str(tool["method"]).upper()
     # A value stays on one line, so a caller's data can't add headers; UTF-8, so "João" doesn't break the request.
     headers = {str(k): overrides.fill(str(p["value"]), context, _one_line).encode("utf-8")
                for k, p in ((tool.get("headers") or {}).get("properties") or {}).items()
                if isinstance(p, dict) and p.get("value") is not None}
+    body = (tool.get("body") or {}).get("properties") or {}
+    fixed = [{"key": name, "value": p["value"]} for name, p in body.items() if name not in _fillable(tool)]
     static = {str(p["key"]): overrides.fill(p["value"], context) if isinstance(p.get("value"), str) else p.get("value")
-              for p in tool.get("parameters") or []}
-    payload = {**arguments, **static}
+              for p in [*fixed, *(tool.get("parameters") or [])]}
+    payload = {**{k: v for k, v in arguments.items() if k in _fillable(tool)}, **static}
     timeout = float(tool.get("timeoutSeconds") or DEFAULT_TIMEOUT)
     send: dict[str, Any] = {"json": payload} if method in ("POST", "PUT", "PATCH") else {}
     if not send:
@@ -376,6 +430,7 @@ def make_handler(tool: dict[str, Any], controls: CallControls):
                 result = f"{result} {failed['content']}"
             elif failed:
                 await controls.speak(str(failed["content"]))
+                result = f"The tool failed: {exc}. The caller was just told, so don't apologize again."
         finally:
             if late is not None:
                 late.cancel()

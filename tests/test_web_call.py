@@ -1,6 +1,6 @@
 """Browser test calls: a real WebRTC connection on this computer, opened the way the dashboard opens it.
 
-Providers point at fake keys, so the assistant never hears or answers anything; the
+The providers are stubs that stay off the network, so the assistant never hears or answers anything; the
 test checks the connection, the call record and that hanging up ends the call.
 """
 
@@ -36,7 +36,7 @@ def test_web_call_needs_auth_assistant_offer_and_keys(monkeypatch):
     assert r.status_code == 400 and "DEEPGRAM_API_KEY" in r.json()["detail"]
 
 
-def test_web_call_connects_and_ends_when_the_page_hangs_up(monkeypatch):
+def test_web_call_connects_and_ends_when_the_page_hangs_up(monkeypatch, quiet_providers):
     for k in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "ELEVENLABS_API_KEY"):
         monkeypatch.setenv(k, "fake")
     store = Store(":memory:")

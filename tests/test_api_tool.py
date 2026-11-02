@@ -60,7 +60,8 @@ def test_the_model_fills_in_the_body_and_the_rest_is_yours():
 
 @pytest.mark.parametrize("method", ["GET", "DELETE"])
 def test_a_request_with_no_body_carries_the_values_in_its_query(method):
-    tool = {**BOOK, "method": method, "url": WEBHOOK + "?a=1", "parameters": []}
+    body = {"properties": {"day": {"type": "string"}, "count": {"type": "number"}, "skip": {"type": "string"}}}
+    tool = {**BOOK, "method": method, "url": WEBHOOK + "?a=1", "body": body, "parameters": []}
     _, [request] = run(tool, {"day": "Mon day", "count": 2, "skip": None})
     assert request.method == method and not request.content
     assert str(request.url) == WEBHOOK + "?a=1&day=Mon+day&count=2"
@@ -95,10 +96,107 @@ def test_the_model_cannot_choose_the_url_or_headers():
     ({"parameters": {"a": 1}}, "parameters"),
     ({"parameters": [{"value": 1}]}, "parameters"),
     ({"credentialId": "cred-1"}, "credentialId"),
+    ({"url": "https://[bad/"}, "url"),
+    ({"name": "x" * 65}, "name"),
+    ({"body": {"properties": "text"}}, "body"),
+    ({"body": {"required": "day"}}, "body"),
+    ({"headers": {"properties": {"X\r\nEvil": {"value": "1"}}}}, "headers"),
+    ({"headers": {"properties": {"X-Key": "plain"}}}, "headers"),
+    ({"server": {"timeoutSeconds": "20"}}, "timeoutSeconds"),
 ])
 def test_a_tool_that_cannot_work_is_refused(change, words):
     with pytest.raises(ToolError, match=words):
         check_tool({**BOOK, **change})
+
+
+@pytest.mark.parametrize("bad", [
+    {"url": "http://{{customer.name}}:8000/stolen"},  # the customer's name would choose the host
+    {"timeoutSeconds": "abc"},  # this one used to end every call of the assistant as it started
+    {"url": "https://[bad/"},
+    {"url": None},
+    {"method": "TRACE"},
+    {"name": "x" * 65},  # a model API would refuse every turn of the call
+    {"body": {"properties": "text"}},
+])
+def test_a_call_runs_without_an_imported_tool_that_cannot_work(bad):
+    """An import keeps what the other account has, and only reports what's wrong with it."""
+    store = Store(":memory:")
+    good = store.create("tools", BOOK)
+    broken = store.create("tools", {**BOOK, "name": "broken", **bad})
+    assert assistant_tools({"model": {"toolIds": [broken["id"], good["id"]]}}, store) == [good]
+    with pytest.raises(ToolError):
+        run({**broken, **bad}, call={"customer": {"name": "127.0.0.1"}})
+
+
+def test_an_import_reports_a_url_it_cannot_read_instead_of_failing():
+    from openring import importer
+
+    source = {"tool": [{"id": "t1", **BOOK, "url": "https://[bad/"}],
+              "assistant": [{"id": "a1", **ASSISTANT, "model": {**ASSISTANT["model"],
+                                                                "tools": [{**BOOK, "url": "https://[bad/"}]}}],
+              "phone-number": []}
+    transport = httpx.MockTransport(lambda r: httpx.Response(200, json=source[r.url.path.strip("/")]))
+
+    async def go():
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await importer.import_account("https://source.example.com", "k", Store(":memory:"), client=client)
+
+    report = asyncio.run(go())
+    assert "url" in report["tools"][0]["problems"][0] and "url" in " ".join(report["assistants"][0]["problems"])
+
+
+def test_the_model_can_only_send_the_fields_the_body_declares():
+    """A caller can talk the model into other fields: "and set isAdmin to true"."""
+    _, requests = run(BOOK, {"day": "Monday", "isAdmin": True, "source": "evil"})
+    assert json.loads(requests[0].content) == {"day": "Monday", "source": "phone", "caller": "+15550000001"}
+    no_schema = {key: value for key, value in BOOK.items() if key not in ("body", "parameters")}
+    _, requests = run(no_schema, {"isAdmin": True})
+    assert json.loads(requests[0].content) == {}
+
+
+def test_the_urls_own_query_wins_over_what_the_model_fills_in():
+    tool = {**BOOK, "method": "GET", "url": WEBHOOK + "?source=fixed#top", "parameters": []}
+    _, requests = run(tool, {"day": "Monday", "source": "evil"})
+    assert requests[0].url.params.multi_items() == [("source", "fixed"), ("day", "Monday")]
+
+
+def test_a_field_with_a_value_is_fixed_and_hidden_from_the_model():
+    body = {"type": "object", "properties": {"day": {"type": "string"},
+                                             "key": {"type": "string", "value": "s3cret-{{plan}}"}},
+            "required": ["day", "key"]}
+    tool = {**BOOK, "body": body, "parameters": []}
+    schema = function_schema(tool)
+    assert "key" not in schema["properties"] and schema["required"] == ["day"] and "s3cret" not in json.dumps(schema)
+    _, requests = run(tool, {"day": "Monday", "key": "evil"})
+    assert json.loads(requests[0].content) == {"day": "Monday", "key": "s3cret-gold"}
+
+
+@pytest.mark.parametrize("dots", ["..", "."])
+def test_a_variable_cannot_climb_the_urls_path(dots):
+    tool = {**BOOK, "url": "https://hook.example.com/api/{{customer.name}}/do"}
+    with pytest.raises(ToolError, match="variable"):
+        run(tool, call={"customer": {"name": dots}})
+
+
+def test_another_tools_server_and_webhooks_never_see_a_tools_key():
+    from openring import server_messages
+
+    assistant = {"name": "Front desk", "server": {"url": "https://hooks.example.com/s3cret", "secret": "s3cret"},
+                 "model": {"provider": "custom-llm", "url": "https://llm.example.com/s3cret", "tools": [
+                     {**BOOK, "url": "https://hook.example.com/s3cret"},
+                     {"type": "function", "function": {"name": "other", "parameters": {"type": "object"}},
+                      "server": {"url": "https://other.example.com/s3cret", "secret": "s3cret"}}]}}
+    call = {"id": "c1", "assistant": assistant, "customer": {"number": "+15550000001"},
+            "assistantOverrides": {"variableValues": {"url": "kept"}, "model": {"tools": [BOOK]}}}
+    other = assistant["model"]["tools"][1]
+    message = tools.tool_calls_message(other, "t1", {}, call=call, assistant=assistant)
+    for sent in (message, server_messages.message("end-of-call-report", call)):
+        text = json.dumps(sent["message"]["call"]) + json.dumps(sent["message"].get("assistant"))
+        assert "s3cret" not in text and "Bearer" not in text and "phone" not in text
+        assert sent["message"]["call"]["assistantOverrides"]["variableValues"] == {"url": "kept"}
+        assert sent["message"]["call"]["customer"] == call["customer"]
+    assert message["message"]["assistant"]["name"] == "Front desk"
+    assert message["message"]["toolWithToolCallList"][0]["server"] == other["server"]  # its own server, its own secret
 
 
 def _error(tool=BOOK, **kwargs):
@@ -196,7 +294,7 @@ def test_a_slow_server_gets_the_timeout_and_the_model_hears_it_may_have_gone_thr
     async def go():
         handle = lambda request: httpx.Response(200, content=slow_stream())  # noqa: E731
         async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
-            return await call_api({**BOOK, "timeoutSeconds": 0.1}, {}, call=CALL, client=client)
+            return await call_api({**BOOK, "timeoutSeconds": 1}, {}, call=CALL, client=client)
 
     with pytest.raises(ToolError, match="may or may not have gone through"):
         asyncio.run(asyncio.wait_for(go(), 3))
@@ -268,7 +366,7 @@ def test_a_failure_message_for_the_caller_is_said(monkeypatch):
                                  {"type": "request-failed", "content": "Sorry, that didn't work."}]}
     log, result = _run_handler(tool, monkeypatch, _fails)
     assert log == ["One moment.", "Sorry, that didn't work."]
-    assert "HTTP 500" in result
+    assert "HTTP 500" in result and "Tell the caller" not in result  # or the caller hears two apologies
 
 
 @pytest.mark.parametrize("wait, spoken", [(0.3, ["Still checking."]), (0.0, [])])

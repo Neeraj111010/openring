@@ -238,7 +238,7 @@ def test_outbound_call_with_a_transient_assistant(monkeypatch):
     assert {p.get("name") for p in stream.findall("Parameter")} == {"callId"}
 
 
-def test_a_call_reports_its_status_to_the_assistants_server(monkeypatch):
+def test_a_call_reports_its_status_to_the_assistants_server(monkeypatch, quiet_providers):
     sent = capture(monkeypatch)
     for k in ("DEEPGRAM_API_KEY", "GROQ_API_KEY", "ELEVENLABS_API_KEY"):
         monkeypatch.setenv(k, "fake")

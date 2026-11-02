@@ -105,7 +105,9 @@ docs are in English (README.pt-BR.md is the exception). See CONTRIBUTING.md for 
   `model.toolIds`; unsupported types are skipped with a warning. `apiRequest` (`tools.call_api`): the model fills in
   `body`, OpenRing sends it through `netguard.client()`; url, headers and `parameters` are server-side, with
   `{{variables}}` (`overrides.call_context`; percent-encoded in the URL, never in its host); only 2xx counts, no retries
-  or redirects, answer capped, not cancelled by an interruption; errors never carry the URL. Registered with `llm.register_function`
+  or redirects, answer capped, not cancelled by an interruption; errors never carry the URL. The model sends only the
+  fields `body` declares (`_fillable`). `assistant_tools` skips a tool `check_tool` refuses (imports keep them), and
+  `without_secrets` strips keys and addresses from what tool servers and webhooks see of a call. Registered with `llm.register_function`
   and `ToolsSchema` on the LLMContext; the transcript keeps `tool_calls` / `tool_call_result` rows.
 - `openring/importer.py` + `POST /import {baseUrl, apiKey}`: copies tools, assistants and Twilio numbers from
   any Vapi-compatible API (pages back with `createdAtLt`), drops source-owned fields and secrets, remaps
@@ -157,7 +159,8 @@ Only one server can use port 8000; stop the old one first, or pass `--port`.
 - `PRINCIPLES.md` holds the project's promises (no platform fee, your keys, Vapi-compatible, one command,
   honest status) and its feature test; check new work against it.
 - Keep the Vapi JSON shape for any new field; prefer adding over renaming.
-- Every feature gets a test; `pytest` and `ruff check .` must pass before pushing.
+- Every feature gets a test; `pytest` and `ruff check .` must pass before pushing. Tests never use the internet
+  (`tests/conftest.py` blocks it); a test that runs a call uses the `quiet_providers` fixture.
 - Never commit `.env` or keys. Don't use Vapi's name or logo except to say "Vapi-compatible".
 - Third-party licenses are listed in THIRD_PARTY.md; update it when dependencies change.
 
